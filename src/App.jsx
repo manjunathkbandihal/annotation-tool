@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -7,22 +7,28 @@ import {
   Calendar,
   CheckCircle2,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   ClipboardCheck,
   Clock3,
   Database,
   Download,
   Edit3,
-  FileText,
   FolderKanban,
   Grid3X3,
   LayoutDashboard,
   ListFilter,
   Menu,
+  Minus,
   MoreHorizontal,
+  MousePointer2,
   Plus,
+  RotateCcw,
+  Save,
   Search,
   Settings,
   ShieldCheck,
+  Square,
   Target,
   Trash2,
   TrendingUp,
@@ -30,11 +36,17 @@ import {
   Users,
   X,
   Zap,
+  Tag,
+  Image as ImageIcon,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 
 import "./App.css";
 
-const STORAGE_KEY = "annotatepro_projects";
+const PROJECT_STORAGE_KEY = "annotatepro_projects";
+const IMAGE_STORAGE_KEY = "annotatepro_workspace_images";
+const ANNOTATION_STORAGE_KEY = "annotatepro_annotations";
 
 const initialProjects = [
   {
@@ -122,6 +134,19 @@ const emptyProject = {
   description: "",
 };
 
+const defaultLabels = [
+  "Car",
+  "Pedestrian",
+  "Bicycle",
+  "Motorcycle",
+  "Truck",
+  "Bus",
+  "Traffic Sign",
+  "Pole",
+  "Building",
+  "Other",
+];
+
 function getProgress(project) {
   if (!project.totalImages || project.totalImages <= 0) {
     return 0;
@@ -129,19 +154,24 @@ function getProgress(project) {
 
   return Math.min(
     100,
-    Math.max(0, Math.round((project.completedImages / project.totalImages) * 100))
+    Math.max(
+      0,
+      Math.round((project.completedImages / project.totalImages) * 100)
+    )
   );
 }
 
 function getRemaining(project) {
   return Math.max(
     0,
-    Number(project.totalImages || 0) - Number(project.completedImages || 0)
+    Number(project.totalImages || 0) -
+      Number(project.completedImages || 0)
   );
 }
 
 function normalizeProject(project) {
   const totalImages = Math.max(0, Number(project.totalImages || 0));
+
   const completedImages = Math.min(
     totalImages,
     Math.max(0, Number(project.completedImages || 0))
@@ -153,7 +183,10 @@ function normalizeProject(project) {
     status = "Completed";
   } else if (completedImages > 0) {
     status = "In Progress";
-  } else if (status === "Completed" || status === "In Progress") {
+  } else if (
+    status === "Completed" ||
+    status === "In Progress"
+  ) {
     status = "Pending";
   }
 
@@ -169,15 +202,22 @@ function App() {
   const [activePage, setActivePage] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+
   const [projects, setProjects] = useState(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(PROJECT_STORAGE_KEY);
 
-      if (saved) {
-        return JSON.parse(saved);
+      if (!saved) {
+        return initialProjects;
       }
 
-      return initialProjects;
+      const parsed = JSON.parse(saved);
+
+      if (!Array.isArray(parsed)) {
+        return initialProjects;
+      }
+
+      return parsed.map(normalizeProject);
     } catch {
       return initialProjects;
     }
@@ -191,9 +231,83 @@ function App() {
   const [selectedProject, setSelectedProject] = useState(null);
   const [projectForm, setProjectForm] = useState(emptyProject);
 
+  const [workspaceImages, setWorkspaceImages] = useState(() => {
+    try {
+      const saved = localStorage.getItem(IMAGE_STORAGE_KEY);
+
+      if (!saved) {
+        return [];
+      }
+
+      const parsed = JSON.parse(saved);
+
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [annotations, setAnnotations] = useState(() => {
+    try {
+      const saved = localStorage.getItem(ANNOTATION_STORAGE_KEY);
+
+      if (!saved) {
+        return {};
+      }
+
+      const parsed = JSON.parse(saved);
+
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  });
+
+  const [workspaceImageIndex, setWorkspaceImageIndex] = useState(0);
+  const [annotationTool, setAnnotationTool] = useState("select");
+  const [selectedLabel, setSelectedLabel] = useState("Car");
+  const [customLabels, setCustomLabels] = useState([]);
+  const [newLabel, setNewLabel] = useState("");
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState(null);
+  const [drawingBox, setDrawingBox] = useState(null);
+  const [polygonPoints, setPolygonPoints] = useState([]);
+  const [zoom, setZoom] = useState(1);
+
+  const imageInputRef = useRef(null);
+  const canvasRef = useRef(null);
+
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+    localStorage.setItem(
+      PROJECT_STORAGE_KEY,
+      JSON.stringify(projects)
+    );
   }, [projects]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      IMAGE_STORAGE_KEY,
+      JSON.stringify(workspaceImages)
+    );
+  }, [workspaceImages]);
+
+  useEffect(() => {
+    localStorage.setItem(
+      ANNOTATION_STORAGE_KEY,
+      JSON.stringify(annotations)
+    );
+  }, [annotations]);
+
+  const currentWorkspaceImage =
+    workspaceImages[workspaceImageIndex] || null;
+
+  const currentAnnotations = currentWorkspaceImage
+    ? annotations[currentWorkspaceImage.id] || []
+    : [];
+
+  const allLabels = useMemo(
+    () => [...defaultLabels, ...customLabels],
+    [customLabels]
+  );
 
   const dashboardStats = useMemo(() => {
     const activeProjects = projects.filter(
@@ -201,7 +315,8 @@ function App() {
     ).length;
 
     const totalImages = projects.reduce(
-      (sum, project) => sum + Number(project.totalImages || 0),
+      (sum, project) =>
+        sum + Number(project.totalImages || 0),
       0
     );
 
@@ -210,11 +325,10 @@ function App() {
       0
     );
 
-    const completedImages = Math.max(0, totalImages - remainingImages);
-
-    const overallQuality = projects.length
-      ? 96.8
-      : 0;
+    const completedImages = Math.max(
+      0,
+      totalImages - remainingImages
+    );
 
     return {
       activeProjects,
@@ -222,7 +336,7 @@ function App() {
       completedImages,
       remainingImages,
       teamMembers: 28,
-      qualityScore: overallQuality,
+      qualityScore: projects.length ? 96.8 : 0,
     };
   }, [projects]);
 
@@ -232,11 +346,21 @@ function App() {
     return projects.filter((project) => {
       const matchesSearch =
         !search ||
-        project.name.toLowerCase().includes(search) ||
-        project.client.toLowerCase().includes(search) ||
-        project.annotationType.toLowerCase().includes(search) ||
-        project.team.toLowerCase().includes(search) ||
-        project.id.toLowerCase().includes(search);
+        String(project.name || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(project.client || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(project.annotationType || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(project.team || "")
+          .toLowerCase()
+          .includes(search) ||
+        String(project.id || "")
+          .toLowerCase()
+          .includes(search);
 
       const matchesStatus =
         projectStatusFilter === "All" ||
@@ -244,7 +368,11 @@ function App() {
 
       return matchesSearch && matchesStatus;
     });
-  }, [projects, projectSearch, projectStatusFilter]);
+  }, [
+    projects,
+    projectSearch,
+    projectStatusFilter,
+  ]);
 
   const navItems = [
     {
@@ -302,19 +430,25 @@ function App() {
 
   function openCreateProject() {
     setEditingProjectId(null);
+
     setProjectForm({
       ...emptyProject,
-      startDate: new Date().toISOString().split("T")[0],
+      startDate: new Date()
+        .toISOString()
+        .split("T")[0],
     });
+
     setProjectModalOpen(true);
   }
 
   function openEditProject(project) {
     setEditingProjectId(project.id);
+
     setProjectForm({
       name: project.name || "",
       client: project.client || "",
-      annotationType: project.annotationType || "Bounding Box",
+      annotationType:
+        project.annotationType || "Bounding Box",
       totalImages: project.totalImages ?? "",
       completedImages: project.completedImages ?? "",
       team: project.team || "",
@@ -323,6 +457,7 @@ function App() {
       dueDate: project.dueDate || "",
       description: project.description || "",
     });
+
     setProjectModalOpen(true);
   }
 
@@ -359,21 +494,30 @@ function App() {
       return;
     }
 
-    const totalImages = Number(projectForm.totalImages);
+    const totalImages = Number(
+      projectForm.totalImages
+    );
 
-    if (!Number.isFinite(totalImages) || totalImages <= 0) {
+    if (
+      !Number.isFinite(totalImages) ||
+      totalImages <= 0
+    ) {
       alert("Please enter a valid total number of images.");
       return;
     }
 
-    const completedImages = Number(projectForm.completedImages || 0);
+    const completedImages = Number(
+      projectForm.completedImages || 0
+    );
 
     if (
       !Number.isFinite(completedImages) ||
       completedImages < 0 ||
       completedImages > totalImages
     ) {
-      alert("Completed images must be between 0 and total images.");
+      alert(
+        "Completed images must be between 0 and total images."
+      );
       return;
     }
 
@@ -396,7 +540,9 @@ function App() {
     if (editingProjectId) {
       setProjects((current) =>
         current.map((item) =>
-          item.id === editingProjectId ? project : item
+          item.id === editingProjectId
+            ? project
+            : item
         )
       );
 
@@ -404,7 +550,10 @@ function App() {
         setSelectedProject(project);
       }
     } else {
-      setProjects((current) => [project, ...current]);
+      setProjects((current) => [
+        project,
+        ...current,
+      ]);
     }
 
     closeProjectModal();
@@ -420,7 +569,9 @@ function App() {
     }
 
     setProjects((current) =>
-      current.filter((item) => item.id !== project.id)
+      current.filter(
+        (item) => item.id !== project.id
+      )
     );
 
     setProjectDetailsOpen(false);
@@ -435,6 +586,411 @@ function App() {
     setProjectStatusFilter("All");
   }
 
+  function openImagePicker() {
+    imageInputRef.current?.click();
+  }
+
+  function handleImageUpload(event) {
+    const files = Array.from(event.target.files || []);
+
+    if (!files.length) {
+      return;
+    }
+
+    const newImages = files.map((file) => ({
+      id: `IMG-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 8)}`,
+      name: file.name,
+      url: URL.createObjectURL(file),
+      size: file.size,
+      type: file.type,
+    }));
+
+    setWorkspaceImages((current) => [
+      ...current,
+      ...newImages,
+    ]);
+
+    if (workspaceImages.length === 0) {
+      setWorkspaceImageIndex(0);
+    }
+
+    event.target.value = "";
+  }
+
+  function removeCurrentImage() {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remove "${currentWorkspaceImage.name}" from the workspace?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setAnnotations((current) => {
+      const next = { ...current };
+      delete next[currentWorkspaceImage.id];
+      return next;
+    });
+
+    setWorkspaceImages((current) => {
+      const next = current.filter(
+        (image) =>
+          image.id !== currentWorkspaceImage.id
+      );
+
+      return next;
+    });
+
+    setWorkspaceImageIndex((current) =>
+      Math.max(
+        0,
+        Math.min(
+          current,
+          workspaceImages.length - 2
+        )
+      )
+    );
+
+    setSelectedAnnotationId(null);
+    setPolygonPoints([]);
+  }
+
+  function goToPreviousImage() {
+    if (!workspaceImages.length) {
+      return;
+    }
+
+    setWorkspaceImageIndex((current) =>
+      Math.max(0, current - 1)
+    );
+
+    setSelectedAnnotationId(null);
+    setPolygonPoints([]);
+    setDrawingBox(null);
+  }
+
+  function goToNextImage() {
+    if (!workspaceImages.length) {
+      return;
+    }
+
+    setWorkspaceImageIndex((current) =>
+      Math.min(
+        workspaceImages.length - 1,
+        current + 1
+      )
+    );
+
+    setSelectedAnnotationId(null);
+    setPolygonPoints([]);
+    setDrawingBox(null);
+  }
+
+  function getCanvasPoint(event) {
+    const rect =
+      canvasRef.current?.getBoundingClientRect();
+
+    if (!rect) {
+      return null;
+    }
+
+    return {
+      x: Math.max(
+        0,
+        Math.min(
+          100,
+          ((event.clientX - rect.left) /
+            rect.width) *
+            100
+        )
+      ),
+      y: Math.max(
+        0,
+        Math.min(
+          100,
+          ((event.clientY - rect.top) /
+            rect.height) *
+            100
+        )
+      ),
+    };
+  }
+
+  function handleCanvasMouseDown(event) {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    if (annotationTool !== "bbox") {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+
+    if (!point) {
+      return;
+    }
+
+    setDrawingBox({
+      startX: point.x,
+      startY: point.y,
+      currentX: point.x,
+      currentY: point.y,
+    });
+  }
+
+  function handleCanvasMouseMove(event) {
+    if (!drawingBox) {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+
+    if (!point) {
+      return;
+    }
+
+    setDrawingBox((current) => ({
+      ...current,
+      currentX: point.x,
+      currentY: point.y,
+    }));
+  }
+
+  function handleCanvasMouseUp() {
+    if (!drawingBox) {
+      return;
+    }
+
+    const x = Math.min(
+      drawingBox.startX,
+      drawingBox.currentX
+    );
+
+    const y = Math.min(
+      drawingBox.startY,
+      drawingBox.currentY
+    );
+
+    const width = Math.abs(
+      drawingBox.currentX - drawingBox.startX
+    );
+
+    const height = Math.abs(
+      drawingBox.currentY - drawingBox.startY
+    );
+
+    setDrawingBox(null);
+
+    if (width < 1 || height < 1) {
+      return;
+    }
+
+    const annotation = {
+      id: `ANN-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 7)}`,
+      type: "bbox",
+      label: selectedLabel,
+      x,
+      y,
+      width,
+      height,
+      createdAt: new Date().toISOString(),
+    };
+
+    addAnnotation(annotation);
+  }
+
+  function handleCanvasClick(event) {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    if (annotationTool !== "polygon") {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+
+    if (!point) {
+      return;
+    }
+
+    setPolygonPoints((current) => [
+      ...current,
+      point,
+    ]);
+  }
+
+  function finishPolygon() {
+    if (polygonPoints.length < 3) {
+      alert(
+        "A polygon needs at least 3 points."
+      );
+      return;
+    }
+
+    const annotation = {
+      id: `ANN-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 7)}`,
+      type: "polygon",
+      label: selectedLabel,
+      points: polygonPoints,
+      createdAt: new Date().toISOString(),
+    };
+
+    addAnnotation(annotation);
+    setPolygonPoints([]);
+  }
+
+  function addClassification() {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    const annotation = {
+      id: `ANN-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 7)}`,
+      type: "classification",
+      label: selectedLabel,
+      createdAt: new Date().toISOString(),
+    };
+
+    addAnnotation(annotation);
+  }
+
+  function addAnnotation(annotation) {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    setAnnotations((current) => ({
+      ...current,
+      [currentWorkspaceImage.id]: [
+        ...(current[currentWorkspaceImage.id] || []),
+        annotation,
+      ],
+    }));
+
+    setSelectedAnnotationId(annotation.id);
+  }
+
+  function deleteSelectedAnnotation() {
+    if (
+      !currentWorkspaceImage ||
+      !selectedAnnotationId
+    ) {
+      return;
+    }
+
+    setAnnotations((current) => ({
+      ...current,
+      [currentWorkspaceImage.id]: (
+        current[currentWorkspaceImage.id] || []
+      ).filter(
+        (item) =>
+          item.id !== selectedAnnotationId
+      ),
+    }));
+
+    setSelectedAnnotationId(null);
+  }
+
+  function clearCurrentAnnotations() {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Clear all annotations for this image?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setAnnotations((current) => ({
+      ...current,
+      [currentWorkspaceImage.id]: [],
+    }));
+
+    setSelectedAnnotationId(null);
+    setPolygonPoints([]);
+  }
+
+  function saveCurrentImage() {
+    if (!currentWorkspaceImage) {
+      return;
+    }
+
+    const count =
+      annotations[currentWorkspaceImage.id]
+        ?.length || 0;
+
+    alert(
+      `${count} annotation${
+        count === 1 ? "" : "s"
+      } saved for ${currentWorkspaceImage.name}.`
+    );
+  }
+
+  function addCustomLabel() {
+    const label = newLabel.trim();
+
+    if (!label) {
+      return;
+    }
+
+    if (
+      allLabels.some(
+        (item) =>
+          item.toLowerCase() ===
+          label.toLowerCase()
+      )
+    ) {
+      setSelectedLabel(label);
+      setNewLabel("");
+      return;
+    }
+
+    setCustomLabels((current) => [
+      ...current,
+      label,
+    ]);
+
+    setSelectedLabel(label);
+    setNewLabel("");
+  }
+
+  function handleZoomIn() {
+    setZoom((current) =>
+      Math.min(2.5, Number((current + 0.1).toFixed(1)))
+    );
+  }
+
+  function handleZoomOut() {
+    setZoom((current) =>
+      Math.max(0.5, Number((current - 0.1).toFixed(1)))
+    );
+  }
+
+  function resetZoom() {
+    setZoom(1);
+  }
+
+  function selectAnnotation(annotation) {
+    setSelectedAnnotationId(annotation.id);
+  }
+
   return (
     <div className="app-shell">
       {sidebarOpen && (
@@ -445,20 +1001,34 @@ function App() {
         />
       )}
 
-      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+      <aside
+        className={`sidebar ${
+          sidebarOpen ? "sidebar-open" : ""
+        }`}
+      >
         <div className="sidebar-brand">
           <div className="brand-mark">
-            <Target size={21} strokeWidth={2.5} />
+            <Target
+              size={21}
+              strokeWidth={2.5}
+            />
           </div>
 
           <div>
-            <div className="brand-name">AnnotatePro</div>
-            <div className="brand-subtitle">Annotation Platform</div>
+            <div className="brand-name">
+              AnnotatePro
+            </div>
+
+            <div className="brand-subtitle">
+              Annotation Platform
+            </div>
           </div>
 
           <button
             className="sidebar-close"
-            onClick={() => setSidebarOpen(false)}
+            onClick={() =>
+              setSidebarOpen(false)
+            }
             aria-label="Close menu"
           >
             <X size={20} />
@@ -478,18 +1048,27 @@ function App() {
           <ChevronDown size={16} />
         </div>
 
-        <div className="sidebar-section-label">MAIN MENU</div>
+        <div className="sidebar-section-label">
+          MAIN MENU
+        </div>
 
         <nav className="sidebar-nav">
           {navItems.map((item) => {
             const Icon = item.icon;
-            const active = activePage === item.id;
+            const active =
+              activePage === item.id;
 
             return (
               <button
                 key={item.id}
-                className={`nav-item ${active ? "nav-item-active" : ""}`}
-                onClick={() => navigate(item.id)}
+                className={`nav-item ${
+                  active
+                    ? "nav-item-active"
+                    : ""
+                }`}
+                onClick={() =>
+                  navigate(item.id)
+                }
               >
                 <Icon size={18} />
                 <span>{item.label}</span>
@@ -509,7 +1088,11 @@ function App() {
 
             <button
               className="user-menu-button"
-              onClick={() => setProfileOpen((current) => !current)}
+              onClick={() =>
+                setProfileOpen(
+                  (current) => !current
+                )
+              }
             >
               <MoreHorizontal size={18} />
             </button>
@@ -522,7 +1105,9 @@ function App() {
           <div className="topbar-left">
             <button
               className="mobile-menu-button"
-              onClick={() => setSidebarOpen(true)}
+              onClick={() =>
+                setSidebarOpen(true)
+              }
               aria-label="Open menu"
             >
               <Menu size={21} />
@@ -530,11 +1115,17 @@ function App() {
 
             <div className="breadcrumb">
               <span>Workspace</span>
-              <span className="breadcrumb-separator">/</span>
+              <span className="breadcrumb-separator">
+                /
+              </span>
+
               <strong>
                 {activePage === "dashboard"
                   ? "Dashboard"
-                  : navItems.find((item) => item.id === activePage)?.label ||
+                  : navItems.find(
+                      (item) =>
+                        item.id === activePage
+                    )?.label ||
                     "Dashboard"}
               </strong>
             </div>
@@ -544,7 +1135,9 @@ function App() {
             <div className="global-search">
               <Search size={17} />
               <input placeholder="Search..." />
-              <span className="search-shortcut">⌘ K</span>
+              <span className="search-shortcut">
+                ⌘ K
+              </span>
             </div>
 
             <button className="icon-button notification-button">
@@ -555,9 +1148,15 @@ function App() {
             <div className="profile-wrapper">
               <button
                 className="profile-button"
-                onClick={() => setProfileOpen((current) => !current)}
+                onClick={() =>
+                  setProfileOpen(
+                    (current) => !current
+                  )
+                }
               >
-                <div className="avatar avatar-small">M</div>
+                <div className="avatar avatar-small">
+                  M
+                </div>
 
                 <div className="profile-copy">
                   <strong>Manjunath</strong>
@@ -569,11 +1168,20 @@ function App() {
 
               {profileOpen && (
                 <div className="profile-dropdown">
-                  <button onClick={() => navigate("settings")}>
+                  <button
+                    onClick={() =>
+                      navigate("settings")
+                    }
+                  >
                     <Settings size={16} />
                     Account Settings
                   </button>
-                  <button onClick={() => navigate("dashboard")}>
+
+                  <button
+                    onClick={() =>
+                      navigate("dashboard")
+                    }
+                  >
                     <LayoutDashboard size={16} />
                     Dashboard
                   </button>
@@ -588,33 +1196,135 @@ function App() {
             <DashboardPage
               projects={projects}
               stats={dashboardStats}
-              onCreateProject={openCreateProject}
-              onOpenProjects={() => navigate("projects")}
-              onOpenProject={openProjectDetails}
+              onCreateProject={
+                openCreateProject
+              }
+              onOpenProjects={() =>
+                navigate("projects")
+              }
+              onOpenProject={
+                openProjectDetails
+              }
             />
           )}
 
           {activePage === "projects" && (
             <ProjectsPage
               projects={projects}
-              filteredProjects={filteredProjects}
+              filteredProjects={
+                filteredProjects
+              }
               search={projectSearch}
               setSearch={setProjectSearch}
-              statusFilter={projectStatusFilter}
-              setStatusFilter={setProjectStatusFilter}
+              statusFilter={
+                projectStatusFilter
+              }
+              setStatusFilter={
+                setProjectStatusFilter
+              }
               onCreate={openCreateProject}
               onEdit={openEditProject}
-              onDelete={handleDeleteProject}
-              onView={openProjectDetails}
-              onResetFilters={resetProjectFilters}
+              onDelete={
+                handleDeleteProject
+              }
+              onView={
+                openProjectDetails
+              }
+              onResetFilters={
+                resetProjectFilters
+              }
             />
           )}
 
           {activePage === "workspace" && (
-            <PlaceholderPage
-              title="Annotation Workspace"
-              description="The annotation canvas will be built next."
-              icon={Grid3X3}
+            <AnnotationWorkspace
+              images={workspaceImages}
+              currentImage={
+                currentWorkspaceImage
+              }
+              imageIndex={
+                workspaceImageIndex
+              }
+              annotations={
+                currentAnnotations
+              }
+              annotationTool={
+                annotationTool
+              }
+              setAnnotationTool={
+                setAnnotationTool
+              }
+              selectedLabel={
+                selectedLabel
+              }
+              setSelectedLabel={
+                setSelectedLabel
+              }
+              labels={allLabels}
+              newLabel={newLabel}
+              setNewLabel={setNewLabel}
+              addCustomLabel={
+                addCustomLabel
+              }
+              selectedAnnotationId={
+                selectedAnnotationId
+              }
+              selectAnnotation={
+                selectAnnotation
+              }
+              onUpload={
+                handleImageUpload
+              }
+              onOpenPicker={
+                openImagePicker
+              }
+              imageInputRef={
+                imageInputRef
+              }
+              onPrevious={
+                goToPreviousImage
+              }
+              onNext={goToNextImage}
+              onRemoveImage={
+                removeCurrentImage
+              }
+              onMouseDown={
+                handleCanvasMouseDown
+              }
+              onMouseMove={
+                handleCanvasMouseMove
+              }
+              onMouseUp={
+                handleCanvasMouseUp
+              }
+              onCanvasClick={
+                handleCanvasClick
+              }
+              drawingBox={
+                drawingBox
+              }
+              polygonPoints={
+                polygonPoints
+              }
+              onFinishPolygon={
+                finishPolygon
+              }
+              onAddClassification={
+                addClassification
+              }
+              onDeleteSelected={
+                deleteSelectedAnnotation
+              }
+              onClear={
+                clearCurrentAnnotations
+              }
+              onSave={
+                saveCurrentImage
+              }
+              zoom={zoom}
+              onZoomIn={handleZoomIn}
+              onZoomOut={handleZoomOut}
+              onResetZoom={resetZoom}
             />
           )}
 
@@ -629,7 +1339,7 @@ function App() {
           {activePage === "qa" && (
             <PlaceholderPage
               title="QA & Reviews"
-              description="Quality review workflows will be added in the next module."
+              description="Quality review workflows will be added after the annotation workspace."
               icon={ClipboardCheck}
             />
           )}
@@ -645,7 +1355,7 @@ function App() {
           {activePage === "import" && (
             <PlaceholderPage
               title="Import Data"
-              description="Image and dataset import tools will be added later."
+              description="Image and dataset import tools will be connected to the annotation workspace."
               icon={Upload}
             />
           )}
@@ -653,7 +1363,7 @@ function App() {
           {activePage === "export" && (
             <PlaceholderPage
               title="Export"
-              description="Annotation export options will be added later."
+              description="Annotation export options will be added after the annotation workflow is complete."
               icon={Download}
             />
           )}
@@ -670,7 +1380,9 @@ function App() {
 
       {projectModalOpen && (
         <ProjectFormModal
-          editing={Boolean(editingProjectId)}
+          editing={Boolean(
+            editingProjectId
+          )}
           form={projectForm}
           onChange={handleFormChange}
           onClose={closeProjectModal}
@@ -678,20 +1390,33 @@ function App() {
         />
       )}
 
-      {projectDetailsOpen && selectedProject && (
-        <ProjectDetailsModal
-          project={selectedProject}
-          onClose={() => setProjectDetailsOpen(false)}
-          onEdit={() => {
-            setProjectDetailsOpen(false);
-            openEditProject(selectedProject);
-          }}
-          onDelete={() => handleDeleteProject(selectedProject)}
-        />
-      )}
+      {projectDetailsOpen &&
+        selectedProject && (
+          <ProjectDetailsModal
+            project={selectedProject}
+            onClose={() =>
+              setProjectDetailsOpen(false)
+            }
+            onEdit={() => {
+              setProjectDetailsOpen(false);
+              openEditProject(
+                selectedProject
+              );
+            }}
+            onDelete={() =>
+              handleDeleteProject(
+                selectedProject
+              )
+            }
+          />
+        )}
     </div>
   );
 }
+
+/* ============================= */
+/* DASHBOARD */
+/* ============================= */
 
 function DashboardPage({
   projects,
@@ -700,20 +1425,31 @@ function DashboardPage({
   onOpenProjects,
   onOpenProject,
 }) {
-  const recentProjects = projects.slice(0, 4);
+  const recentProjects =
+    projects.slice(0, 4);
 
   return (
     <>
       <div className="page-header">
         <div>
-          <div className="eyebrow">OVERVIEW</div>
-          <h1>Good evening, Manjunath</h1>
+          <div className="eyebrow">
+            OVERVIEW
+          </div>
+
+          <h1>
+            Good evening, Manjunath
+          </h1>
+
           <p>
-            Here&apos;s what&apos;s happening across your annotation workspace.
+            Here's what's happening across
+            your annotation workspace.
           </p>
         </div>
 
-        <button className="primary-button" onClick={onCreateProject}>
+        <button
+          className="primary-button"
+          onClick={onCreateProject}
+        >
           <Plus size={18} />
           Create Project
         </button>
@@ -758,10 +1494,16 @@ function DashboardPage({
           <div className="panel-header">
             <div>
               <h2>Active Projects</h2>
-              <p>Current annotation project progress</p>
+              <p>
+                Current annotation project
+                progress
+              </p>
             </div>
 
-            <button className="text-button" onClick={onOpenProjects}>
+            <button
+              className="text-button"
+              onClick={onOpenProjects}
+            >
               View all
             </button>
           </div>
@@ -779,64 +1521,91 @@ function DashboardPage({
               </thead>
 
               <tbody>
-                {recentProjects.map((project) => {
-                  const progress = getProgress(project);
+                {recentProjects.map(
+                  (project) => {
+                    const progress =
+                      getProgress(project);
 
-                  return (
-                    <tr
-                      key={project.id}
-                      className="table-clickable"
-                      onClick={() => onOpenProject(project)}
-                    >
-                      <td>
-                        <div className="table-project">
-                          <div className="project-icon">
-                            <FolderKanban size={17} />
+                    return (
+                      <tr
+                        key={project.id}
+                        className="table-clickable"
+                        onClick={() =>
+                          onOpenProject(
+                            project
+                          )
+                        }
+                      >
+                        <td>
+                          <div className="table-project">
+                            <div className="project-icon">
+                              <FolderKanban
+                                size={17}
+                              />
+                            </div>
+
+                            <div>
+                              <strong>
+                                {project.name}
+                              </strong>
+                              <span>
+                                {project.client}
+                              </span>
+                            </div>
                           </div>
+                        </td>
 
-                          <div>
-                            <strong>{project.name}</strong>
-                            <span>{project.client}</span>
+                        <td>
+                          <span className="type-badge">
+                            {
+                              project.annotationType
+                            }
+                          </span>
+                        </td>
+
+                        <td>
+                          <strong>
+                            {project.totalImages.toLocaleString()}
+                          </strong>
+                        </td>
+
+                        <td>
+                          <div className="progress-cell">
+                            <div className="progress-topline">
+                              <span>
+                                {progress}%
+                              </span>
+
+                              <small>
+                                {getRemaining(
+                                  project
+                                ).toLocaleString()}{" "}
+                                left
+                              </small>
+                            </div>
+
+                            <div className="progress-track">
+                              <div
+                                className="progress-fill"
+                                style={{
+                                  width: `${progress}%`,
+                                }}
+                              />
+                            </div>
                           </div>
-                        </div>
-                      </td>
+                        </td>
 
-                      <td>
-                        <span className="type-badge">
-                          {project.annotationType}
-                        </span>
-                      </td>
-
-                      <td>
-                        <strong>
-                          {project.totalImages.toLocaleString()}
-                        </strong>
-                      </td>
-
-                      <td>
-                        <div className="progress-cell">
-                          <div className="progress-topline">
-                            <span>{progress}%</span>
-                            <small>
-                              {getRemaining(project).toLocaleString()} left
-                            </small>
-                          </div>
-
-                          <div className="progress-track">
-                            <div
-                              className="progress-fill"
-                              style={{ width: `${progress}%` }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-
-                      <td>
-                        <StatusBadge status={project.status} />
-                      </td>
-                    </tr>
-                  );
-                })}
+                        <td>
+                          <StatusBadge
+                            status={
+                              project.status
+                            }
+                          />
+                        </td>
+                      </tr>
+                    );
+                  }
+                )}
               </tbody>
             </table>
           </div>
@@ -846,10 +1615,15 @@ function DashboardPage({
           <div className="panel-header">
             <div>
               <h2>Recent Activity</h2>
-              <p>Latest workspace updates</p>
+              <p>
+                Latest workspace updates
+              </p>
             </div>
 
-            <Activity size={18} className="panel-muted-icon" />
+            <Activity
+              size={18}
+              className="panel-muted-icon"
+            />
           </div>
 
           <div className="activity-list">
@@ -890,7 +1664,9 @@ function DashboardPage({
         <div className="section-title-row">
           <div>
             <h2>Quick Actions</h2>
-            <p>Common tasks for your workspace</p>
+            <p>
+              Common tasks for your workspace
+            </p>
           </div>
         </div>
 
@@ -918,6 +1694,897 @@ function DashboardPage({
   );
 }
 
+/* ============================= */
+/* ANNOTATION WORKSPACE */
+/* ============================= */
+
+function AnnotationWorkspace({
+  images,
+  currentImage,
+  imageIndex,
+  annotations,
+  annotationTool,
+  setAnnotationTool,
+  selectedLabel,
+  setSelectedLabel,
+  labels,
+  newLabel,
+  setNewLabel,
+  addCustomLabel,
+  selectedAnnotationId,
+  selectAnnotation,
+  onUpload,
+  onOpenPicker,
+  imageInputRef,
+  onPrevious,
+  onNext,
+  onRemoveImage,
+  onMouseDown,
+  onMouseMove,
+  onMouseUp,
+  onCanvasClick,
+  drawingBox,
+  polygonPoints,
+  onFinishPolygon,
+  onAddClassification,
+  onDeleteSelected,
+  onClear,
+  onSave,
+  zoom,
+  onZoomIn,
+  onZoomOut,
+  onResetZoom,
+}) {
+  return (
+    <div className="annotation-workspace-page">
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept="image/*"
+        multiple
+        hidden
+        onChange={onUpload}
+      />
+
+      <div className="workspace-header">
+        <div>
+          <div className="eyebrow">
+            ANNOTATION WORKSPACE
+          </div>
+
+          <h1>Annotation Workspace</h1>
+
+          <p>
+            Load images and create precise
+            annotations for your dataset.
+          </p>
+        </div>
+
+        <div className="workspace-header-actions">
+          <button
+            className="secondary-button"
+            onClick={onOpenPicker}
+          >
+            <Upload size={17} />
+            Upload Images
+          </button>
+
+          <button
+            className="primary-button"
+            onClick={onSave}
+            disabled={!currentImage}
+          >
+            <Save size={17} />
+            Save Annotation
+          </button>
+        </div>
+      </div>
+
+      <div className="workspace-layout">
+        <aside className="workspace-left-panel">
+          <div className="workspace-panel-heading">
+            <div>
+              <h3>Image Queue</h3>
+              <span>
+                {images.length} image
+                {images.length === 1
+                  ? ""
+                  : "s"}
+              </span>
+            </div>
+
+            <button
+              className="small-icon-button"
+              onClick={onOpenPicker}
+              title="Upload images"
+            >
+              <Plus size={17} />
+            </button>
+          </div>
+
+          {images.length === 0 ? (
+            <div className="workspace-empty-queue">
+              <div className="workspace-empty-icon">
+                <ImageIcon size={25} />
+              </div>
+
+              <strong>
+                No images loaded
+              </strong>
+
+              <span>
+                Upload images to start
+                annotating.
+              </span>
+
+              <button
+                className="secondary-button"
+                onClick={onOpenPicker}
+              >
+                <Upload size={16} />
+                Upload Images
+              </button>
+            </div>
+          ) : (
+            <div className="workspace-image-list">
+              {images.map(
+                (image, index) => {
+                  const count =
+                    annotations[
+                      image.id
+                    ]?.length || 0;
+
+                  return (
+                    <button
+                      key={image.id}
+                      className={`workspace-image-item ${
+                        index === imageIndex
+                          ? "active"
+                          : ""
+                      }`}
+                      onClick={() => {
+                        /* index navigation handled by direct setter via custom event isn't needed */
+                        const event =
+                          new CustomEvent(
+                            "annotatepro-select-image",
+                            {
+                              detail:
+                                index,
+                            }
+                          );
+
+                        window.dispatchEvent(
+                          event
+                        );
+                      }}
+                    >
+                      <div className="workspace-thumbnail">
+                        <img
+                          src={image.url}
+                          alt={image.name}
+                        />
+                      </div>
+
+                      <div className="workspace-image-copy">
+                        <strong>
+                          {image.name}
+                        </strong>
+
+                        <span>
+                          {count} annotation
+                          {count === 1
+                            ? ""
+                            : "s"}
+                        </span>
+                      </div>
+
+                      {count > 0 && (
+                        <CheckCircle2
+                          size={15}
+                          className="workspace-image-check"
+                        />
+                      )}
+                    </button>
+                  );
+                }
+              )}
+            </div>
+          )}
+        </aside>
+
+        <div className="workspace-center">
+          <div className="annotation-toolbar">
+            <div className="tool-group">
+              <button
+                className={`annotation-tool-button ${
+                  annotationTool ===
+                  "select"
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() =>
+                  setAnnotationTool(
+                    "select"
+                  )
+                }
+                title="Select"
+              >
+                <MousePointer2 size={18} />
+              </button>
+
+              <button
+                className={`annotation-tool-button ${
+                  annotationTool ===
+                  "bbox"
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() =>
+                  setAnnotationTool(
+                    "bbox"
+                  )
+                }
+                title="Bounding Box"
+              >
+                <Square size={18} />
+              </button>
+
+              <button
+                className={`annotation-tool-button ${
+                  annotationTool ===
+                  "polygon"
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() =>
+                  setAnnotationTool(
+                    "polygon"
+                  )
+                }
+                title="Polygon"
+              >
+                <Target size={18} />
+              </button>
+
+              <button
+                className={`annotation-tool-button ${
+                  annotationTool ===
+                  "classification"
+                    ? "active"
+                    : ""
+                }`}
+                onClick={() =>
+                  setAnnotationTool(
+                    "classification"
+                  )
+                }
+                title="Classification"
+              >
+                <Tag size={18} />
+              </button>
+            </div>
+
+            <div className="toolbar-divider" />
+
+            <div className="tool-group">
+              <button
+                className="annotation-tool-button"
+                onClick={onZoomOut}
+                title="Zoom out"
+                disabled={
+                  zoom <= 0.5
+                }
+              >
+                <ZoomOut size={18} />
+              </button>
+
+              <button
+                className="zoom-value"
+                onClick={onResetZoom}
+                title="Reset zoom"
+              >
+                {Math.round(
+                  zoom * 100
+                )}
+                %
+              </button>
+
+              <button
+                className="annotation-tool-button"
+                onClick={onZoomIn}
+                title="Zoom in"
+                disabled={
+                  zoom >= 2.5
+                }
+              >
+                <ZoomIn size={18} />
+              </button>
+            </div>
+
+            <div className="toolbar-spacer" />
+
+            {polygonPoints.length >=
+              3 && (
+              <button
+                className="secondary-button compact-button"
+                onClick={
+                  onFinishPolygon
+                }
+              >
+                <CheckCircle2
+                  size={16}
+                />
+                Finish Polygon
+              </button>
+            )}
+
+            <button
+              className="danger-outline-button"
+              onClick={onClear}
+              disabled={!currentImage}
+            >
+              <Trash2 size={16} />
+              Clear
+            </button>
+          </div>
+
+          <div className="annotation-canvas-area">
+            {!currentImage ? (
+              <div className="annotation-start-screen">
+                <div className="annotation-start-icon">
+                  <ImageIcon size={40} />
+                </div>
+
+                <h2>
+                  Start annotating
+                </h2>
+
+                <p>
+                  Upload one or more images
+                  to begin your annotation
+                  workflow.
+                </p>
+
+                <button
+                  className="primary-button"
+                  onClick={onOpenPicker}
+                >
+                  <Upload size={18} />
+                  Upload Images
+                </button>
+
+                <div className="annotation-start-features">
+                  <span>
+                    <Square size={15} />
+                    Bounding Box
+                  </span>
+
+                  <span>
+                    <Target size={15} />
+                    Polygon
+                  </span>
+
+                  <span>
+                    <Tag size={15} />
+                    Classification
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div
+                className={`annotation-canvas-wrapper tool-${annotationTool}`}
+                ref={canvasRef}
+                onMouseDown={
+                  onMouseDown
+                }
+                onMouseMove={
+                  onMouseMove
+                }
+                onMouseUp={onMouseUp}
+                onClick={onCanvasClick}
+              >
+                <div
+                  className="annotation-image-stage"
+                  style={{
+                    transform: `scale(${zoom})`,
+                  }}
+                >
+                  <img
+                    className="annotation-main-image"
+                    src={currentImage.url}
+                    alt={currentImage.name}
+                    draggable="false"
+                  />
+
+                  <div className="annotation-overlay">
+                    {annotations.map(
+                      (annotation) => (
+                        <AnnotationShape
+                          key={
+                            annotation.id
+                          }
+                          annotation={
+                            annotation
+                          }
+                          selected={
+                            selectedAnnotationId ===
+                            annotation.id
+                          }
+                          onSelect={
+                            selectAnnotation
+                          }
+                        />
+                      )
+                    )}
+
+                    {drawingBox && (
+                      <div
+                        className="drawing-box"
+                        style={{
+                          left: `${Math.min(
+                            drawingBox.startX,
+                            drawingBox.currentX
+                          )}%`,
+                          top: `${Math.min(
+                            drawingBox.startY,
+                            drawingBox.currentY
+                          )}%`,
+                          width: `${Math.abs(
+                            drawingBox.currentX -
+                              drawingBox.startX
+                          )}%`,
+                          height: `${Math.abs(
+                            drawingBox.currentY -
+                              drawingBox.startY
+                          )}%`,
+                        }}
+                      />
+                    )}
+
+                    {polygonPoints.length >
+                      0 && (
+                      <svg
+                        className="polygon-preview"
+                        viewBox="0 0 100 100"
+                        preserveAspectRatio="none"
+                      >
+                        {polygonPoints.length >
+                          1 && (
+                          <polyline
+                            points={polygonPoints
+                              .map(
+                                (
+                                  point
+                                ) =>
+                                  `${point.x},${point.y}`
+                              )
+                              .join(" ")}
+                          />
+                        )}
+
+                        {polygonPoints.map(
+                          (
+                            point,
+                            index
+                          ) => (
+                            <circle
+                              key={
+                                index
+                              }
+                              cx={
+                                point.x
+                              }
+                              cy={
+                                point.y
+                              }
+                              r="0.8"
+                            />
+                          )
+                        )}
+                      </svg>
+                    )}
+                  </div>
+                </div>
+
+                <div className="canvas-tool-hint">
+                  {annotationTool ===
+                    "bbox" &&
+                    "Click and drag to draw a bounding box"}
+
+                  {annotationTool ===
+                    "polygon" &&
+                    "Click points around the object, then Finish Polygon"}
+
+                  {annotationTool ===
+                    "classification" &&
+                    "Click Add Classification to label this image"}
+
+                  {annotationTool ===
+                    "select" &&
+                    "Select an annotation to edit or delete it"}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {currentImage && (
+            <div className="workspace-bottom-bar">
+              <div className="image-navigation">
+                <button
+                  className="small-icon-button"
+                  onClick={onPrevious}
+                  disabled={
+                    imageIndex === 0
+                  }
+                  title="Previous image"
+                >
+                  <ChevronLeft
+                    size={18}
+                  />
+                </button>
+
+                <span>
+                  Image{" "}
+                  <strong>
+                    {imageIndex + 1}
+                  </strong>{" "}
+                  of{" "}
+                  <strong>
+                    {images.length}
+                  </strong>
+                </span>
+
+                <button
+                  className="small-icon-button"
+                  onClick={onNext}
+                  disabled={
+                    imageIndex ===
+                    images.length - 1
+                  }
+                  title="Next image"
+                >
+                  <ChevronRight
+                    size={18}
+                  />
+                </button>
+              </div>
+
+              <div className="current-image-name">
+                <ImageIcon
+                  size={15}
+                />
+                {currentImage.name}
+              </div>
+
+              <button
+                className="remove-image-button"
+                onClick={
+                  onRemoveImage
+                }
+              >
+                <Trash2 size={15} />
+                Remove Image
+              </button>
+            </div>
+          )}
+        </div>
+
+        <aside className="workspace-right-panel">
+          <div className="workspace-right-section">
+            <div className="workspace-panel-heading">
+              <div>
+                <h3>Labels</h3>
+                <span>
+                  Select annotation class
+                </span>
+              </div>
+            </div>
+
+            <div className="label-list">
+              {labels.map((label) => (
+                <button
+                  key={label}
+                  className={`label-option ${
+                    selectedLabel ===
+                    label
+                      ? "active"
+                      : ""
+                  }`}
+                  onClick={() =>
+                    setSelectedLabel(
+                      label
+                    )
+                  }
+                >
+                  <span className="label-dot" />
+                  {label}
+
+                  {selectedLabel ===
+                    label && (
+                    <CheckCircle2
+                      size={15}
+                    />
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="add-label-row">
+              <input
+                value={newLabel}
+                onChange={(event) =>
+                  setNewLabel(
+                    event.target.value
+                  )
+                }
+                placeholder="New label"
+                onKeyDown={(event) => {
+                  if (
+                    event.key ===
+                    "Enter"
+                  ) {
+                    addCustomLabel();
+                  }
+                }}
+              />
+
+              <button
+                className="small-icon-button"
+                onClick={
+                  addCustomLabel
+                }
+                title="Add label"
+              >
+                <Plus size={17} />
+              </button>
+            </div>
+          </div>
+
+          <div className="workspace-right-section">
+            <div className="workspace-panel-heading">
+              <div>
+                <h3>
+                  Annotations
+                </h3>
+                <span>
+                  {annotations.length} object
+                  {annotations.length ===
+                  1
+                    ? ""
+                    : "s"}
+                </span>
+              </div>
+
+              <span className="annotation-count-badge">
+                {annotations.length}
+              </span>
+            </div>
+
+            {annotations.length ===
+            0 ? (
+              <div className="no-annotations">
+                <Target size={22} />
+                <span>
+                  No annotations yet
+                </span>
+              </div>
+            ) : (
+              <div className="annotation-list">
+                {annotations.map(
+                  (annotation, index) => (
+                    <button
+                      key={
+                        annotation.id
+                      }
+                      className={`annotation-list-item ${
+                        selectedAnnotationId ===
+                        annotation.id
+                          ? "active"
+                          : ""
+                      }`}
+                      onClick={() =>
+                        selectAnnotation(
+                          annotation
+                        )
+                      }
+                    >
+                      <div className="annotation-number">
+                        {index + 1}
+                      </div>
+
+                      <div className="annotation-item-copy">
+                        <strong>
+                          {
+                            annotation.label
+                          }
+                        </strong>
+
+                        <span>
+                          {annotation.type ===
+                          "bbox"
+                            ? "Bounding Box"
+                            : annotation.type ===
+                                "polygon"
+                              ? "Polygon"
+                              : "Classification"}
+                        </span>
+                      </div>
+
+                      <ChevronRight
+                        size={15}
+                      />
+                    </button>
+                  )
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="workspace-right-section workspace-instructions">
+            <div className="workspace-panel-heading">
+              <div>
+                <h3>
+                  Annotation Tools
+                </h3>
+              </div>
+            </div>
+
+            <div className="tool-help-item">
+              <Square size={16} />
+              <div>
+                <strong>
+                  Bounding Box
+                </strong>
+                <span>
+                  Drag around an object.
+                </span>
+              </div>
+            </div>
+
+            <div className="tool-help-item">
+              <Target size={16} />
+              <div>
+                <strong>
+                  Polygon
+                </strong>
+                <span>
+                  Click multiple points.
+                </span>
+              </div>
+            </div>
+
+            <div className="tool-help-item">
+              <Tag size={16} />
+              <div>
+                <strong>
+                  Classification
+                </strong>
+                <span>
+                  Assign a label to the image.
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="workspace-right-actions">
+            <button
+              className="primary-button full-width-button"
+              onClick={
+                onAddClassification
+              }
+              disabled={
+                !currentImage ||
+                annotationTool !==
+                  "classification"
+              }
+            >
+              <Tag size={17} />
+              Add Classification
+            </button>
+
+            <button
+              className="danger-outline-button full-width-button"
+              onClick={
+                onDeleteSelected
+              }
+              disabled={
+                !selectedAnnotationId
+              }
+            >
+              <Trash2 size={17} />
+              Delete Selected
+            </button>
+          </div>
+        </aside>
+      </div>
+    </div>
+  );
+}
+
+function AnnotationShape({
+  annotation,
+  selected,
+  onSelect,
+}) {
+  if (annotation.type === "bbox") {
+    return (
+      <button
+        className={`annotation-bbox ${
+          selected ? "selected" : ""
+        }`}
+        style={{
+          left: `${annotation.x}%`,
+          top: `${annotation.y}%`,
+          width: `${annotation.width}%`,
+          height: `${annotation.height}%`,
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(annotation);
+        }}
+      >
+        <span>
+          {annotation.label}
+        </span>
+      </button>
+    );
+  }
+
+  if (annotation.type === "polygon") {
+    return (
+      <svg
+        className={`annotation-polygon ${
+          selected ? "selected" : ""
+        }`}
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        onClick={(event) => {
+          event.stopPropagation();
+          onSelect(annotation);
+        }}
+      >
+        <polygon
+          points={annotation.points
+            .map(
+              (point) =>
+                `${point.x},${point.y}`
+            )
+            .join(" ")}
+        />
+
+        <text
+          x={annotation.points[0]?.x || 0}
+          y={
+            (annotation.points[0]?.y ||
+              0) - 1
+          }
+        >
+          {annotation.label}
+        </text>
+      </svg>
+    );
+  }
+
+  return (
+    <button
+      className={`annotation-classification ${
+        selected ? "selected" : ""
+      }`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSelect(annotation);
+      }}
+    >
+      <Tag size={14} />
+      {annotation.label}
+    </button>
+  );
+}
+
+/* ============================= */
+/* PROJECTS */
+/* ============================= */
+
 function ProjectsPage({
   projects,
   filteredProjects,
@@ -931,38 +2598,61 @@ function ProjectsPage({
   onView,
   onResetFilters,
 }) {
-  const totalImages = projects.reduce(
-    (sum, project) => sum + Number(project.totalImages || 0),
-    0
+  const totalImages =
+    projects.reduce(
+      (sum, project) =>
+        sum +
+        Number(project.totalImages || 0),
+      0
+    );
+
+  const completedImages =
+    projects.reduce(
+      (sum, project) =>
+        sum +
+        Number(
+          project.completedImages || 0
+        ),
+      0
+    );
+
+  const remainingImages = Math.max(
+    0,
+    totalImages - completedImages
   );
 
-  const completedImages = projects.reduce(
-    (sum, project) => sum + Number(project.completedImages || 0),
-    0
-  );
+  const completedProjects =
+    projects.filter(
+      (project) =>
+        project.status === "Completed"
+    ).length;
 
-  const remainingImages = Math.max(0, totalImages - completedImages);
-
-  const completedProjects = projects.filter(
-    (project) => project.status === "Completed"
-  ).length;
-
-  const inProgressProjects = projects.filter(
-    (project) => project.status === "In Progress"
-  ).length;
+  const inProgressProjects =
+    projects.filter(
+      (project) =>
+        project.status === "In Progress"
+    ).length;
 
   return (
     <>
       <div className="page-header projects-page-header">
         <div>
-          <div className="eyebrow">WORKSPACE</div>
+          <div className="eyebrow">
+            WORKSPACE
+          </div>
+
           <h1>Projects</h1>
+
           <p>
-            Create, manage and monitor all annotation projects from one place.
+            Create, manage and monitor all
+            annotation projects from one place.
           </p>
         </div>
 
-        <button className="primary-button" onClick={onCreate}>
+        <button
+          className="primary-button"
+          onClick={onCreate}
+        >
           <Plus size={18} />
           Create Project
         </button>
@@ -998,17 +2688,23 @@ function ProjectsPage({
         <div className="projects-toolbar">
           <div className="projects-search">
             <Search size={18} />
+
             <input
               value={search}
-              onChange={(event) => setSearch(event.target.value)}
+              onChange={(event) =>
+                setSearch(
+                  event.target.value
+                )
+              }
               placeholder="Search projects, clients, teams..."
             />
 
             {search && (
               <button
                 className="clear-search"
-                onClick={() => setSearch("")}
-                aria-label="Clear search"
+                onClick={() =>
+                  setSearch("")
+                }
               >
                 <X size={15} />
               </button>
@@ -1023,72 +2719,97 @@ function ProjectsPage({
 
             <select
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+              onChange={(event) =>
+                setStatusFilter(
+                  event.target.value
+                )
+              }
             >
-              <option value="All">All Projects</option>
-              <option value="Pending">Pending</option>
-              <option value="In Progress">In Progress</option>
-              <option value="Paused">Paused</option>
-              <option value="Completed">Completed</option>
+              <option value="All">
+                All Projects
+              </option>
+              <option value="Pending">
+                Pending
+              </option>
+              <option value="In Progress">
+                In Progress
+              </option>
+              <option value="Paused">
+                Paused
+              </option>
+              <option value="Completed">
+                Completed
+              </option>
             </select>
           </div>
         </div>
 
         <div className="projects-result-bar">
-          <div>
-            Showing <strong>{filteredProjects.length}</strong> of{" "}
-            <strong>{projects.length}</strong> projects
-          </div>
-
-          {(search || statusFilter !== "All") && (
-            <button className="clear-filter-button" onClick={onResetFilters}>
-              Clear filters
-            </button>
-          )}
+          Showing{" "}
+          <strong>
+            {filteredProjects.length}
+          </strong>{" "}
+          of{" "}
+          <strong>{projects.length}</strong>{" "}
+          projects
         </div>
 
         {filteredProjects.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-state-icon">
-              <Search size={24} />
-            </div>
+            <Search size={24} />
             <h3>No projects found</h3>
-            <p>
-              Try changing your search or status filter, or create a new
-              project.
-            </p>
-            <button className="secondary-button" onClick={onResetFilters}>
+
+            <button
+              className="secondary-button"
+              onClick={
+                onResetFilters
+              }
+            >
               Reset Filters
             </button>
           </div>
         ) : (
           <div className="projects-list">
-            {filteredProjects.map((project) => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                onView={() => onView(project)}
-                onEdit={() => onEdit(project)}
-                onDelete={() => onDelete(project)}
-              />
-            ))}
+            {filteredProjects.map(
+              (project) => (
+                <ProjectCard
+                  key={project.id}
+                  project={project}
+                  onView={() =>
+                    onView(project)
+                  }
+                  onEdit={() =>
+                    onEdit(project)
+                  }
+                  onDelete={() =>
+                    onDelete(project)
+                  }
+                />
+              )
+            )}
           </div>
         )}
 
         <div className="projects-footer-summary">
           <div>
             <span>Total images</span>
-            <strong>{totalImages.toLocaleString()}</strong>
+            <strong>
+              {totalImages.toLocaleString()}
+            </strong>
           </div>
 
           <div>
             <span>Completed</span>
-            <strong>{completedImages.toLocaleString()}</strong>
+            <strong>
+              {completedImages.toLocaleString()}
+            </strong>
           </div>
 
           <div>
             <span>Remaining</span>
-            <strong>{remainingImages.toLocaleString()}</strong>
+            <strong>
+              {remainingImages.toLocaleString()}
+            </strong>
           </div>
         </div>
       </section>
@@ -1096,9 +2817,17 @@ function ProjectsPage({
   );
 }
 
-function ProjectCard({ project, onView, onEdit, onDelete }) {
-  const progress = getProgress(project);
-  const remaining = getRemaining(project);
+function ProjectCard({
+  project,
+  onView,
+  onEdit,
+  onDelete,
+}) {
+  const progress =
+    getProgress(project);
+
+  const remaining =
+    getRemaining(project);
 
   return (
     <div className="project-card">
@@ -1110,45 +2839,68 @@ function ProjectCard({ project, onView, onEdit, onDelete }) {
         <div className="project-card-content">
           <div className="project-card-title-row">
             <div>
-              <button className="project-name-button" onClick={onView}>
+              <button
+                className="project-name-button"
+                onClick={onView}
+              >
                 {project.name}
               </button>
 
               <div className="project-meta">
                 <span>{project.id}</span>
-                <span className="meta-dot">•</span>
-                <span>{project.client}</span>
+                <span className="meta-dot">
+                  •
+                </span>
+                <span>
+                  {project.client}
+                </span>
               </div>
             </div>
 
-            <StatusBadge status={project.status} />
+            <StatusBadge
+              status={project.status}
+            />
           </div>
 
           <div className="project-card-details">
             <div className="detail-item">
-              <span>Annotation Type</span>
-              <strong>{project.annotationType}</strong>
+              <span>
+                Annotation Type
+              </span>
+              <strong>
+                {project.annotationType}
+              </strong>
             </div>
 
             <div className="detail-item">
               <span>Team</span>
-              <strong>{project.team}</strong>
+              <strong>
+                {project.team}
+              </strong>
             </div>
 
             <div className="detail-item">
               <span>Total Images</span>
-              <strong>{project.totalImages.toLocaleString()}</strong>
+              <strong>
+                {project.totalImages.toLocaleString()}
+              </strong>
             </div>
 
             <div className="detail-item">
               <span>Remaining</span>
-              <strong>{remaining.toLocaleString()}</strong>
+              <strong>
+                {remaining.toLocaleString()}
+              </strong>
             </div>
 
             <div className="detail-item">
               <span>Due Date</span>
               <strong>
-                {project.dueDate ? formatDate(project.dueDate) : "Not set"}
+                {project.dueDate
+                  ? formatDate(
+                      project.dueDate
+                    )
+                  : "Not set"}
               </strong>
             </div>
           </div>
@@ -1156,22 +2908,30 @@ function ProjectCard({ project, onView, onEdit, onDelete }) {
           <div className="project-card-progress">
             <div className="progress-topline">
               <span>Progress</span>
-              <strong>{progress}%</strong>
+              <strong>
+                {progress}%
+              </strong>
             </div>
 
             <div className="progress-track progress-track-large">
               <div
                 className="progress-fill"
-                style={{ width: `${progress}%` }}
+                style={{
+                  width: `${progress}%`,
+                }}
               />
             </div>
 
             <div className="progress-bottomline">
               <span>
-                {project.completedImages.toLocaleString()} completed
+                {project.completedImages.toLocaleString()}{" "}
+                completed
               </span>
 
-              <span>{remaining.toLocaleString()} remaining</span>
+              <span>
+                {remaining.toLocaleString()}{" "}
+                remaining
+              </span>
             </div>
           </div>
         </div>
@@ -1180,7 +2940,6 @@ function ProjectCard({ project, onView, onEdit, onDelete }) {
           <button
             className="card-action-button"
             onClick={onEdit}
-            title="Edit project"
           >
             <Edit3 size={17} />
           </button>
@@ -1188,7 +2947,6 @@ function ProjectCard({ project, onView, onEdit, onDelete }) {
           <button
             className="card-action-button danger"
             onClick={onDelete}
-            title="Delete project"
           >
             <Trash2 size={17} />
           </button>
@@ -1196,18 +2954,18 @@ function ProjectCard({ project, onView, onEdit, onDelete }) {
           <button
             className="card-action-button"
             onClick={onView}
-            title="View project"
           >
-            <ChevronDown
-              size={17}
-              className="view-arrow-icon"
-            />
+            <ChevronDown size={17} />
           </button>
         </div>
       </div>
     </div>
   );
 }
+
+/* ============================= */
+/* MODALS */
+/* ============================= */
 
 function ProjectFormModal({
   editing,
@@ -1217,27 +2975,35 @@ function ProjectFormModal({
   onSubmit,
 }) {
   return (
-    <div className="modal-overlay" onMouseDown={onClose}>
+    <div
+      className="modal-overlay"
+      onMouseDown={onClose}
+    >
       <div
         className="modal project-form-modal"
-        onMouseDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) =>
+          event.stopPropagation()
+        }
       >
         <div className="modal-header">
           <div>
             <div className="eyebrow">
-              {editing ? "EDIT PROJECT" : "NEW PROJECT"}
+              {editing
+                ? "EDIT PROJECT"
+                : "NEW PROJECT"}
             </div>
 
-            <h2>{editing ? "Edit Project" : "Create Project"}</h2>
-
-            <p>
+            <h2>
               {editing
-                ? "Update project details and annotation progress."
-                : "Set up a new annotation project."}
-            </p>
+                ? "Edit Project"
+                : "Create Project"}
+            </h2>
           </div>
 
-          <button className="modal-close" onClick={onClose}>
+          <button
+            className="modal-close"
+            onClick={onClose}
+          >
             <X size={20} />
           </button>
         </div>
@@ -1246,13 +3012,14 @@ function ProjectFormModal({
           <div className="form-grid">
             <div className="form-field form-field-wide">
               <label>
-                Project Name <span>*</span>
+                Project Name{" "}
+                <span>*</span>
               </label>
+
               <input
                 name="name"
                 value={form.name}
                 onChange={onChange}
-                placeholder="e.g. Road Object Detection"
                 required
               />
             </div>
@@ -1261,95 +3028,138 @@ function ProjectFormModal({
               <label>
                 Client <span>*</span>
               </label>
+
               <input
                 name="client"
                 value={form.client}
                 onChange={onChange}
-                placeholder="Client or organization"
                 required
               />
             </div>
 
             <div className="form-field">
-              <label>Annotation Type</label>
+              <label>
+                Annotation Type
+              </label>
+
               <select
                 name="annotationType"
-                value={form.annotationType}
+                value={
+                  form.annotationType
+                }
                 onChange={onChange}
               >
-                <option>Bounding Box</option>
-                <option>Segmentation</option>
-                <option>Polygon</option>
-                <option>Classification</option>
-                <option>Keypoints</option>
-                <option>Polyline</option>
-                <option>Cuboid</option>
+                <option>
+                  Bounding Box
+                </option>
+                <option>
+                  Segmentation
+                </option>
+                <option>
+                  Polygon
+                </option>
+                <option>
+                  Classification
+                </option>
+                <option>
+                  Keypoints
+                </option>
+                <option>
+                  Polyline
+                </option>
+                <option>
+                  Cuboid
+                </option>
               </select>
             </div>
 
             <div className="form-field">
               <label>
-                Total Images <span>*</span>
+                Total Images{" "}
+                <span>*</span>
               </label>
+
               <input
                 type="number"
                 name="totalImages"
                 min="1"
-                value={form.totalImages}
+                value={
+                  form.totalImages
+                }
                 onChange={onChange}
-                placeholder="10000"
                 required
               />
             </div>
 
             <div className="form-field">
-              <label>Completed Images</label>
+              <label>
+                Completed Images
+              </label>
+
               <input
                 type="number"
                 name="completedImages"
                 min="0"
-                value={form.completedImages}
+                value={
+                  form.completedImages
+                }
                 onChange={onChange}
-                placeholder="0"
               />
             </div>
 
             <div className="form-field">
-              <label>Assigned Team</label>
+              <label>
+                Assigned Team
+              </label>
+
               <input
                 name="team"
                 value={form.team}
                 onChange={onChange}
-                placeholder="e.g. Annotation Team"
               />
             </div>
 
             <div className="form-field">
-              <label>Project Status</label>
+              <label>
+                Project Status
+              </label>
+
               <select
                 name="status"
                 value={form.status}
                 onChange={onChange}
               >
                 <option>Pending</option>
-                <option>In Progress</option>
+                <option>
+                  In Progress
+                </option>
                 <option>Paused</option>
-                <option>Completed</option>
+                <option>
+                  Completed
+                </option>
               </select>
             </div>
 
             <div className="form-field">
-              <label>Start Date</label>
+              <label>
+                Start Date
+              </label>
+
               <input
                 type="date"
                 name="startDate"
-                value={form.startDate}
+                value={
+                  form.startDate
+                }
                 onChange={onChange}
               />
             </div>
 
             <div className="form-field">
-              <label>Due Date</label>
+              <label>
+                Due Date
+              </label>
+
               <input
                 type="date"
                 name="dueDate"
@@ -1359,21 +3169,19 @@ function ProjectFormModal({
             </div>
 
             <div className="form-field form-field-wide">
-              <label>Description</label>
+              <label>
+                Description
+              </label>
+
               <textarea
                 name="description"
-                value={form.description}
+                value={
+                  form.description
+                }
                 onChange={onChange}
                 rows="4"
-                placeholder="Describe the annotation project..."
               />
             </div>
-          </div>
-
-          <div className="form-help">
-            <AlertCircle size={16} />
-            Remaining images and progress are calculated automatically from
-            total and completed images.
           </div>
 
           <div className="modal-footer">
@@ -1385,18 +3193,13 @@ function ProjectFormModal({
               Cancel
             </button>
 
-            <button type="submit" className="primary-button">
-              {editing ? (
-                <>
-                  <CheckCircle2 size={17} />
-                  Save Changes
-                </>
-              ) : (
-                <>
-                  <Plus size={17} />
-                  Create Project
-                </>
-              )}
+            <button
+              type="submit"
+              className="primary-button"
+            >
+              {editing
+                ? "Save Changes"
+                : "Create Project"}
             </button>
           </div>
         </form>
@@ -1411,35 +3214,46 @@ function ProjectDetailsModal({
   onEdit,
   onDelete,
 }) {
-  const progress = getProgress(project);
-  const remaining = getRemaining(project);
+  const progress =
+    getProgress(project);
+
+  const remaining =
+    getRemaining(project);
 
   return (
-    <div className="modal-overlay" onMouseDown={onClose}>
+    <div
+      className="modal-overlay"
+      onMouseDown={onClose}
+    >
       <div
         className="modal project-details-modal"
-        onMouseDown={(event) => event.stopPropagation()}
+        onMouseDown={(event) =>
+          event.stopPropagation()
+        }
       >
         <div className="modal-header">
-          <div className="details-heading">
-            <div className="details-project-icon">
-              <FolderKanban size={23} />
+          <div>
+            <div className="eyebrow">
+              {project.id}
             </div>
 
-            <div>
-              <div className="eyebrow">{project.id}</div>
-              <h2>{project.name}</h2>
-              <p>{project.client}</p>
-            </div>
+            <h2>{project.name}</h2>
+
+            <p>{project.client}</p>
           </div>
 
-          <button className="modal-close" onClick={onClose}>
+          <button
+            className="modal-close"
+            onClick={onClose}
+          >
             <X size={20} />
           </button>
         </div>
 
         <div className="details-status-row">
-          <StatusBadge status={project.status} />
+          <StatusBadge
+            status={project.status}
+          />
 
           <span className="details-type">
             {project.annotationType}
@@ -1449,16 +3263,24 @@ function ProjectDetailsModal({
         <div className="details-progress-box">
           <div className="details-progress-heading">
             <div>
-              <span>Overall Progress</span>
-              <strong>{progress}%</strong>
+              <span>
+                Overall Progress
+              </span>
+
+              <strong>
+                {progress}%
+              </strong>
             </div>
 
             <div className="details-progress-numbers">
               <span>
-                {project.completedImages.toLocaleString()} completed
+                {project.completedImages.toLocaleString()}{" "}
+                completed
               </span>
+
               <span>
-                {remaining.toLocaleString()} remaining
+                {remaining.toLocaleString()}{" "}
+                remaining
               </span>
             </div>
           </div>
@@ -1466,7 +3288,9 @@ function ProjectDetailsModal({
           <div className="progress-track progress-track-large">
             <div
               className="progress-fill"
-              style={{ width: `${progress}%` }}
+              style={{
+                width: `${progress}%`,
+              }}
             />
           </div>
         </div>
@@ -1493,24 +3317,40 @@ function ProjectDetailsModal({
           <DetailBox
             icon={Users}
             label="Assigned Team"
-            value={project.team || "Unassigned"}
+            value={
+              project.team ||
+              "Unassigned"
+            }
           />
 
           <DetailBox
             icon={Calendar}
             label="Start Date"
-            value={project.startDate ? formatDate(project.startDate) : "Not set"}
+            value={
+              project.startDate
+                ? formatDate(
+                    project.startDate
+                  )
+                : "Not set"
+            }
           />
 
           <DetailBox
             icon={Calendar}
             label="Due Date"
-            value={project.dueDate ? formatDate(project.dueDate) : "Not set"}
+            value={
+              project.dueDate
+                ? formatDate(
+                    project.dueDate
+                  )
+                : "Not set"
+            }
           />
         </div>
 
         <div className="details-description">
           <h3>Description</h3>
+
           <p>
             {project.description ||
               "No project description has been added yet."}
@@ -1518,17 +3358,26 @@ function ProjectDetailsModal({
         </div>
 
         <div className="modal-footer details-footer">
-          <button className="danger-button" onClick={onDelete}>
+          <button
+            className="danger-button"
+            onClick={onDelete}
+          >
             <Trash2 size={17} />
             Delete
           </button>
 
           <div className="details-footer-right">
-            <button className="secondary-button" onClick={onClose}>
+            <button
+              className="secondary-button"
+              onClick={onClose}
+            >
               Close
             </button>
 
-            <button className="primary-button" onClick={onEdit}>
+            <button
+              className="primary-button"
+              onClick={onEdit}
+            >
               <Edit3 size={17} />
               Edit Project
             </button>
@@ -1539,7 +3388,15 @@ function ProjectDetailsModal({
   );
 }
 
-function DetailBox({ icon: Icon, label, value }) {
+/* ============================= */
+/* SMALL COMPONENTS */
+/* ============================= */
+
+function DetailBox({
+  icon: Icon,
+  label,
+  value,
+}) {
   return (
     <div className="detail-box">
       <div className="detail-box-icon">
@@ -1573,10 +3430,19 @@ function StatCard({
         </span>
       </div>
 
-      <div className="stat-value">{value}</div>
-      <div className="stat-label">{label}</div>
+      <div className="stat-value">
+        {value}
+      </div>
 
-      <div className={`stat-trend ${positive ? "positive" : ""}`}>
+      <div className="stat-label">
+        {label}
+      </div>
+
+      <div
+        className={`stat-trend ${
+          positive ? "positive" : ""
+        }`}
+      >
         <TrendingUp size={14} />
         {trend}
       </div>
@@ -1584,7 +3450,11 @@ function StatCard({
   );
 }
 
-function MiniStat({ icon: Icon, label, value }) {
+function MiniStat({
+  icon: Icon,
+  label,
+  value,
+}) {
   return (
     <div className="mini-stat">
       <div className="mini-stat-icon">
@@ -1600,7 +3470,7 @@ function MiniStat({ icon: Icon, label, value }) {
 }
 
 function StatusBadge({ status }) {
-  const icon =
+  const Icon =
     status === "Completed"
       ? CheckCircle2
       : status === "Paused"
@@ -1609,17 +3479,23 @@ function StatusBadge({ status }) {
           ? Activity
           : Clock3;
 
-  const Icon = icon;
-
   return (
-    <span className={`status-badge status-${status.toLowerCase().replace(/\s+/g, "-")}`}>
+    <span
+      className={`status-badge status-${status
+        .toLowerCase()
+        .replace(/\s+/g, "-")}`}
+    >
       <Icon size={13} />
       {status}
     </span>
   );
 }
 
-function ActivityItem({ icon: Icon, title, time }) {
+function ActivityItem({
+  icon: Icon,
+  title,
+  time,
+}) {
   return (
     <div className="activity-item">
       <div className="activity-icon">
@@ -1634,7 +3510,11 @@ function ActivityItem({ icon: Icon, title, time }) {
   );
 }
 
-function QuickAction({ icon: Icon, title, description }) {
+function QuickAction({
+  icon: Icon,
+  title,
+  description,
+}) {
   return (
     <button className="quick-action">
       <div className="quick-action-icon">
@@ -1646,20 +3526,31 @@ function QuickAction({ icon: Icon, title, description }) {
         <span>{description}</span>
       </div>
 
-      <ChevronDown className="quick-action-arrow" size={17} />
+      <ChevronDown
+        className="quick-action-arrow"
+        size={17}
+      />
     </button>
   );
 }
 
-function PlaceholderPage({ title, description, icon: Icon }) {
+function PlaceholderPage({
+  title,
+  description,
+  icon: Icon,
+}) {
   return (
     <div className="placeholder-page">
       <div className="placeholder-icon">
         <Icon size={28} />
       </div>
 
-      <div className="eyebrow">COMING NEXT</div>
+      <div className="eyebrow">
+        COMING NEXT
+      </div>
+
       <h1>{title}</h1>
+
       <p>{description}</p>
     </div>
   );
@@ -1670,17 +3561,22 @@ function formatDate(dateString) {
     return "Not set";
   }
 
-  const date = new Date(`${dateString}T00:00:00`);
+  const date = new Date(
+    `${dateString}T00:00:00`
+  );
 
   if (Number.isNaN(date.getTime())) {
     return dateString;
   }
 
-  return date.toLocaleDateString("en-IN", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
+  return date.toLocaleDateString(
+    "en-IN",
+    {
+      day: "2-digit",
+      month: "short",
+      year: "numeric",
+    }
+  );
 }
 
-export default App; 
+export default App;
