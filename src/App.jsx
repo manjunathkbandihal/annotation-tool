@@ -5,12 +5,13 @@ import {
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
   Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
-  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut
+  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw
 } from "lucide-react";
 import "./App.css";
 
 const PROJECTS_KEY = "annotatepro_projects_v2";
 const TASKS_KEY = "annotatepro_tasks_v1";
+const DATASET_META_KEY = "annotatepro_dataset_meta_v1";
 
 const labelPalette = [
   "#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c",
@@ -45,12 +46,12 @@ const sampleProjects = [
 ];
 
 const sampleTasks = [
-  { id: "task-001", name: "road_scene_001.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-002", name: "road_scene_002.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1494783367193-149034c05e8f?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-003", name: "road_scene_003.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-004", name: "street_scene_004.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-005", name: "street_scene_005.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-006", name: "traffic_scene_006.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1600&q=85" }
+  { id: "task-001", projectId: "p1", name: "road_scene_001.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-002", projectId: "p1", name: "road_scene_002.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1494783367193-149034c05e8f?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-003", projectId: "p2", name: "road_scene_003.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-004", projectId: "p2", name: "street_scene_004.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-005", projectId: "p3", name: "street_scene_005.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-006", projectId: "p4", name: "traffic_scene_006.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1600&q=85" }
 ];
 
 const defaultLabels = [
@@ -96,6 +97,11 @@ function App() {
   const [projectDetails, setProjectDetails] = useState(null);
 
   const [tasks, setTasks] = useState(() => readStorage(TASKS_KEY, sampleTasks));
+  const [datasetMeta, setDatasetMeta] = useState(() => readStorage(DATASET_META_KEY, { name: "Production Dataset", description: "AnnotatePro image dataset", created: new Date().toISOString() }));
+  const [datasetSearch, setDatasetSearch] = useState("");
+  const [datasetStatus, setDatasetStatus] = useState("All");
+  const [datasetView, setDatasetView] = useState("table");
+  const [datasetToast, setDatasetToast] = useState("");
   const [selectedTaskIndex, setSelectedTaskIndex] = useState(0);
   const [tool, setTool] = useState("select");
   const [selectedLabel, setSelectedLabel] = useState(defaultLabels[0].id);
@@ -110,7 +116,23 @@ function App() {
   const [workspaceProject, setWorkspaceProject] = useState(projects[0]?.id || "p1");
   const [taskFilter, setTaskFilter] = useState("All");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const [qaReviews, setQaReviews] = useState(() => readStorage("annotatepro_qa_reviews_v1", {}));
+  const [qaSelectedTaskId, setQaSelectedTaskId] = useState(null);
+  const [qaFilter, setQaFilter] = useState("All");
+  const [qaSearch, setQaSearch] = useState("");
+  const [qaScore, setQaScore] = useState(96);
+  const [qaReason, setQaReason] = useState("Incorrect label");
+  const [qaComment, setQaComment] = useState("");
+  const [qaMessage, setQaMessage] = useState("");
   const [showShortcuts, setShowShortcuts] = useState(false);
+  const [analyticsRange, setAnalyticsRange] = useState("7 days");
+  const [analyticsProject, setAnalyticsProject] = useState("All Projects");
+  const [exportFormat, setExportFormat] = useState("AnnotatePro JSON");
+  const [exportScope, setExportScope] = useState("All Tasks");
+  const [exportProject, setExportProject] = useState("All Projects");
+  const [exportSearch, setExportSearch] = useState("");
+  const [exportHistory, setExportHistory] = useState(() => readStorage("annotatepro_export_history_v1", []));
+  const [exportMessage, setExportMessage] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [imageUploadOpen, setImageUploadOpen] = useState(false);
   const fileInputRef = useRef(null);
@@ -126,6 +148,18 @@ function App() {
   useEffect(() => {
     localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
   }, [tasks]);
+
+  useEffect(() => {
+    localStorage.setItem(DATASET_META_KEY, JSON.stringify(datasetMeta));
+  }, [datasetMeta]);
+
+  useEffect(() => {
+    localStorage.setItem("annotatepro_qa_reviews_v1", JSON.stringify(qaReviews));
+  }, [qaReviews]);
+
+  useEffect(() => {
+    localStorage.setItem("annotatepro_export_history_v1", JSON.stringify(exportHistory));
+  }, [exportHistory]);
 
   const currentTask = tasks[selectedTaskIndex] || tasks[0];
   const currentAnnotations = annotationsByTask[currentTask?.id] || [];
@@ -361,23 +395,248 @@ function App() {
 
   function submitTask() {
     if (!currentTask) return;
-    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: "Completed" } : t));
-    setWorkspaceMessage("Task submitted");
+    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: "Submitted" } : t));
+    setWorkspaceMessage("Task submitted for QA review");
     setTimeout(() => setWorkspaceMessage(""), 1800);
   }
 
-  function importImages(files) {
-    const next = Array.from(files || []).map((file, index) => ({
-      id: `upload-${Date.now()}-${index}`,
-      name: file.name,
-      status: "Pending",
-      image: URL.createObjectURL(file)
-    }));
+  async function importImages(files) {
+    const selectedFiles = Array.from(files || []).filter(file => file.type.startsWith("image/"));
+    if (!selectedFiles.length) return;
+    const readFile = file => new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve({
+        id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name, status: "Pending", image: reader.result, size: file.size,
+        source: "Local upload", projectId: workspaceProject, createdAt: new Date().toISOString()
+      });
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    });
+    const next = (await Promise.all(selectedFiles.map(readFile))).filter(Boolean);
     if (!next.length) return;
+    const startIndex = tasks.length;
     setTasks(prev => [...prev, ...next]);
-    setSelectedTaskIndex(tasks.length);
+    setSelectedTaskIndex(startIndex);
     setImageUploadOpen(false);
+    setDatasetToast(`${next.length} image${next.length > 1 ? "s" : ""} imported successfully`);
+    setTimeout(() => setDatasetToast(""), 2200);
     navigate("Annotation Workspace");
+  }
+
+  function removeTask(id) {
+    const index = tasks.findIndex(t => t.id === id);
+    if (index < 0) return;
+    if (!window.confirm(`Remove ${tasks[index].name} from the dataset?`)) return;
+    setTasks(prev => prev.filter(t => t.id !== id));
+    setSelectedTaskIndex(prev => Math.max(0, Math.min(prev, tasks.length - 2)));
+    setDatasetToast("Task removed");
+    setTimeout(() => setDatasetToast(""), 1800);
+  }
+
+  function clearDataset() {
+    if (!tasks.length) return;
+    if (!window.confirm("Remove all imported tasks? Sample tasks will also be removed.")) return;
+    setTasks([]);
+    setSelectedTaskIndex(0);
+    setAnnotationsByTask({});
+    setDatasetToast("Dataset cleared");
+    setTimeout(() => setDatasetToast(""), 1800);
+  }
+
+  function updateTaskStatus(id, status) {
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
+  }
+
+  function exportTasksCsv() {
+    const rows = [
+      ["id", "name", "status", "image"],
+      ...tasks.map(t => [t.id, t.name, t.status, t.image])
+    ];
+    const csv = rows.map(row => row.map(v => `"${String(v ?? "").replaceAll('"','""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "annotatepro-tasks.csv"; a.click();
+  }
+
+
+  const exportTasks = useMemo(() => {
+    const q = exportSearch.trim().toLowerCase();
+    return tasks.filter(task => {
+      const review = qaReviews[task.id];
+      const annotations = annotationsByTask[task.id] || [];
+        const matchesSearch = !q || `${task.name} ${task.id}`.toLowerCase().includes(q);
+      const matchesProject = exportProject === "All Projects" || (task.projectId || workspaceProject) === exportProject;
+      const matchesScope = exportScope === "All Tasks"
+        || (exportScope === "Annotated Only" && annotations.length > 0)
+        || (exportScope === "Completed Only" && ["Completed","Submitted","QA Review","Approved","Rejected"].includes(task.status))
+        || (exportScope === "QA Approved" && review?.decision === "Approved");
+      return matchesSearch && matchesProject && matchesScope;
+    });
+  }, [tasks, qaReviews, annotationsByTask, projects, workspaceProject, exportSearch, exportProject, exportScope]);
+
+  function downloadText(filename, content, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  function csvEscape(value) {
+    return `"${String(value ?? "").replaceAll('"', '""')}"`;
+  }
+
+  function buildTaskCsv(list) {
+    const rows = [["task_id","task_name","status","annotation_count","qa_decision","qa_score","reviewer","image_source","created_at"]];
+    list.forEach(task => {
+      const review = qaReviews[task.id] || {};
+      rows.push([task.id, task.name, task.status, (annotationsByTask[task.id] || []).length, review.decision || "", review.score ?? "", review.reviewer || "", task.source || "Sample", task.createdAt || ""]);
+    });
+    return rows.map(row => row.map(csvEscape).join(",")).join("\n");
+  }
+
+  function buildAnnotationCsv(list) {
+    const rows = [["task_id","task_name","annotation_id","label_id","type","x","y","width","height","points","color"]];
+    list.forEach(task => {
+      (annotationsByTask[task.id] || []).forEach(a => {
+        const xs = (a.points || []).map(p => p.x);
+        const ys = (a.points || []).map(p => p.y);
+        const x = a.x ?? (xs.length ? Math.min(...xs) : "");
+        const y = a.y ?? (ys.length ? Math.min(...ys) : "");
+        rows.push([task.id, task.name, a.id, a.labelId || "", a.type, x, y, a.w ?? "", a.h ?? "", JSON.stringify(a.points || []), a.color || ""]);
+      });
+    });
+    return rows.map(row => row.map(csvEscape).join(",")).join("\n");
+  }
+
+  function buildCoco(list) {
+    const categories = [];
+    const categoryMap = new Map();
+    let nextCategory = 1;
+    const images = [];
+    const anns = [];
+    let nextAnn = 1;
+    list.forEach((task, imageIndex) => {
+      images.push({ id: imageIndex + 1, file_name: task.name, width: task.width || 1000, height: task.height || 1000 });
+      (annotationsByTask[task.id] || []).forEach(a => {
+        const label = a.labelId || "unlabeled";
+        if (!categoryMap.has(label)) {
+          categoryMap.set(label, nextCategory);
+          categories.push({ id: nextCategory, name: label });
+          nextCategory += 1;
+        }
+        if (a.type === "rectangle") {
+          const w = (a.w || 0) / 100 * (task.width || 1000);
+          const h = (a.h || 0) / 100 * (task.height || 1000);
+          const x = (a.x || 0) / 100 * (task.width || 1000);
+          const y = (a.y || 0) / 100 * (task.height || 1000);
+          anns.push({ id: nextAnn++, image_id: imageIndex + 1, category_id: categoryMap.get(label), bbox: [x,y,w,h], area: Math.max(0,w*h), iscrowd: 0 });
+        }
+      });
+    });
+    return JSON.stringify({ info: { description: "AnnotatePro COCO export", version: "5.0", exported_at: new Date().toISOString() }, images, annotations: anns, categories }, null, 2);
+  }
+
+  function buildYoloManifest(list) {
+    const lines = ["# AnnotatePro YOLO manifest", "# task | class | center_x | center_y | width | height (all normalized 0-1)"];
+    list.forEach(task => {
+      (annotationsByTask[task.id] || []).forEach(a => {
+        if (a.type !== "rectangle") return;
+        const cx = ((a.x || 0) + (a.w || 0) / 2) / 100;
+        const cy = ((a.y || 0) + (a.h || 0) / 2) / 100;
+        lines.push([task.name, a.labelId || "unlabeled", cx.toFixed(6), cy.toFixed(6), ((a.w||0)/100).toFixed(6), ((a.h||0)/100).toFixed(6)].join(" | "));
+      });
+    });
+    return lines.join("\n");
+  }
+
+  function performExport() {
+    const list = exportTasks;
+    if (!list.length) {
+      setExportMessage("No tasks match the selected export filters.");
+      setTimeout(() => setExportMessage(""), 2200);
+      return;
+    }
+    let filename = "annotatepro-export";
+    let content = "";
+    let type = "application/json;charset=utf-8";
+    if (exportFormat === "AnnotatePro JSON") {
+      filename += ".json";
+      content = JSON.stringify({ version: "5.0", exportedAt: new Date().toISOString(), project: exportProject, tasks: list, annotations: Object.fromEntries(list.map(t => [t.id, annotationsByTask[t.id] || []])), qaReviews: Object.fromEntries(list.map(t => [t.id, qaReviews[t.id] || null])) }, null, 2);
+    } else if (exportFormat === "Task CSV") {
+      filename += "-tasks.csv"; content = buildTaskCsv(list); type = "text/csv;charset=utf-8";
+    } else if (exportFormat === "Annotation CSV") {
+      filename += "-annotations.csv"; content = buildAnnotationCsv(list); type = "text/csv;charset=utf-8";
+    } else if (exportFormat === "COCO JSON") {
+      filename += "-coco.json"; content = buildCoco(list);
+    } else {
+      filename += "-yolo-manifest.txt"; content = buildYoloManifest(list); type = "text/plain;charset=utf-8";
+    }
+    downloadText(filename, content, type);
+    const entry = { id: Date.now(), format: exportFormat, scope: exportScope, tasks: list.length, annotations: list.reduce((n,t) => n + (annotationsByTask[t.id] || []).length, 0), at: new Date().toISOString() };
+    setExportHistory(prev => [entry, ...prev].slice(0, 12));
+    setExportMessage(`${exportFormat} exported successfully.`);
+    setTimeout(() => setExportMessage(""), 2200);
+  }
+
+  function clearExportHistory() {
+    setExportHistory([]);
+  }
+
+  const qaQueue = useMemo(() => {
+    const q = qaSearch.toLowerCase();
+    return tasks.filter(task => {
+      const review = qaReviews[task.id];
+      const reviewStatus = review?.decision || "Pending Review";
+      const matchesSearch = !q || `${task.name} ${task.id}`.toLowerCase().includes(q);
+      const matchesFilter = qaFilter === "All" || reviewStatus === qaFilter;
+      return matchesSearch && matchesFilter;
+    });
+  }, [tasks, qaReviews, qaSearch, qaFilter]);
+
+  const qaStats = useMemo(() => {
+    const reviews = tasks.map(t => qaReviews[t.id]).filter(Boolean);
+    const approved = reviews.filter(r => r.decision === "Approved").length;
+    const rejected = reviews.filter(r => r.decision === "Rejected").length;
+    const changes = reviews.filter(r => r.decision === "Changes Requested").length;
+    const pending = tasks.filter(t => !qaReviews[t.id]?.decision || qaReviews[t.id]?.decision === "Changes Requested").length;
+    const average = reviews.length ? Math.round(reviews.reduce((s, r) => s + Number(r.score || 0), 0) / reviews.length) : 0;
+    return { pending, approved, rejected, changes, average, reviewed: reviews.length };
+  }, [tasks, qaReviews]);
+
+  const qaSelectedTask = tasks.find(t => t.id === qaSelectedTaskId) || qaQueue[0] || tasks[0];
+  const qaSelectedAnnotations = qaSelectedTask ? (annotationsByTask[qaSelectedTask.id] || []) : [];
+  const qaSelectedReview = qaSelectedTask ? qaReviews[qaSelectedTask.id] : null;
+
+  function selectQaTask(id) {
+    setQaSelectedTaskId(id);
+    const review = qaReviews[id];
+    setQaScore(review?.score ?? 96);
+    setQaReason(review?.reason || "Incorrect label");
+    setQaComment(review?.comment || "");
+  }
+
+  function completeQaReview(decision) {
+    if (!qaSelectedTask) return;
+    const now = new Date().toISOString();
+    const review = {
+      decision,
+      score: Number(qaScore),
+      reason: decision === "Rejected" || decision === "Changes Requested" ? qaReason : "",
+      comment: qaComment.trim(),
+      reviewer: "Manjunath",
+      reviewedAt: now,
+      annotationCount: qaSelectedAnnotations.length,
+      history: [
+        ...(qaSelectedReview?.history || []),
+        { decision, score: Number(qaScore), reason: decision === "Approved" ? "" : qaReason, comment: qaComment.trim(), reviewer: "Manjunath", reviewedAt: now }
+      ]
+    };
+    setQaReviews(prev => ({ ...prev, [qaSelectedTask.id]: review }));
+    const nextStatus = decision === "Approved" ? "Approved" : decision === "Rejected" ? "Rejected" : "QA Review";
+    setTasks(prev => prev.map(t => t.id === qaSelectedTask.id ? { ...t, status: nextStatus } : t));
+    setQaMessage(`${qaSelectedTask.name} marked ${decision.toLowerCase()}`);
+    setTimeout(() => setQaMessage(""), 2200);
   }
 
   function handleImageError() {
@@ -405,6 +664,20 @@ function App() {
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
   });
+
+  const datasetFilteredTasks = useMemo(() => tasks.filter(t => {
+    const q = datasetSearch.toLowerCase();
+    return (!q || `${t.name} ${t.id}`.toLowerCase().includes(q)) && (datasetStatus === "All" || t.status === datasetStatus);
+  }), [tasks, datasetSearch, datasetStatus]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      const index = Number(e.detail);
+      if (Number.isFinite(index)) { setSelectedTaskIndex(index); setActivePage("Annotation Workspace"); }
+    };
+    window.addEventListener("annotatepro-open-task", handler);
+    return () => window.removeEventListener("annotatepro-open-task", handler);
+  }, []);
 
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Annotation Workspace", Grid3X3],
@@ -482,13 +755,14 @@ function App() {
           />
         )}
         {activePage === "Team" && <SimplePage title="Team" subtitle="Manage annotators, reviewers and workload." icon={Users} stats={["28 Members", "22 Annotators", "6 Reviewers"]} />}
-        {activePage === "QA & Reviews" && <SimplePage title="QA & Reviews" subtitle="Review submitted annotations and manage quality." icon={ClipboardCheck} stats={["7 Pending Reviews", "96.8% Quality", "3 Rejected"]} />}
-        {activePage === "Analytics" && <SimplePage title="Analytics" subtitle="Monitor productivity, quality and project performance." icon={BarChart3} stats={["1,248 Completed", "96.8% Quality", "84% Productivity"]} />}
-        {activePage === "Import Data" && <ImportPage onImport={() => imageInputRef.current?.click()} onCsv={() => setImportOpen(true)} />}
-        {activePage === "Export" && <ExportPage tasks={tasks} annotations={annotationsByTask} />}
+        {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} /> }
+        {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
+        {activePage === "Import Data" && <ImportPage tasks={tasks} datasetMeta={datasetMeta} setDatasetMeta={setDatasetMeta} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={() => imageInputRef.current?.click()} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} />}
+        {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
         {activePage === "Settings" && <SimplePage title="Settings" subtitle="Configure workspace and annotation preferences." icon={Settings} stats={["Autosave On", "Shortcuts On", "Local Storage"]} />}
 
-        <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => importImages(e.target.files)} />
+        <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
+        {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
       </main>
 
       {projectModalOpen && <ProjectModal form={projectForm} setForm={setProjectForm} editing={!!editingProjectId} onClose={() => setProjectModalOpen(false)} onSave={saveProject} />}
@@ -656,17 +930,63 @@ function ProjectDetails({project,onClose,onEdit}) {
   return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">PROJECT DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Project</button></div></div></div>;
 }
 
-function ImportPage({onImport,onCsv}) {
-  return <div className="page"><div className="page-head"><div><span className="eyebrow">DATASET</span><h1>Import Data</h1><p>Add images and task data to your annotation workspace.</p></div></div><div className="import-grid"><div className="import-card" onClick={onImport}><div className="import-icon"><Upload size={22}/></div><h3>Import Images</h3><p>Upload JPG, PNG, WEBP and other image files. Multiple files are supported.</p><button className="primary-btn">Choose Images</button></div><div className="import-card" onClick={onCsv}><div className="import-icon"><FileText size={22}/></div><h3>Import Task Data</h3><p>Prepare CSV or JSON task records for bulk annotation workflows.</p><button className="secondary-btn">Open Import Guide</button></div><div className="import-card"><div className="import-icon"><Database size={22}/></div><h3>Dataset Structure</h3><p>Each imported image becomes a task with a status, annotation collection and review state.</p><button className="secondary-btn">View Structure</button></div></div></div>;
+function ImportPage({tasks,datasetMeta,setDatasetMeta,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport}) {
+  const pending=tasks.filter(t=>t.status==="Pending").length;
+  const progress=tasks.filter(t=>t.status==="In Progress").length;
+  const completed=tasks.filter(t=>t.status==="Completed").length;
+  return <div className="page dataset-page">
+    <div className="page-head"><div><span className="eyebrow">DATASET MANAGEMENT</span><h1>Import Data</h1><p>Build and manage the task queue that powers the annotation workspace.</p></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div></div>
+    <div className="dataset-cards"><MiniStat label="Total Tasks" value={tasks.length}/><MiniStat label="Pending" value={pending}/><MiniStat label="In Progress" value={progress}/><MiniStat label="Completed" value={completed}/></div>
+    <section className="dataset-info panel"><div className="dataset-info-main"><div className="dataset-logo"><Database size={22}/></div><div><input className="dataset-name-input" value={datasetMeta.name} onChange={e=>setDatasetMeta(m=>({...m,name:e.target.value}))}/><input className="dataset-description-input" value={datasetMeta.description} onChange={e=>setDatasetMeta(m=>({...m,description:e.target.value}))}/><div className="dataset-meta-line"><span>Local dataset</span><span>•</span><span>{tasks.length} tasks</span><span>•</span><span>Autosaved</span></div></div></div><div className="dataset-info-actions"><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="danger-outline" onClick={onClear}><Trash2 size={15}/> Clear Dataset</button></div></section>
+    <section className="panel task-library"><div className="task-library-head"><div><h2>Task Library</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
+      <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search task name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {tasks.length}</span></div>
+      {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{tasks.length ? "No matching tasks" : "Your dataset is empty"}</h3><p>{tasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!tasks.length && <button className="primary-btn" onClick={onImport}><Upload size={15}/> Import Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>TASK</th><th>PREVIEW</th><th>STATUS</th><th>ANNOTATIONS</th><th>SOURCE</th><th></th></tr></thead><tbody>{filteredTasks.map((t)=>{const originalIndex=tasks.findIndex(x=>x.id===t.id);return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt=""/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td><span className="annotation-count">—</span></td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{filteredTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name}/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+    </section>
+    <div className="dataset-help"><div><ShieldCheck size={18}/><div><b>Local-first dataset storage</b><p>Uploaded images are stored in your browser as data URLs, so your imported tasks remain available after refreshing the page on the same device.</p></div></div><span>Build 2</span></div>
+  </div>;
 }
 
-function ExportPage({tasks,annotations}) {
-  function exportJson(){const blob=new Blob([JSON.stringify({tasks,annotations},null,2)],{type:"application/json"});const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="annotatepro-export.json";a.click();}
-  return <div className="page"><div className="page-head"><div><span className="eyebrow">DATASET</span><h1>Export</h1><p>Export tasks and annotations from this workspace.</p></div></div><div className="export-card"><div className="export-icon"><Download size={24}/></div><div><h2>AnnotatePro JSON</h2><p>Exports task metadata and all saved annotations in a portable JSON structure.</p><div className="export-stats"><span><b>{tasks.length}</b> Tasks</span><span><b>{Object.values(annotations).flat().length}</b> Annotations</span></div></div><button className="primary-btn" onClick={exportJson}><Download size={16}/> Export JSON</button></div></div>;
+function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message}) {
+  const totalAnnotations = tasks.reduce((n,t) => n + (annotations[t.id] || []).length, 0);
+  const approved = tasks.filter(t => qaReviews[t.id]?.decision === "Approved").length;
+  const formats = [
+    ["AnnotatePro JSON", FileJson, "Complete portable project export with tasks, annotations and QA records."],
+    ["Task CSV", FileSpreadsheet, "Task-level operational report for spreadsheets and data workflows."],
+    ["Annotation CSV", FileSpreadsheet, "One row per annotation with geometry and label information."],
+    ["COCO JSON", FileArchive, "COCO-style dataset export for rectangle/object-detection workflows."],
+    ["YOLO Manifest", FileText, "Normalized bounding-box manifest ready for YOLO conversion pipelines."]
+  ];
+  return <div className="page export-page">
+    <div className="page-head"><div><span className="eyebrow">DATA DELIVERY</span><h1>Export</h1><p>Package annotation data for downstream QA, reporting and machine-learning workflows.</p></div><div className="export-head-status"><span><i></i> Local export engine</span></div></div>
+    <div className="export-summary-grid">
+      <MiniStat label="Tasks selected" value={tasks.length}/><MiniStat label="Annotations" value={totalAnnotations}/><MiniStat label="QA approved" value={approved}/><MiniStat label="Available tasks" value={allTasks.length}/>
+    </div>
+    <div className="export-layout">
+      <section className="panel export-builder">
+        <div className="panel-head"><div><h2>Export Builder</h2><p>Select the format and scope for this delivery.</p></div><Download size={18}/></div>
+        <div className="export-body">
+          <label className="export-label">FORMAT</label>
+          <div className="format-grid">{formats.map(([name,Icon,desc]) => <button key={name} className={`format-card ${format===name?"active":""}`} onClick={()=>setFormat(name)}><span><Icon size={19}/></span><div><b>{name}</b><small>{desc}</small></div>{format===name && <Check size={17}/>}</button>)}</div>
+          <div className="export-filter-grid">
+            <div><label className="export-label">TASK SCOPE</label><div className="export-select"><Filter size={15}/><select value={scope} onChange={e=>setScope(e.target.value)}><option>All Tasks</option><option>Annotated Only</option><option>Completed Only</option><option>QA Approved</option></select></div></div>
+            <div><label className="export-label">PROJECT</label><div className="export-select"><FolderKanban size={15}/><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div></div>
+          </div>
+          <label className="export-label">TASK SEARCH</label><div className="export-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter by task name or ID..."/></div>
+          <div className="export-ready"><div><b>{tasks.length} tasks ready</b><span>{totalAnnotations} annotations will be included in this export.</span></div><button className="primary-btn" onClick={onExport}><Download size={16}/> Export {format}</button></div>
+          {message && <div className="export-message"><Check size={15}/>{message}</div>}
+        </div>
+      </section>
+      <section className="panel export-history"><div className="panel-head"><div><h2>Export History</h2><p>Recent deliveries stored in this browser.</p></div><button className="icon-btn" onClick={onClearHistory} title="Clear history"><RefreshCw size={15}/></button></div>
+        <div className="history-list">{history.length ? history.map(item=><div className="export-history-row" key={item.id}><div className="history-format"><span><Download size={14}/></span><div><b>{item.format}</b><small>{item.tasks} tasks · {item.annotations} annotations</small></div></div><div className="history-time">{new Date(item.at).toLocaleString()}</div></div>) : <div className="export-history-empty"><Download size={30}/><h3>No exports yet</h3><p>Your recent export activity will appear here.</p></div>}</div>
+      </section>
+    </div>
+    <section className="export-info"><div className="export-info-icon"><ShieldCheck size={18}/></div><div><b>Production-ready delivery foundation</b><p>Exports are generated directly in the browser from the current task, annotation and QA state. For large production datasets, the next storage layer can move this same export engine to object storage and server-side packaging.</p></div><span>BUILD 5</span></section>
+  </div>;
 }
 
 function ImportModal({onClose,onImport}) {
-  return <div className="modal-backdrop"><div className="modal small-modal"><div className="modal-head"><div><span className="eyebrow">IMPORT</span><h2>Task Data</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="guide"><FileText size={30}/><h3>CSV / JSON task import</h3><p>The next data-import build will map external task records directly into the queue. For now, use the image importer to create real tasks immediately.</p><div className="code-sample">{"{ \"data\": { \"image\": \"image-url\" } }"}</div></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div></div></div>;
+  const [format,setFormat]=useState("CSV");
+  return <div className="modal-backdrop"><div className="modal small-modal"><div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Task Data</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="guide"><div className="import-format-tabs"><button className={format==="CSV"?"active":""} onClick={()=>setFormat("CSV")}>CSV</button><button className={format==="JSON"?"active":""} onClick={()=>setFormat("JSON")}>JSON</button></div><FileText size={30}/><h3>Structured task import</h3><p>Use this guide for the next connector-ready dataset format. Build 2 also gives you immediate bulk image importing from your device.</p><div className="code-sample">{format==="CSV" ? 'id,name,image,status\n001,car-001.jpg,https://...,Pending' : '{ "data": { "image": "https://...", "name": "task-001" } }'}</div><div className="guide-note"><AlertCircle size={14}/><span>For production datasets, image files should be uploaded through the Image Importer so they are retained locally.</span></div></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div></div></div>;
 }
 
 function Shortcuts({onClose}) {
@@ -674,13 +994,153 @@ function Shortcuts({onClose}) {
   return <div className="modal-backdrop"><div className="modal shortcuts-modal"><div className="modal-head"><div><span className="eyebrow">WORKSPACE</span><h2>Keyboard shortcuts</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="shortcut-list">{rows.map(r=><div key={r[0]}><kbd>{r[0]}</kbd><span>{r[1]}</span></div>)}</div></div></div>;
 }
 
+
+function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, selectedReview, search, setSearch, filter, setFilter, score, setScore, reason, setReason, comment, setComment, onSelect, onReview, message, reviews }) {
+  const [activeTab, setActiveTab] = useState("queue");
+  const reasons = ["Incorrect label", "Missing annotation", "Wrong geometry", "Low quality / unclear", "Duplicate annotation", "Other"];
+  return (
+    <div className="page qa-page">
+      <div className="page-head">
+        <div><span className="eyebrow">QUALITY CONTROL</span><h1>QA & Reviews</h1><p>Inspect submitted annotations, score quality, and send precise feedback to annotators.</p></div>
+        <div className="qa-head-actions"><span className="qa-live"><i></i> Review queue live</span></div>
+      </div>
+      <div className="stats-grid qa-stats">
+        <StatCard icon={Clock3} label="Pending Reviews" value={stats.pending} meta={`${stats.reviewed} reviewed`} />
+        <StatCard icon={CheckCircle2} label="Approved" value={stats.approved} meta="Accepted tasks" />
+        <StatCard icon={AlertCircle} label="Rejected" value={stats.rejected} meta={`${stats.changes} changes requested`} />
+        <StatCard icon={ShieldCheck} label="Average QA Score" value={stats.reviewed ? `${stats.average}%` : "—"} meta="Across reviewed tasks" />
+      </div>
+      <div className="qa-tabs">
+        <button className={activeTab==="queue"?"active":""} onClick={()=>setActiveTab("queue")}><ClipboardCheck size={16}/> Review Queue</button>
+        <button className={activeTab==="history"?"active":""} onClick={()=>setActiveTab("history")}><Clock3 size={16}/> Review History</button>
+      </div>
+      {activeTab === "queue" ? <div className="qa-layout">
+        <section className="panel qa-queue-panel">
+          <div className="panel-header">
+            <div><h2>Review Queue</h2><p>{queue.length} task{queue.length===1?"":"s"} matching your filters</p></div>
+            <div className="qa-filter-row">
+              <div className="table-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..." /></div>
+              <select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending Review</option><option>Approved</option><option>Rejected</option><option>Changes Requested</option></select>
+            </div>
+          </div>
+          <div className="qa-queue">
+            {queue.length ? queue.map(task => {
+              const review = reviews[task.id];
+              return <button key={task.id} className={`qa-task-row ${selectedTask?.id===task.id?"selected":""}`} onClick={()=>onSelect(task.id)}>
+                <div className="qa-thumb"><img src={task.image} alt="" /></div>
+                <div className="qa-task-main"><b>{task.name}</b><span>{task.id} · {review?.reviewer || "Awaiting QA"}</span></div>
+                <div className="qa-task-count"><strong>{review?.annotationCount ?? "—"}</strong><span>objects</span></div>
+                <StatusBadge status={review?.decision || "Pending Review"} />
+                <ChevronDown size={16} className="qa-row-arrow"/>
+              </button>
+            }) : <div className="qa-empty"><ClipboardCheck size={34}/><h3>No review tasks</h3><p>Submit a completed task from the Annotation Workspace to send it into QA.</p></div>}
+          </div>
+        </section>
+        <section className="panel qa-review-panel">
+          {selectedTask ? <>
+            <div className="qa-review-head"><div><span className="eyebrow">ANNOTATION INSPECTION</span><h2>{selectedTask.name}</h2><p>{selectedTask.id} · {selectedAnnotations.length} annotation{selectedAnnotations.length===1?"":"s"}</p></div><StatusBadge status={selectedReview?.decision || "Pending Review"} /></div>
+            <div className="qa-image-stage">
+              <img src={selectedTask.image} alt={selectedTask.name} />
+              {selectedAnnotations.slice(0,30).map((a,i) => a.type==="rectangle"
+                ? <div key={a.id} className="qa-box" style={{left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,borderColor:a.color}}><span>{i+1}</span></div>
+                : a.points?.length ? <div key={a.id} className="qa-point-mark" style={{left:`${a.points[0].x}%`,top:`${a.points[0].y}%`,borderColor:a.color}}><span>{i+1}</span></div> : null)}
+              {!selectedAnnotations.length && <div className="qa-no-annotations"><AlertCircle size={18}/> No annotations saved on this task</div>}
+            </div>
+            <div className="qa-review-meta"><div><span>ANNOTATIONS</span><b>{selectedAnnotations.length}</b></div><div><span>STATUS</span><b>{selectedReview?.decision || "Pending Review"}</b></div><div><span>REVIEWER</span><b>{selectedReview?.reviewer || "Unassigned"}</b></div></div>
+            <div className="qa-section"><div className="qa-section-head"><div><h3>Quality score</h3><p>Rate the overall annotation quality.</p></div><strong>{score}%</strong></div><input className="qa-score-range" type="range" min="0" max="100" value={score} onChange={e=>setScore(Number(e.target.value))}/><div className="score-scale"><span>0 Poor</span><span>50 Average</span><span>100 Excellent</span></div></div>
+            <div className="qa-section"><h3>Review decision</h3><div className="decision-grid"><button className="decision approve" onClick={()=>onReview("Approved")}><CheckCircle2 size={17}/><span><b>Approve</b><small>Annotation is ready</small></span></button><button className="decision changes" onClick={()=>onReview("Changes Requested")}><Edit3 size={17}/><span><b>Request Changes</b><small>Send back to annotator</small></span></button><button className="decision reject" onClick={()=>onReview("Rejected")}><AlertCircle size={17}/><span><b>Reject</b><small>Fails quality criteria</small></span></button></div></div>
+            <div className="qa-section"><h3>Feedback</h3><select className="qa-select" value={reason} onChange={e=>setReason(e.target.value)}>{reasons.map(r=><option key={r}>{r}</option>)}</select><textarea className="qa-comment" value={comment} onChange={e=>setComment(e.target.value)} placeholder="Add reviewer comments or correction instructions..." /></div>
+            {selectedReview?.history?.length ? <div className="qa-history-mini"><h3>Latest review activity</h3><div><span>{new Date(selectedReview.reviewedAt).toLocaleString()}</span><b>{selectedReview.reviewer}</b><strong>{selectedReview.decision}</strong></div></div> : null}
+          </> : <div className="qa-empty full"><ClipboardCheck size={40}/><h3>Select a task to review</h3><p>Choose a task from the review queue.</p></div>}
+        </section>
+      </div> : <section className="panel qa-history-panel">
+        <div className="panel-header"><div><h2>Review History</h2><p>Decisions and reviewer activity stored in this browser.</p></div></div>
+        <div className="history-table">
+          {tasks.filter(task => reviews[task.id]).map(task => {
+            const r = reviews[task.id];
+            return <div className="history-row" key={task.id}>
+              <div className="history-task"><b>{task.name}</b><span>{task.id}</span></div>
+              <strong>{r.score}%</strong><StatusBadge status={r.decision}/><span>{r.reviewer}</span>
+              <span>{new Date(r.reviewedAt).toLocaleString()}</span>
+              <button className="text-btn" onClick={()=>{onSelect(task.id);setActiveTab("queue")}}>Review</button>
+            </div>;
+          })}
+          {!tasks.some(task => reviews[task.id]) && <div className="qa-empty"><Clock3 size={34}/><h3>No review history yet</h3><p>Approve, reject, or request changes on a task to create the first QA record.</p></div>}
+        </div>
+      </section>}
+      {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+    </div>
+  );
+}
+function AnalyticsPage({ projects, tasks, annotations, qaReviews, range, setRange, project, setProject }) {
+  const visibleTasks = useMemo(() => {
+    if (project === "All Projects") return tasks;
+    const projectName = projects.find(p => p.id === project)?.name;
+    return tasks.filter(t => !projectName || t.projectName === projectName || t.projectId === project);
+  }, [tasks, projects, project]);
+
+  const totalAnnotations = Object.values(annotations || {}).reduce((sum, list) => sum + (list?.length || 0), 0);
+  const reviewed = Object.values(qaReviews || {}).filter(Boolean);
+  const approved = reviewed.filter(r => r.decision === "Approved").length;
+  const rejected = reviewed.filter(r => r.decision === "Rejected").length;
+  const changes = reviewed.filter(r => r.decision === "Changes Requested").length;
+  const averageQA = reviewed.length ? Math.round(reviewed.reduce((sum, r) => sum + Number(r.score || 0), 0) / reviewed.length) : 0;
+  const completedTasks = visibleTasks.filter(t => ["Completed", "Submitted", "QA Review", "Approved", "Rejected"].includes(t.status)).length;
+  const completionRate = visibleTasks.length ? Math.round((completedTasks / visibleTasks.length) * 100) : 0;
+  const annotatedTasks = visibleTasks.filter(t => (annotations[t.id] || []).length > 0).length;
+  const annotationCoverage = visibleTasks.length ? Math.round((annotatedTasks / visibleTasks.length) * 100) : 0;
+  const productivity = Math.min(100, Math.round((totalAnnotations / Math.max(1, visibleTasks.length * 4)) * 100));
+
+  const trend = range === "24 hours" ? [28, 34, 31, 45, 41, 56, 61, 68] : range === "30 days" ? [42, 48, 51, 57, 54, 65, 72, 81] : [35, 42, 39, 51, 48, 61, 66, 74];
+  const maxTrend = Math.max(...trend);
+  const teamRows = projects.slice(0, 5).map((p, index) => {
+    const projectTasks = tasks.filter(t => t.projectId === p.id || t.projectName === p.name);
+    const count = projectTasks.length || Math.max(1, Math.round(Number(p.completedImages || 0) / 20));
+    const quality = reviewed.length ? Math.max(0, Math.min(100, averageQA + (index % 3) - 1)) : 96 - index;
+    return { name: p.team || "Annotation Team", project: p.name, tasks: count, quality, progress: progressOf(p) };
+  });
+
+  return <div className="page analytics-page">
+    <div className="page-head">
+      <div><span className="eyebrow">PERFORMANCE INTELLIGENCE</span><h1>Analytics</h1><p>Monitor annotation productivity, quality, workload and project performance.</p></div>
+      <div className="analytics-controls"><select value={range} onChange={e=>setRange(e.target.value)}><option>24 hours</option><option>7 days</option><option>30 days</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+    </div>
+
+    <div className="stats-grid analytics-stats">
+      <StatCard icon={TrendingUp} label="Productivity" value={`${productivity}%`} meta={`${totalAnnotations} annotations recorded`} />
+      <StatCard icon={CheckCircle2} label="Task Completion" value={`${completionRate}%`} meta={`${completedTasks} completed workflow tasks`} />
+      <StatCard icon={ShieldCheck} label="QA Quality" value={reviewed.length ? `${averageQA}%` : "—"} meta={`${approved} approved · ${rejected} rejected`} />
+      <StatCard icon={Target} label="Annotation Coverage" value={`${annotationCoverage}%`} meta={`${annotatedTasks} tasks annotated`} />
+    </div>
+
+    <div className="analytics-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Annotation Productivity</h2><p>Relative output trend for the selected period</p></div><span className="chart-value">{totalAnnotations} <small>objects</small></span></div>
+        <div className="trend-chart"><div className="chart-y"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div className="chart-bars">{trend.map((v,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${Math.max(8,(v/maxTrend)*100)}%`}}></div><span>{range === "24 hours" ? `${i+1}h` : range === "30 days" ? `W${i+1}` : `D${i+1}`}</span></div>)}</div></div>
+      </section>
+      <section className="panel quality-panel">
+        <div className="panel-head"><div><h2>QA Distribution</h2><p>Current review decisions</p></div><ClipboardCheck size={17}/></div>
+        <div className="quality-ring"><div><strong>{reviewed.length ? `${averageQA}%` : "—"}</strong><span>avg score</span></div></div>
+        <div className="quality-legend"><div><i className="approved-dot"></i><span>Approved</span><b>{approved}</b></div><div><i className="changes-dot"></i><span>Changes requested</span><b>{changes}</b></div><div><i className="rejected-dot"></i><span>Rejected</span><b>{rejected}</b></div></div>
+      </section>
+    </div>
+
+    <div className="analytics-grid-bottom">
+      <section className="panel analytics-table-panel"><div className="panel-head"><div><h2>Project Performance</h2><p>Progress and delivery health across projects</p></div><button className="text-btn">Export report →</button></div><div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>TEAM</th><th>PROGRESS</th><th>QUALITY</th><th>HEALTH</th></tr></thead><tbody>{projects.map(p=><tr key={p.id}><td><b>{p.name}</b><small>{Number(p.totalImages||0).toLocaleString()} images</small></td><td>{p.team}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><strong className="quality-number">{reviewed.length ? `${Math.max(90, Math.min(100, averageQA + (p.id.charCodeAt(1) % 5) - 2))}%` : "—"}</strong></td><td><span className={`health-pill ${progressOf(p) >= 70 ? "healthy" : progressOf(p) >= 40 ? "watch" : "risk"}`}><i></i>{progressOf(p) >= 70 ? "On track" : progressOf(p) >= 40 ? "Watch" : "At risk"}</span></td></tr>)}</tbody></table></div></section>
+      <section className="panel team-performance"><div className="panel-head"><div><h2>Team Performance</h2><p>Workload and quality snapshot</p></div><Users size={17}/></div><div className="team-list">{teamRows.length ? teamRows.map(row=><div className="team-row" key={row.project}><div className="team-avatar">{row.name.charAt(0)}</div><div className="team-main"><b>{row.name}</b><span>{row.project}</span><div className="team-meter"><i style={{width:`${Math.min(100, row.progress)}%`}}></i></div></div><div className="team-metrics"><strong>{row.quality}%</strong><span>{row.tasks} tasks</span></div></div>) : <div className="analytics-empty">No team data available.</div>}</div></section>
+    </div>
+
+    <div className="analytics-insight"><div className="insight-icon"><Zap size={17}/></div><div><b>Performance insight</b><p>{reviewed.length ? `The workspace is averaging ${averageQA}% QA quality. ${changes} task${changes === 1 ? " has" : "s have"} requested changes and should be prioritized for correction.` : "Complete a few QA reviews to unlock quality trends, rejection analysis and actionable performance insights."}</p></div><span>LIVE</span></div>
+  </div>;
+}
+
 function SimplePage({title,subtitle,icon:Icon,stats}) {
-  return <div className="page"><div className="page-head"><div><span className="eyebrow">ANNOTATEPRO</span><h1>{title}</h1><p>{subtitle}</p></div></div><div className="stats-grid">{stats.map((s,i)=><StatCard key={s} icon={[Activity,Target,ShieldCheck,TrendingUp][i%4]} label={s.split(" ").slice(1).join(" ")} value={s.split(" ")[0]} meta="Workspace metric"/></div><section className="panel placeholder-large"><Icon size={42}/><h2>{title} module</h2><p>This module is connected to the AnnotatePro application shell. The full operational workflow will use the same shared project and task data.</p></section></div>;
+  return <div className="page"><div className="page-head"><div><span className="eyebrow">ANNOTATEPRO</span><h1>{title}</h1><p>{subtitle}</p></div></div><div className="stats-grid">{stats.map((s,i)=><StatCard key={s} icon={[Activity,Target,ShieldCheck,TrendingUp][i%4]} label={s.split(" ").slice(1).join(" ")} value={s.split(" ")[0]} meta="Workspace metric"/>)}</div><section className="panel placeholder-large"><Icon size={42}/><h2>{title} module</h2><p>This module is connected to the AnnotatePro application shell. The full operational workflow will use the same shared project and task data.</p></section></div>;
 }
 
 function StatCard({icon:Icon,label,value,meta}){return <div className="stat-card"><div className="stat-icon"><Icon size={19}/></div><div><span>{label}</span><strong>{value}</strong><small><TrendingUp size={12}/> {meta}</small></div></div>}
 function MiniStat({label,value}){return <div className="mini-stat"><span>{label}</span><b>{value}</b></div>}
-function StatusBadge({status}){const cls=status==="Completed"?"completed":status==="In Progress"?"progressing":"pending";return <span className={`status-badge ${cls}`}><i></i>{status}</span>}
+function StatusBadge({status}){const cls=status==="Completed"||status==="Approved"?"completed":status==="In Progress"||status==="QA Review"||status==="Submitted"?"progressing":status==="Rejected"?"rejected":status==="Changes Requested"?"changes":"pending";return <span className={`status-badge ${cls}`}><i></i>{status}</span>}
 function ActivityRow({icon:Icon,title,text,time}){return <div className="activity-row"><div className="activity-icon"><Icon size={16}/></div><div><b>{title}</b><span>{text}</span></div><time>{time}</time></div>}
 function Quick({icon:Icon,title,onClick}){return <button className="quick-action" onClick={onClick}><span><Icon size={17}/></span><b>{title}</b><em>→</em></button>}
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
