@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+
 import {
   Activity, AlertCircle, BarChart3, Bell, Calendar, CheckCircle2, ChevronDown,
   ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eye, FileText,
@@ -175,6 +175,7 @@ function App() {
   const canvasRef = useRef(null);
   const imageRef = useRef(null);
   const panStart = useRef(null);
+  const editRef = useRef(null);
 
   useEffect(() => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
@@ -317,8 +318,8 @@ function App() {
     const copy = {
       ...item,
       id: `${item.type}-${Date.now()}`,
-      x: Math.min(94, item.x + 3),
-      y: Math.min(94, item.y + 3),
+      x: item.x == null ? item.x : Math.min(94, item.x + 3),
+      y: item.y == null ? item.y : Math.min(94, item.y + 3),
       points: item.points?.map(p => ({ x: Math.min(96, p.x + 3), y: Math.min(96, p.y + 3) }))
     };
     pushHistory([...currentAnnotations, copy]);
@@ -350,14 +351,17 @@ function App() {
       return;
     }
     const point = imagePoint(e);
+    if (tool === "keypoint") {
+      const annotation = { id: `keypoint-${Date.now()}`, type: "keypoint", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: [point] };
+      pushHistory([...currentAnnotations, annotation]);
+      setSelectedAnnotationId(annotation.id);
+      return;
+    }
     if (tool === "polygon" || tool === "polyline") {
       if (drawing?.type === tool) {
         const points = [...drawing.points, point];
-        if (points.length >= 3 && distance(points[0], point) < 2.5 && tool === "polygon") {
-          const annotation = {
-            id: `${tool}-${Date.now()}`, type: tool, labelId: selectedLabel,
-            color: currentLabel.color, points: points.slice(0, -1)
-          };
+        if (tool === "polygon" && points.length >= 3 && distance(points[0], point) < 2.5) {
+          const annotation = { id: `${tool}-${Date.now()}`, type: tool, labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: points.slice(0, -1) };
           pushHistory([...currentAnnotations, annotation]);
           setSelectedAnnotationId(annotation.id);
           setDrawing(null);
@@ -369,55 +373,114 @@ function App() {
       }
       return;
     }
+    if (tool === "brush") {
+      setDrawing({ type: "brush", points: [point] });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
     if (tool === "rectangle" || tool === "line") {
       setDrawing({ type: tool, start: point, current: point });
       e.currentTarget.setPointerCapture?.(e.pointerId);
     }
   }
 
-  function onCanvasPointerMove(e) {
-    if (tool === "pan" && panStart.current) {
-      setPan({
-        x: panStart.current.px + (e.clientX - panStart.current.x),
-        y: panStart.current.py + (e.clientY - panStart.current.y)
-      });
-      return;
-    }
-    if (drawing && (tool === "rectangle" || tool === "line")) {
-      setDrawing(prev => ({ ...prev, current: imagePoint(e) }));
-    }
-  }
-
-  function onCanvasPointerUp() {
-    if (tool === "pan") {
-      panStart.current = null;
-      return;
-    }
-    if (!drawing || !["rectangle", "line"].includes(tool)) return;
-    const s = drawing.start;
-    const c = drawing.current;
-    if (Math.abs(c.x - s.x) < 1.2 || Math.abs(c.y - s.y) < 1.2) {
-      setDrawing(null);
-      return;
-    }
-    const annotation = tool === "rectangle"
-      ? {
-          id: `box-${Date.now()}`, type: "rectangle", labelId: selectedLabel,
-          color: currentLabel.color, x: Math.min(s.x, c.x), y: Math.min(s.y, c.y),
-          w: Math.abs(c.x - s.x), h: Math.abs(c.y - s.y)
-        }
-      : {
-          id: `line-${Date.now()}`, type: "line", labelId: selectedLabel,
-          color: currentLabel.color, points: [s, c]
-        };
+  function finishPathDrawing() {
+    if (!drawing || !["polygon", "polyline"].includes(drawing.type)) return;
+    const minPoints = drawing.type === "polygon" ? 3 : 2;
+    if (drawing.points.length < minPoints) { setDrawing(null); return; }
+    const annotation = { id: `${drawing.type}-${Date.now()}`, type: drawing.type, labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: drawing.points };
     pushHistory([...currentAnnotations, annotation]);
     setSelectedAnnotationId(annotation.id);
     setDrawing(null);
   }
 
+  function onCanvasDoubleClick(e) {
+    e.preventDefault();
+    if (drawing && ["polygon", "polyline"].includes(drawing.type)) finishPathDrawing();
+  }
+
+  function onCanvasPointerMove(e) {
+    if (panStart.current && tool === "pan") {
+      setPan({ x: panStart.current.px + (e.clientX - panStart.current.x), y: panStart.current.py + (e.clientY - panStart.current.y) });
+      return;
+    }
+    if (editRef.current) {
+      const edit = editRef.current;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const dx = ((e.clientX - edit.startClientX) / rect.width) * 100;
+      const dy = ((e.clientY - edit.startClientY) / rect.height) * 100;
+      const a = edit.original;
+      let next = { ...a };
+      if (a.type === "rectangle") {
+        if (edit.mode === "move") {
+          next.x = Math.max(0, Math.min(100 - a.w, a.x + dx));
+          next.y = Math.max(0, Math.min(100 - a.h, a.y + dy));
+        } else {
+          const minSize = 1.2;
+          let left = a.x, top = a.y, right = a.x + a.w, bottom = a.y + a.h;
+          if (edit.mode.includes("w")) left = Math.min(right - minSize, Math.max(0, a.x + dx));
+          if (edit.mode.includes("e")) right = Math.max(left + minSize, Math.min(100, a.x + a.w + dx));
+          if (edit.mode.includes("n")) top = Math.min(bottom - minSize, Math.max(0, a.y + dy));
+          if (edit.mode.includes("s")) bottom = Math.max(top + minSize, Math.min(100, a.y + a.h + dy));
+          next = { ...a, x: left, y: top, w: right - left, h: bottom - top };
+        }
+      } else if (a.points?.length) {
+        next.points = a.points.map(p => ({ x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }));
+      }
+      setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(item => item.id === a.id ? next : item) }));
+      return;
+    }
+    if (drawing && drawing.type === "brush") {
+      const point = imagePoint(e);
+      setDrawing(prev => ({ ...prev, points: [...prev.points, point] }));
+      return;
+    }
+    if (drawing && (drawing.type === "rectangle" || drawing.type === "line")) {
+      setDrawing(prev => ({ ...prev, current: imagePoint(e) }));
+    }
+  }
+
+  function onCanvasPointerUp() {
+    if (panStart.current) { panStart.current = null; return; }
+    if (editRef.current) { editRef.current = null; return; }
+    if (!drawing) return;
+    if (drawing.type === "brush") {
+      if (drawing.points.length >= 2) {
+        const annotation = { id: `brush-${Date.now()}`, type: "brush", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: drawing.points };
+        pushHistory([...currentAnnotations, annotation]);
+        setSelectedAnnotationId(annotation.id);
+      }
+      setDrawing(null);
+      return;
+    }
+    if (!["rectangle", "line"].includes(drawing.type)) return;
+    const s = drawing.start, c = drawing.current;
+    if (Math.abs(c.x - s.x) < 1.2 || Math.abs(c.y - s.y) < 1.2) { setDrawing(null); return; }
+    const annotation = drawing.type === "rectangle"
+      ? { id: `box-${Date.now()}`, type: "rectangle", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", x: Math.min(s.x, c.x), y: Math.min(s.y, c.y), w: Math.abs(c.x - s.x), h: Math.abs(c.y - s.y) }
+      : { id: `line-${Date.now()}`, type: "line", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: [s, c] };
+    pushHistory([...currentAnnotations, annotation]);
+    setSelectedAnnotationId(annotation.id);
+    setDrawing(null);
+  }
+
+  function startAnnotationEdit(id, e, mode = "move") {
+    e.stopPropagation();
+    const original = currentAnnotations.find(a => a.id === id);
+    if (!original) return;
+    setSelectedAnnotationId(id);
+    setTool("select");
+    editRef.current = { id, mode, original: JSON.parse(JSON.stringify(original)), startClientX: e.clientX, startClientY: e.clientY };
+    setHistory(prev => [...prev, currentAnnotations]);
+    setFuture([]);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }
+
   function hitTest(a, p) {
     if (a.type === "rectangle") return p.x >= a.x && p.x <= a.x + a.w && p.y >= a.y && p.y <= a.y + a.h;
     if (a.points?.length) {
+      if (a.type === "keypoint") return distance(a.points[0], p) <= 3;
       const xs = a.points.map(v => v.x), ys = a.points.map(v => v.y);
       return p.x >= Math.min(...xs) - 2 && p.x <= Math.max(...xs) + 2 && p.y >= Math.min(...ys) - 2 && p.y <= Math.max(...ys) + 2;
     }
@@ -709,6 +772,9 @@ function App() {
       else if (e.key.toLowerCase() === "b") setTool("rectangle");
       else if (e.key.toLowerCase() === "p") setTool("polygon");
       else if (e.key.toLowerCase() === "l") setTool("line");
+      else if (e.key.toLowerCase() === "k") setTool("keypoint");
+      else if (e.key.toLowerCase() === "g") setTool("polyline");
+      else if (e.key.toLowerCase() === "r") setTool("brush");
       else if (e.key === "+" || e.key === "=") setZoom(z => Math.min(4, +(z + 0.1).toFixed(2)));
       else if (e.key === "-") setZoom(z => Math.max(0.25, +(z - 0.1).toFixed(2)));
       else if (e.key === "ArrowRight") changeTask(1);
@@ -872,14 +938,13 @@ function App() {
             selectedAnnotation={currentAnnotations.find(a => a.id === selectedAnnotationId)}
             drawing={drawing} zoom={zoom} setZoom={setZoom} pan={pan} setPan={setPan}
             canvasRef={canvasRef} imageRef={imageRef} onCanvasPointerDown={onCanvasPointerDown} onCanvasPointerMove={onCanvasPointerMove}
-            onCanvasPointerUp={onCanvasPointerUp} handleImageError={handleImageError}
+            onCanvasPointerUp={onCanvasPointerUp} onCanvasDoubleClick={onCanvasDoubleClick} handleImageError={handleImageError}
             onDelete={deleteSelected} onDuplicate={duplicateSelected} onUndo={undo} onRedo={redo}
             onReset={resetView} onPrevious={() => changeTask(-1)} onNext={() => changeTask(1)}
             onSave={saveTask} onSubmit={submitTask} message={workspaceMessage}
-            updateAnnotation={updateAnnotation} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
+            updateAnnotation={updateAnnotation} startAnnotationEdit={startAnnotationEdit} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
             onImport={() => imageInputRef.current?.click()}
             imageInputRef={imageInputRef} importImages={importImages}
-            labelsSetter={setLabels}
           />
         )}
         {activePage === "Team" && <TeamPage
@@ -939,107 +1004,151 @@ function Workspace({
   projects, workspaceProject, setWorkspaceProject, tasks, currentTask, selectedTaskIndex, setSelectedTaskIndex,
   filteredTasks, taskFilter, setTaskFilter, tool, setTool, labels, selectedLabel, setSelectedLabel,
   currentAnnotations, selectedAnnotationId, selectAnnotation, selectedAnnotation, drawing, zoom, setZoom, pan, setPan,
-  canvasRef, imageRef, onCanvasPointerDown, onCanvasPointerMove, onCanvasPointerUp, handleImageError,
+  canvasRef, imageRef, onCanvasPointerDown, onCanvasPointerMove, onCanvasPointerUp, onCanvasDoubleClick, handleImageError,
   onDelete, onDuplicate, onUndo, onRedo, onReset, onPrevious, onNext, onSave, onSubmit, message,
-  updateAnnotation, showShortcuts, setShowShortcuts, onImport, imageInputRef, importImages, labelsSetter
+  updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport
 }) {
-  const tools = [
-    ["select", MousePointer2, "Select", "V"], ["rectangle", Square, "Bounding Box", "B"],
-    ["polygon", Grid3X3, "Polygon", "P"], ["line", Minus, "Line", "L"], ["pan", Move, "Pan", "Space"]
+  const [taskSearch, setTaskSearch] = useState("");
+  const [rightTab, setRightTab] = useState("Labels");
+  const [infoTab, setInfoTab] = useState("Info");
+  const [labelSearch, setLabelSearch] = useState("");
+  const workspaceTasks = useMemo(() => tasks.map((task, index) => ({ task, index })).filter(({ task }) => {
+    const projectMatch = !workspaceProject || task.projectId === workspaceProject;
+    const q = taskSearch.trim().toLowerCase();
+    const searchMatch = !q || `${task.name} ${task.id}`.toLowerCase().includes(q);
+    const statusMatch = taskFilter === "All" || task.status === taskFilter;
+    return projectMatch && searchMatch && statusMatch;
+  }), [tasks, workspaceProject, taskSearch, taskFilter]);
+  const filteredLabels = labels.filter(label => !labelSearch.trim() || label.name.toLowerCase().includes(labelSearch.trim().toLowerCase()));
+  const currentProject = projects.find(p => p.id === workspaceProject);
+  const selectedLabelObject = labels.find(l => l.id === selectedLabel);
+  const objectCountByLabel = currentAnnotations.reduce((acc, a) => { acc[a.labelId] = (acc[a.labelId] || 0) + 1; return acc; }, {});
+  const toolGroups = [
+    ["NAVIGATE", [["select", MousePointer2, "Select", "V"], ["pan", Move, "Pan", "Space"]]],
+    ["SHAPES", [["rectangle", Square, "Bounding Box", "B"], ["polygon", Grid3X3, "Polygon", "P"], ["polyline", Activity, "Polyline", "G"], ["line", Minus, "Line", "L"]]],
+    ["POINT / MASK", [["keypoint", Target, "Keypoint", "K"], ["brush", Edit3, "Brush", "R"]]]
   ];
 
   return (
-    <div className="workspace-page">
+    <div className="workspace-page build8-workspace">
       <div className="workspace-top">
-        <div className="workspace-project"><span>PROJECT</span><select value={workspaceProject} onChange={e => setWorkspaceProject(e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-        <div className="workspace-task-title"><b>{currentTask?.name || "No task loaded"}</b><span>{selectedTaskIndex + 1} / {tasks.length} tasks</span></div>
+        <div className="workspace-project"><span>PROJECT</span><select value={workspaceProject} onChange={e => { const id=e.target.value; setWorkspaceProject(id); const first=tasks.findIndex(t=>!id || t.projectId===id); setSelectedTaskIndex(first>=0?first:0); setZoom(1); setPan({x:0,y:0}); }}><option value="">All Projects</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+        <div className="workspace-task-title"><b>{currentTask?.name || "No task loaded"}</b><span>{currentTask?.id || "—"} · {selectedTaskIndex + 1} / {tasks.length} tasks</span></div>
+        <div className="workspace-top-meta"><span className="workspace-live-dot"></span><span>{currentAnnotations.length} objects</span><span>{selectedLabelObject?.name || "No label selected"}</span></div>
         <div className="workspace-actions"><button className="secondary-btn" onClick={onSave}><Save size={16}/> Save</button><button className="primary-btn" onClick={onSubmit}><CheckCircle2 size={16}/> Submit</button></div>
       </div>
 
-      <div className="annotation-shell">
-        <aside className="tool-panel">
-          <div className="panel-section-title">TOOLS</div>
-          {tools.map(([id, Icon, title, key]) => <button key={id} className={`tool-button ${tool === id ? "active" : ""}`} title={`${title} (${key})`} onClick={() => setTool(id)}><Icon size={19}/><span>{title}</span><kbd>{key}</kbd></button>)}
-          <div className="tool-divider"/>
-          <button className="tool-button" onClick={onUndo} disabled={!onUndo}><Undo2 size={18}/><span>Undo</span><kbd>Ctrl Z</kbd></button>
-          <button className="tool-button" onClick={onRedo}><Redo2 size={18}/><span>Redo</span><kbd>Ctrl ⇧ Z</kbd></button>
-          <div className="tool-divider"/>
-          <button className="tool-button" onClick={() => setShowShortcuts(true)}><Target size={18}/><span>Shortcuts</span></button>
+      <div className="annotation-shell build8-shell">
+        <aside className="task-queue-panel">
+          <div className="queue-head"><div><span className="panel-section-title">TASKS</span><b>{workspaceTasks.length} matching</b></div><button onClick={onImport} title="Import images"><Upload size={15}/></button></div>
+          <div className="queue-search"><Search size={14}/><input value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search task ID..."/></div>
+          <div className="queue-filter"><select value={taskFilter} onChange={e=>setTaskFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Submitted</option><option>QA Review</option><option>Approved</option><option>Rejected</option><option>Changes Requested</option></select><Filter size={13}/></div>
+          <div className="task-queue-list">
+            {workspaceTasks.map(({task,index}) => {
+              const active = index === selectedTaskIndex;
+              return <button key={task.id} className={`task-queue-row ${active ? "active" : ""}`} onClick={() => { setSelectedTaskIndex(index); setZoom(1); setPan({x:0,y:0}); }}>
+                <span className="task-check">{active ? <Check size={11}/> : <span/>}</span>
+                <div className="task-thumb"><img src={task.image} alt=""/></div>
+                <div className="task-row-copy"><b>{task.id}</b><span>{task.name}</span><small>{task.status}</small></div>
+                <span className="task-row-count">{count ?? ""}</span>
+              </button>;
+            })}
+            {!workspaceTasks.length && <div className="task-queue-empty"><ImageIcon size={26}/><b>No matching tasks</b><span>Import images or change the filters.</span></div>}
+          </div>
+          <div className="queue-footer"><span>Queue</span><b>{workspaceTasks.length} tasks</b></div>
+        </aside>
+
+        <aside className="tool-panel build8-tool-panel">
+          <div className="tool-panel-scroll">
+            {toolGroups.map(([group, items]) => <div className="tool-group" key={group}><div className="tool-group-title">{group}</div>{items.map(([id,Icon,title,key]) => <button key={id} className={`tool-button ${tool===id?"active":""}`} title={`${title} (${key})`} onClick={()=>{setTool(id); if(id!=="polygon"&&id!=="polyline"){} }}><Icon size={18}/><span>{title}</span><kbd>{key}</kbd></button>)}</div>)}
+            <div className="tool-divider"/>
+            <button className="tool-button" onClick={onUndo}><Undo2 size={18}/><span>Undo</span><kbd>Ctrl Z</kbd></button>
+            <button className="tool-button" onClick={onRedo}><Redo2 size={18}/><span>Redo</span><kbd>Ctrl ⇧ Z</kbd></button>
+            <button className="tool-button" onClick={onDuplicate} disabled={!selectedAnnotation}><Copy size={18}/><span>Duplicate</span></button>
+            <button className="tool-button danger-tool" onClick={onDelete} disabled={!selectedAnnotation}><Trash2 size={18}/><span>Delete</span><kbd>Del</kbd></button>
+            <div className="tool-divider"/>
+            <button className="tool-button" onClick={()=>setShowShortcuts(true)}><Target size={18}/><span>Shortcuts</span></button>
+          </div>
           <div className="tool-bottom"><button className="tool-button" onClick={onReset}><RotateCcw size={18}/><span>Reset View</span></button></div>
         </aside>
 
-        <section className="canvas-area">
-          <div className="canvas-toolbar">
-            <div className="canvas-tool-status"><span className="tool-dot"></span>{tools.find(t => t[0] === tool)?.[2] || "Select"}<small>{currentAnnotations.length} objects</small></div>
-            <div className="canvas-controls"><button onClick={() => setZoom(z => Math.max(.25, +(z-.1).toFixed(2)))}><ZoomOut size={16}/></button><b>{Math.round(zoom*100)}%</b><button onClick={() => setZoom(z => Math.min(4, +(z+.1).toFixed(2)))}><ZoomIn size={16}/></button><button onClick={onReset}>Fit</button><button onClick={() => document.documentElement.requestFullscreen?.()} title="Full screen"><Grid3X3 size={15}/></button></div>
+        <section className="canvas-area build8-canvas-area">
+          <div className="canvas-toolbar build8-toolbar">
+            <div className="canvas-tool-status"><span className="tool-dot"></span><b>{toolGroups.flatMap(g=>g[1]).find(t=>t[0]===tool)?.[2] || "Select"}</b><small>{currentAnnotations.length} regions</small></div>
+            <div className="canvas-help"><span>Double-click to finish polygon/polyline</span><span>Drag objects to move</span></div>
+            <div className="canvas-controls"><button onClick={()=>setZoom(z=>Math.max(.25,+(z-.1).toFixed(2)))}><ZoomOut size={15}/></button><b>{Math.round(zoom*100)}%</b><button onClick={()=>setZoom(z=>Math.min(4,+(z+.1).toFixed(2)))}><ZoomIn size={15}/></button><button onClick={onReset}>Fit</button><button onClick={()=>document.documentElement.requestFullscreen?.()} title="Full screen"><Grid3X3 size={14}/></button></div>
           </div>
-
-          <div className={`canvas-stage ${tool === "pan" ? "pan-mode" : ""}`}>
-            {currentTask ? (
-              <div
-                ref={canvasRef}
-                className="annotation-canvas"
-                onPointerDown={onCanvasPointerDown}
-                onPointerMove={onCanvasPointerMove}
-                onPointerUp={onCanvasPointerUp}
-                style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})` }}
-              >
-                <img ref={imageRef} src={currentTask.image} alt={currentTask.name} onError={handleImageError} draggable="false"/>
-                <div className="annotation-overlay">
-                  {currentAnnotations.map((a, index) => <AnnotationShape key={a.id} a={a} index={index} selected={a.id === selectedAnnotationId} onSelect={() => selectAnnotation(a.id)} update={updateAnnotation}/>)}
-                  {drawing && <DrawingPreview drawing={drawing} color={labels.find(l=>l.id===selectedLabel)?.color || "#2563eb"}/>}
-                </div>
+          <div className={`canvas-stage build8-stage ${tool === "pan" ? "pan-mode" : ""}`}>
+            {currentTask ? <div ref={canvasRef} className="annotation-canvas build8-canvas" style={{transform:`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={onCanvasPointerUp} onDoubleClick={onCanvasDoubleClick}>
+              <img ref={imageRef} src={currentTask.image} alt={currentTask.name} onError={handleImageError} draggable="false"/>
+              <div className="annotation-overlay">
+                {currentAnnotations.map((a,index)=><AnnotationShape key={a.id} a={a} index={index} selected={a.id===selectedAnnotationId} onSelect={()=>selectAnnotation(a.id)} update={updateAnnotation} onEditStart={startAnnotationEdit} labels={labels}/>) }
+                {drawing && <DrawingPreview drawing={drawing} color={selectedLabelObject?.color || "#2563eb"}/>} 
               </div>
-            ) : <div className="empty-canvas"><ImageIcon size={45}/><h3>No images yet</h3><p>Import images to start annotating.</p><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div>}
+              <div className="canvas-crosshair"><span></span></div>
+            </div> : <div className="empty-canvas"><ImageIcon size={45}/><h3>No images yet</h3><p>Import images to start annotating.</p><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div>}
+            {drawing && (drawing.type === "polygon" || drawing.type === "polyline") && <div className="drawing-hint">{drawing.points.length} points · double-click to finish · Esc to cancel</div>}
           </div>
-
-          <div className="canvas-bottom">
-            <button onClick={onPrevious} disabled={selectedTaskIndex <= 0}>← Previous</button>
-            <div className="task-counter"><b>{selectedTaskIndex + 1}</b> / {tasks.length}</div>
-            <button onClick={onNext} disabled={selectedTaskIndex >= tasks.length-1}>Next →</button>
-            <span className="bottom-spacer"></span><span>Scroll to zoom</span><span>Space to pan</span>
+          <div className="canvas-bottom build8-bottom">
+            <button onClick={onPrevious} disabled={selectedTaskIndex<=0}>← Previous</button><div className="task-counter"><b>{selectedTaskIndex+1}</b> / {tasks.length}</div><button onClick={onNext} disabled={selectedTaskIndex>=tasks.length-1}>Next →</button>
+            <span className="bottom-spacer"></span><button className="bottom-action" onClick={onUndo}><Undo2 size={13}/> Undo</button><button className="bottom-action" onClick={onRedo}><Redo2 size={13}/> Redo</button><span className="canvas-status-note">{currentTask?.status || "Pending"}</span>
           </div>
         </section>
 
-        <aside className="right-panel">
-          <div className="right-tabs"><button className="active">Labels</button><button>Objects <em>{currentAnnotations.length}</em></button></div>
-          <div className="right-content">
-            <div className="right-section"><div className="right-section-head"><b>LABELS</b><button title="Import more images" onClick={onImport}><Plus size={16}/></button></div><div className="label-list">
-              {labels.map(label => <button key={label.id} className={`label-item ${selectedLabel === label.id ? "selected" : ""}`} onClick={() => setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span><kbd>{label.type === "Rectangle" ? "BOX" : label.type}</kbd></button>)}
-            </div></div>
-            <div className="right-section"><div className="right-section-head"><b>OBJECTS</b><span>{currentAnnotations.length}</span></div>
-              {currentAnnotations.length ? <div className="object-list">{currentAnnotations.map((a,i) => { const l=labels.find(x=>x.id===a.labelId); return <button key={a.id} className={`object-item ${selectedAnnotationId===a.id?"selected":""}`} onClick={()=>selectAnnotation(a.id)}><span className="object-number" style={{background:l?.color}}>{i+1}</span><div><b>{l?.name || "Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><Eye size={15}/></button>})}</div> : <div className="empty-objects"><Target size={25}/><p>No annotations yet</p><small>Select a label and draw on the image.</small></div>}
-            </div>
-            {selectedAnnotation && <div className="selected-card"><div><b>Selected object</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={15}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={15}/> Delete</button></div></div>}
+        <aside className="right-panel build8-right-panel">
+          <div className="right-tabs build8-top-tabs"><button className={infoTab==="Info"?"active":""} onClick={()=>setInfoTab("Info")}>Info</button><button className={infoTab==="History"?"active":""} onClick={()=>setInfoTab("History")}>History</button></div>
+          {infoTab === "Info" ? <div className="region-info-card">
+            <div className="info-icon"><MousePointer2 size={20}/></div><b>{selectedAnnotation ? "View region details" : "Select a region"}</b><p>{selectedAnnotation ? `${selectedLabelObject?.name || "Object"} · ${selectedAnnotation.type}` : "Select an annotation to view its properties, metadata and available actions."}</p>
+            {selectedAnnotation && <div className="info-fields"><div><span>LABEL</span><b>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "—"}</b></div><div><span>TYPE</span><b>{selectedAnnotation.type}</b></div><div><span>REGION</span><b>#{currentAnnotations.findIndex(a=>a.id===selectedAnnotation.id)+1}</b></div></div>}
+          </div> : <div className="history-panel"><div className="history-entry"><Clock3 size={14}/><div><b>Current task</b><span>{currentTask?.name || "No task"}</span></div></div><div className="history-entry"><Save size={14}/><div><b>Local autosave</b><span>Changes persist in this browser</span></div></div></div>}
+          <div className="right-subtabs"><button className={rightTab==="Labels"?"active":""} onClick={()=>setRightTab("Labels")}>Labels</button><button className={rightTab==="Regions"?"active":""} onClick={()=>setRightTab("Regions")}>Regions <em>{currentAnnotations.length}</em></button><button>Relations</button></div>
+          <div className="right-content build8-right-content">
+            {rightTab === "Labels" ? <div className="right-section label-section-build8">
+              <div className="right-section-head"><div><b>LABELS</b><small>{labels.length} configured</small></div><button onClick={onImport} title="Import images"><Plus size={15}/></button></div>
+              <div className="label-search-build8"><Search size={13}/><input value={labelSearch} onChange={e=>setLabelSearch(e.target.value)} placeholder="Filter labels..."/></div>
+              <div className="label-list build8-label-list">{filteredLabels.map(label=><button key={label.id} className={`label-item build8-label-item ${selectedLabel===label.id?"selected":""}`} onClick={()=>setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span><b>{objectCountByLabel[label.id] || 0}</b><kbd>{label.type}</kbd></button>)}</div>
+              {!filteredLabels.length && <div className="empty-objects"><Target size={24}/><p>No labels found</p></div>}
+            </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas</small></div></div>{currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);return <button key={a.id} className={`object-item build8-object-item ${selectedAnnotationId===a.id?"selected":""}`} onClick={()=>selectAnnotation(a.id)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><Eye size={14}/></button>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
+            {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
           </div>
-          <div className="right-footer"><div><span>Task status</span><StatusBadge status={currentTask?.status || "Pending"}/></div><div><span>Objects</span><b>{currentAnnotations.length}</b></div></div>
+          <div className="right-footer build8-right-footer"><div><span>Task status</span><StatusBadge status={currentTask?.status || "Pending"}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
         </aside>
       </div>
-
+      <div className="quick-label-bar"><div className="quick-label-title"><Zap size={14}/><b>QUICK LABELS</b></div><div className="quick-label-scroll">{labels.map(label=><button key={label.id} className={selectedLabel===label.id?"active":""} onClick={()=>setSelectedLabel(label.id)}><span style={{background:label.color}}></span>{label.name}</button>)}</div></div>
       {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
-      {showShortcuts && <Shortcuts onClose={() => setShowShortcuts(false)}/>}
+      {showShortcuts && <Shortcuts onClose={()=>setShowShortcuts(false)}/>} 
     </div>
   );
 }
 
-function AnnotationShape({ a, index, selected, onSelect, update }) {
-  const style = { "--annotation-color": a.color || "#2563eb" };
+function AnnotationShape({ a, index, selected, onSelect, onEditStart, labels }) {
+  const label = labels.find(l=>l.id===a.labelId);
+  const color = a.color || label?.color || "#2563eb";
+  const style = { "--annotation-color": color };
   if (a.type === "rectangle") {
-    return <div className={`annotation-box ${selected ? "selected" : ""}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`}} onPointerDown={e => {e.stopPropagation(); onSelect();}}><span>{index+1}</span><b>{a.labelId}</b>{selected && <div className="resize-handle"/>}</div>;
+    return <div className={`annotation-box build8-annotation-box ${selected?"selected":""}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`}} onPointerDown={e=>{e.stopPropagation();onSelect();onEditStart(a.id,e,"move");}}>
+      <span>{index+1}</span><b>{label?.name || "Object"}</b>
+      {selected && <div className="resize-handles">{["nw","n","ne","e","se","s","sw","w"].map(pos=><i key={pos} className={`handle-${pos}`} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,pos);}}/>)}</div>}
+    </div>;
   }
+  if (a.type === "keypoint") return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onSelect();onEditStart(a.id,e,"move");}}><circle cx={a.points[0].x} cy={a.points[0].y} r="1.25" fill="#fff" stroke={color} strokeWidth=".55"/><circle cx={a.points[0].x} cy={a.points[0].y} r=".38" fill={color}/><text x={a.points[0].x+1.5} y={a.points[0].y-1.5} fill={color} fontSize="2.2">{index+1}</text></svg>;
   if (a.points?.length) {
-    const points = a.points.map(p => `${p.x},${p.y}`).join(" ");
-    return <svg className={`annotation-svg ${selected ? "selected" : ""}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onSelect();}}><polygon points={points} fill={`${a.color}22`} stroke={a.color} strokeWidth=".55"/>{selected && <circle cx={a.points[0].x} cy={a.points[0].y} r="1.2" fill={a.color}/>}</svg>;
+    const points = a.points.map(p=>`${p.x},${p.y}`).join(" ");
+    const isLine = a.type === "line" || a.type === "polyline" || a.type === "brush";
+    return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onSelect();onEditStart(a.id,e,"move");}}>
+      {a.type === "polygon" ? <polygon points={points} fill={`${color}22`} stroke={color} strokeWidth=".55"/> : <polyline points={points} fill={a.type === "brush" ? `${color}12` : "none"} stroke={color} strokeWidth={a.type === "brush" ? "2.2" : ".65"} strokeLinecap="round" strokeLinejoin="round"/>}
+      {selected && a.points.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r=".65" fill="#fff" stroke={color} strokeWidth=".35"/>)}
+      <text x={(a.points[0]?.x||2)+1.2} y={(a.points[0]?.y||3)-1.2} fill={color} fontSize="2.3">{index+1}</text>
+    </svg>;
   }
   return null;
 }
 
 function DrawingPreview({drawing,color}) {
-  if (drawing.type === "rectangle") {
-    const s=drawing.start,c=drawing.current;
-    return <div className="drawing-box" style={{left:`${Math.min(s.x,c.x)}%`,top:`${Math.min(s.y,c.y)}%`,width:`${Math.abs(c.x-s.x)}%`,height:`${Math.abs(c.y-s.y)}%`,borderColor:color}}/>;
-  }
-  if (drawing.points?.length) return <svg className="annotation-svg drawing"><polyline points={drawing.points.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth=".6"/></svg>;
+  if (drawing.type === "rectangle") { const s=drawing.start,c=drawing.current; return <div className="drawing-box" style={{left:`${Math.min(s.x,c.x)}%`,top:`${Math.min(s.y,c.y)}%`,width:`${Math.abs(c.x-s.x)}%`,height:`${Math.abs(c.y-s.y)}%`,borderColor:color}}/>; }
+  if (drawing.type === "line") return <svg className="annotation-svg drawing"><polyline points={[drawing.start,drawing.current].map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth=".7"/></svg>;
+  if (drawing.type === "brush") return <svg className="annotation-svg drawing"><polyline points={drawing.points.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+  if (drawing.points?.length) return <svg className="annotation-svg drawing"><polyline points={drawing.points.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth=".65" strokeDasharray="1.2 1"/><circle cx={drawing.points[0].x} cy={drawing.points[0].y} r="1" fill="#fff" stroke={color} strokeWidth=".45"/></svg>;
   return null;
 }
 
