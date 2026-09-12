@@ -5,7 +5,7 @@ import {
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
   Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
-  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw
+  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap
 } from "lucide-react";
 import "./App.css";
 
@@ -133,6 +133,24 @@ function App() {
   const [exportSearch, setExportSearch] = useState("");
   const [exportHistory, setExportHistory] = useState(() => readStorage("annotatepro_export_history_v1", []));
   const [exportMessage, setExportMessage] = useState("");
+  const TEAM_KEY = "annotatepro_team_v1";
+  const [teamMembers, setTeamMembers] = useState(() => readStorage(TEAM_KEY, [
+    { id: "m1", name: "Manjunath", email: "manjunath@annotatepro.local", role: "Team Lead", status: "Active", projects: ["p1", "p2"], capacity: 8, completed: 46, qaScore: 97 },
+    { id: "m2", name: "Priya Sharma", email: "priya@annotatepro.local", role: "Reviewer", status: "Active", projects: ["p1", "p3"], capacity: 6, completed: 39, qaScore: 98 },
+    { id: "m3", name: "Rahul Kumar", email: "rahul@annotatepro.local", role: "Annotator", status: "Active", projects: ["p1"], capacity: 7, completed: 52, qaScore: 96 },
+    { id: "m4", name: "Sneha Patil", email: "sneha@annotatepro.local", role: "Annotator", status: "Active", projects: ["p2"], capacity: 6, completed: 44, qaScore: 95 },
+    { id: "m5", name: "Arjun Rao", email: "arjun@annotatepro.local", role: "Annotator", status: "Active", projects: ["p3"], capacity: 8, completed: 61, qaScore: 97 },
+    { id: "m6", name: "Kavya Nair", email: "kavya@annotatepro.local", role: "Reviewer", status: "Active", projects: ["p2", "p4"], capacity: 5, completed: 34, qaScore: 99 },
+    { id: "m7", name: "Vikram Singh", email: "vikram@annotatepro.local", role: "Annotator", status: "Active", projects: ["p1", "p3"], capacity: 7, completed: 48, qaScore: 94 },
+    { id: "m8", name: "Ananya Das", email: "ananya@annotatepro.local", role: "Annotator", status: "Inactive", projects: [], capacity: 0, completed: 27, qaScore: 93 }
+  ]));
+  const [teamSearch, setTeamSearch] = useState("");
+  const [teamRoleFilter, setTeamRoleFilter] = useState("All Roles");
+  const [teamStatusFilter, setTeamStatusFilter] = useState("All Status");
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [editingMemberId, setEditingMemberId] = useState(null);
+  const [teamForm, setTeamForm] = useState({ name: "", email: "", role: "Annotator", status: "Active", projects: [], capacity: 6 });
+  const [teamMessage, setTeamMessage] = useState("");
   const [importOpen, setImportOpen] = useState(false);
   const [imageUploadOpen, setImageUploadOpen] = useState(false);
   const fileInputRef = useRef(null);
@@ -160,6 +178,10 @@ function App() {
   useEffect(() => {
     localStorage.setItem("annotatepro_export_history_v1", JSON.stringify(exportHistory));
   }, [exportHistory]);
+
+  useEffect(() => {
+    localStorage.setItem(TEAM_KEY, JSON.stringify(teamMembers));
+  }, [teamMembers]);
 
   const currentTask = tasks[selectedTaskIndex] || tasks[0];
   const currentAnnotations = annotationsByTask[currentTask?.id] || [];
@@ -679,6 +701,72 @@ function App() {
     return () => window.removeEventListener("annotatepro-open-task", handler);
   }, []);
 
+  const teamFilteredMembers = useMemo(() => teamMembers.filter(member => {
+    const q = teamSearch.trim().toLowerCase();
+    const matchesSearch = !q || `${member.name} ${member.email} ${member.role}`.toLowerCase().includes(q);
+    const matchesRole = teamRoleFilter === "All Roles" || member.role === teamRoleFilter;
+    const matchesStatus = teamStatusFilter === "All Status" || member.status === teamStatusFilter;
+    return matchesSearch && matchesRole && matchesStatus;
+  }), [teamMembers, teamSearch, teamRoleFilter, teamStatusFilter]);
+
+  const teamStats = useMemo(() => {
+    const active = teamMembers.filter(m => m.status === "Active").length;
+    const annotators = teamMembers.filter(m => m.role === "Annotator" && m.status === "Active").length;
+    const reviewers = teamMembers.filter(m => m.role === "Reviewer" && m.status === "Active").length;
+    const assigned = tasks.filter(t => t.assigneeId).length;
+    const avgQuality = teamMembers.length ? Math.round(teamMembers.reduce((s,m) => s + Number(m.qaScore || 0), 0) / teamMembers.length) : 0;
+    return { active, annotators, reviewers, assigned, avgQuality };
+  }, [teamMembers, tasks]);
+
+  function openCreateMember() {
+    setEditingMemberId(null);
+    setTeamForm({ name: "", email: "", role: "Annotator", status: "Active", projects: projects[0] ? [projects[0].id] : [], capacity: 6 });
+    setTeamModalOpen(true);
+  }
+
+  function openEditMember(member) {
+    setEditingMemberId(member.id);
+    setTeamForm({ name: member.name, email: member.email || "", role: member.role, status: member.status, projects: member.projects || [], capacity: member.capacity || 6 });
+    setTeamModalOpen(true);
+  }
+
+  function saveMember(e) {
+    e.preventDefault();
+    if (!teamForm.name.trim() || !teamForm.email.trim()) return;
+    if (editingMemberId) {
+      setTeamMembers(prev => prev.map(m => m.id === editingMemberId ? { ...m, ...teamForm, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0) } : m));
+      setTeamMessage("Team member updated successfully");
+    } else {
+      const member = { id: `member-${Date.now()}`, ...teamForm, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0), completed: 0, qaScore: 0 };
+      setTeamMembers(prev => [member, ...prev]);
+      setTeamMessage("Team member added successfully");
+    }
+    setTeamModalOpen(false);
+    setTimeout(() => setTeamMessage(""), 2600);
+  }
+
+  function toggleMemberStatus(member) {
+    const next = member.status === "Active" ? "Inactive" : "Active";
+    setTeamMembers(prev => prev.map(m => m.id === member.id ? { ...m, status: next } : m));
+    setTeamMessage(`${member.name} is now ${next.toLowerCase()}`);
+    setTimeout(() => setTeamMessage(""), 2600);
+  }
+
+  function deleteMember(member) {
+    if (member.id === "m1") return;
+    setTeamMembers(prev => prev.filter(m => m.id !== member.id));
+    setTasks(prev => prev.map(t => t.assigneeId === member.id ? { ...t, assigneeId: null } : t));
+    setTeamMessage(`${member.name} removed from the workspace`);
+    setTimeout(() => setTeamMessage(""), 2600);
+  }
+
+  function assignTask(taskId, memberId) {
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigneeId: memberId || null, status: memberId && t.status === "Pending" ? "In Progress" : t.status } : t));
+    const member = teamMembers.find(m => m.id === memberId);
+    setTeamMessage(member ? `Task assigned to ${member.name}` : "Task assignment cleared");
+    setTimeout(() => setTeamMessage(""), 2200);
+  }
+
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Annotation Workspace", Grid3X3],
     ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3],
@@ -754,7 +842,15 @@ function App() {
             labelsSetter={setLabels}
           />
         )}
-        {activePage === "Team" && <SimplePage title="Team" subtitle="Manage annotators, reviewers and workload." icon={Users} stats={["28 Members", "22 Annotators", "6 Reviewers"]} />}
+        {activePage === "Team" && <TeamPage
+          members={teamFilteredMembers} allMembers={teamMembers} projects={projects} tasks={tasks}
+          stats={teamStats} search={teamSearch} setSearch={setTeamSearch}
+          roleFilter={teamRoleFilter} setRoleFilter={setTeamRoleFilter}
+          statusFilter={teamStatusFilter} setStatusFilter={setTeamStatusFilter}
+          onCreate={openCreateMember} onEdit={openEditMember} onToggleStatus={toggleMemberStatus} onDelete={deleteMember}
+          onAssign={assignTask} message={teamMessage} modalOpen={teamModalOpen} setModalOpen={setTeamModalOpen}
+          editing={!!editingMemberId} form={teamForm} setForm={setTeamForm} onSave={saveMember}
+        />}
         {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} /> }
         {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
         {activePage === "Import Data" && <ImportPage tasks={tasks} datasetMeta={datasetMeta} setDatasetMeta={setDatasetMeta} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={() => imageInputRef.current?.click()} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} />}
@@ -1132,6 +1228,71 @@ function AnalyticsPage({ projects, tasks, annotations, qaReviews, range, setRang
 
     <div className="analytics-insight"><div className="insight-icon"><Zap size={17}/></div><div><b>Performance insight</b><p>{reviewed.length ? `The workspace is averaging ${averageQA}% QA quality. ${changes} task${changes === 1 ? " has" : "s have"} requested changes and should be prioritized for correction.` : "Complete a few QA reviews to unlock quality trends, rejection analysis and actionable performance insights."}</p></div><span>LIVE</span></div>
   </div>;
+}
+
+function TeamPage({members, allMembers, projects, tasks, stats, search, setSearch, roleFilter, setRoleFilter, statusFilter, setStatusFilter, onCreate, onEdit, onToggleStatus, onDelete, onAssign, message, modalOpen, setModalOpen, editing, form, setForm, onSave}) {
+  const [selectedMemberId, setSelectedMemberId] = useState(members[0]?.id || null);
+  const selectedMember = allMembers.find(m => m.id === selectedMemberId) || members[0] || allMembers[0];
+  const assignedTasks = selectedMember ? tasks.filter(t => t.assigneeId === selectedMember.id) : [];
+  const workload = selectedMember ? Math.min(100, Math.round((assignedTasks.length / Math.max(1, selectedMember.capacity || 1)) * 100)) : 0;
+  const avgQuality = allMembers.length ? Math.round(allMembers.reduce((s,m) => s + Number(m.qaScore || 0), 0) / allMembers.length) : 0;
+  const initials = (name = "?") => name.split(" ").map(x => x[0]).join("").slice(0,2).toUpperCase();
+  const projectName = id => projects.find(p => p.id === id)?.name || "Unassigned";
+  const availableTasks = selectedMember ? tasks.filter(t => (selectedMember.projects || []).includes(t.projectId) && !t.assigneeId).slice(0, 12) : [];
+
+  return <div className="page team-page">
+    <div className="page-head">
+      <div><span className="eyebrow">WORKFORCE MANAGEMENT</span><h1>Team</h1><p>Manage annotators, reviewers, assignments, workload and permissions.</p></div>
+      <button className="primary-btn" onClick={onCreate}><UserPlus size={16}/> Add Member</button>
+    </div>
+
+    <div className="stats-grid team-stats">
+      <StatCard icon={Users} label="Active Members" value={stats.active} meta={`${allMembers.length} total in workspace`} />
+      <StatCard icon={Target} label="Active Annotators" value={stats.annotators} meta="Annotation production" />
+      <StatCard icon={ClipboardCheck} label="Reviewers" value={stats.reviewers} meta="QA review capacity" />
+      <StatCard icon={BriefcaseBusiness} label="Assigned Tasks" value={stats.assigned} meta={`${avgQuality}% average team quality`} />
+    </div>
+
+    <div className="team-layout">
+      <section className="panel team-members-panel">
+        <div className="panel-head"><div><h2>Team Members</h2><p>Roles, projects and current availability</p></div><span className="team-count">{members.length} shown</span></div>
+        <div className="team-toolbar">
+          <div className="team-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search members..." /></div>
+          <select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)}><option>All Roles</option><option>Team Lead</option><option>Reviewer</option><option>Annotator</option></select>
+          <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All Status</option><option>Active</option><option>Inactive</option></select>
+        </div>
+        <div className="member-list">
+          {members.length ? members.map(member => {
+            const memberTasks = tasks.filter(t => t.assigneeId === member.id).length;
+            const load = Math.min(100, Math.round((memberTasks / Math.max(1, member.capacity || 1)) * 100));
+            return <button className={`member-row ${selectedMember?.id === member.id ? "selected" : ""}`} key={member.id} onClick={() => setSelectedMemberId(member.id)}>
+              <div className="member-avatar">{initials(member.name)}</div>
+              <div className="member-info"><b>{member.name}</b><span>{member.email}</span><div className="member-tags"><em className={`role-pill ${member.role.toLowerCase().replaceAll(" ", "-")}`}>{member.role}</em><em className={`member-status ${member.status.toLowerCase()}`}><i></i>{member.status}</em></div></div>
+              <div className="member-load"><b>{memberTasks}</b><span>tasks</span><div className="load-track"><i style={{width:`${load}%`}}></i></div></div>
+              <ChevronDown size={15} className="member-chevron" />
+            </button>;
+          }) : <div className="team-empty"><Users size={30}/><h3>No members found</h3><p>Try another search or filter.</p></div>}
+        </div>
+      </section>
+
+      <section className="panel team-detail-panel">
+        {selectedMember ? <>
+          <div className="team-detail-head"><div className="detail-profile"><div className="detail-avatar">{initials(selectedMember.name)}</div><div><h2>{selectedMember.name}</h2><p>{selectedMember.email}</p><div className="member-tags"><em className="role-pill">{selectedMember.role}</em><em className={`member-status ${selectedMember.status.toLowerCase()}`}><i></i>{selectedMember.status}</em></div></div></div><div className="detail-actions"><button className="secondary-btn" onClick={()=>onEdit(selectedMember)}><Edit3 size={14}/> Edit</button><button className="icon-btn" title={selectedMember.status === "Active" ? "Deactivate" : "Activate"} onClick={()=>onToggleStatus(selectedMember)}>{selectedMember.status === "Active" ? <Pause size={15}/> : <Play size={15}/>}</button><button className="icon-btn danger" title="Remove member" onClick={()=>onDelete(selectedMember)}><Trash2 size={15}/></button></div></div>
+          <div className="detail-metrics"><div><span>Assigned</span><b>{assignedTasks.length}</b></div><div><span>Capacity</span><b>{selectedMember.capacity || 0}</b></div><div><span>Workload</span><b>{workload}%</b></div><div><span>QA Score</span><b>{selectedMember.qaScore ? `${selectedMember.qaScore}%` : "—"}</b></div></div>
+          <div className="team-detail-section"><div className="section-title"><div><h3>Project Access</h3><p>Projects this member can work on</p></div><ShieldCheck size={16}/></div><div className="project-access-list">{(selectedMember.projects || []).length ? selectedMember.projects.map(id=><div key={id}><FolderKanban size={14}/><span>{projectName(id)}</span><Check size={14}/></div>) : <div className="no-access">No projects assigned.</div>}</div></div>
+          <div className="team-detail-section"><div className="section-title"><div><h3>Current Assignments</h3><p>Tasks currently allocated to this member</p></div><span>{assignedTasks.length}</span></div>{assignedTasks.length ? <div className="assignment-list">{assignedTasks.map(task=><div className="assignment-row" key={task.id}><div className="assignment-thumb">{task.image ? <img src={task.image} alt=""/> : <ImageIcon size={15}/>}</div><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><StatusBadge status={task.status}/><button className="icon-btn" onClick={()=>onAssign(task.id, "")} title="Unassign"><X size={14}/></button></div>)}</div> : <div className="team-empty compact"><ClipboardCheck size={25}/><p>No tasks assigned yet.</p></div>}</div>
+          <div className="team-detail-section"><div className="section-title"><div><h3>Assign Unallocated Work</h3><p>Open tasks from the member's project access</p></div><Target size={16}/></div>{availableTasks.length ? <div className="assignable-list">{availableTasks.map(task=><div className="assignable-row" key={task.id}><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><button className="secondary-btn" onClick={()=>onAssign(task.id, selectedMember.id)}><Plus size={13}/> Assign</button></div>)}</div> : <div className="no-access">No unallocated tasks available for this member.</div>}</div>
+        </> : <div className="team-empty"><Users size={40}/><h3>Select a team member</h3><p>Choose a member to view workload and assignments.</p></div>}
+      </section>
+    </div>
+    {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+    {modalOpen && <TeamMemberModal editing={editing} form={form} setForm={setForm} projects={projects} onClose={()=>setModalOpen(false)} onSave={onSave} />}
+  </div>;
+}
+
+function TeamMemberModal({editing, form, setForm, projects, onClose, onSave}) {
+  const toggleProject = id => setForm(prev => ({...prev, projects: prev.projects.includes(id) ? prev.projects.filter(x=>x!==id) : [...prev.projects, id]}));
+  return <div className="modal-backdrop"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
 }
 
 function SimplePage({title,subtitle,icon:Icon,stats}) {
