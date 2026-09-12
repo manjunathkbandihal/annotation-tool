@@ -5,7 +5,7 @@ import {
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
   Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
-  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap
+  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap, Palette, SlidersHorizontal, Layers, Workflow, CheckSquare
 } from "lucide-react";
 import "./App.css";
 
@@ -151,6 +151,23 @@ function App() {
   const [editingMemberId, setEditingMemberId] = useState(null);
   const [teamForm, setTeamForm] = useState({ name: "", email: "", role: "Annotator", status: "Active", projects: [], capacity: 6 });
   const [teamMessage, setTeamMessage] = useState("");
+  const PROJECT_CONFIGS_KEY = "annotatepro_project_configs_v1";
+  const makeDefaultProjectConfig = (project) => ({
+    projectId: project.id,
+    labels: defaultLabels.map(label => ({ ...label, id: `${project.id}-${label.id}` })),
+    requireQa: true, allowAnnotatorSubmit: true, autoSave: true, defaultReviewer: "", maxTasksPerAnnotator: 10,
+    instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality."
+  });
+  const [projectConfigs, setProjectConfigs] = useState(() => {
+    const saved = readStorage(PROJECT_CONFIGS_KEY, null);
+    return saved || Object.fromEntries(sampleProjects.map(project => [project.id, makeDefaultProjectConfig(project)]));
+  });
+  const [configProject, setConfigProject] = useState(projects[0]?.id || "p1");
+  const [configTab, setConfigTab] = useState("Labels");
+  const [configMessage, setConfigMessage] = useState("");
+  const [labelEditorOpen, setLabelEditorOpen] = useState(false);
+  const [editingLabelId, setEditingLabelId] = useState(null);
+  const [labelForm, setLabelForm] = useState({ name: "", color: labelPalette[0], type: "Rectangle" });
   const [importOpen, setImportOpen] = useState(false);
   const [imageUploadOpen, setImageUploadOpen] = useState(false);
   const fileInputRef = useRef(null);
@@ -182,6 +199,21 @@ function App() {
   useEffect(() => {
     localStorage.setItem(TEAM_KEY, JSON.stringify(teamMembers));
   }, [teamMembers]);
+
+  useEffect(() => { localStorage.setItem(PROJECT_CONFIGS_KEY, JSON.stringify(projectConfigs)); }, [projectConfigs]);
+  useEffect(() => {
+    setProjectConfigs(prev => {
+      const next = { ...prev }; let changed = false;
+      projects.forEach(project => { if (!next[project.id]) { next[project.id] = makeDefaultProjectConfig(project); changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [projects]);
+  useEffect(() => {
+    const project = projects.find(p => p.id === workspaceProject) || projects[0];
+    const config = projectConfigs[workspaceProject] || (project ? makeDefaultProjectConfig(project) : null);
+    setLabels(config?.labels || []);
+    setSelectedLabel(config?.labels?.[0]?.id || null);
+  }, [workspaceProject, projectConfigs, projects]);
 
   const currentTask = tasks[selectedTaskIndex] || tasks[0];
   const currentAnnotations = annotationsByTask[currentTask?.id] || [];
@@ -768,10 +800,17 @@ function App() {
   }
 
   const navItems = [
-    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Annotation Workspace", Grid3X3],
+    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Project Configuration", SlidersHorizontal], ["Annotation Workspace", Grid3X3],
     ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3],
     ["Import Data", Upload], ["Export", Download], ["Settings", Settings]
   ];
+
+  const currentConfig = projectConfigs[configProject] || makeDefaultProjectConfig(projects.find(p => p.id === configProject) || projects[0] || sampleProjects[0]);
+  const openCreateLabel = () => { setEditingLabelId(null); setLabelForm({ name: "", color: labelPalette[currentConfig.labels.length % labelPalette.length], type: "Rectangle" }); setLabelEditorOpen(true); };
+  const openEditLabel = (label) => { setEditingLabelId(label.id); setLabelForm({ name: label.name, color: label.color || labelPalette[0], type: label.type || "Rectangle" }); setLabelEditorOpen(true); };
+  const saveProjectLabel = (e) => { e.preventDefault(); const name = labelForm.name.trim(); if (!name) return; setProjectConfigs(prev => { const cfg = prev[configProject] || currentConfig; const nextLabels = editingLabelId ? cfg.labels.map(l => l.id === editingLabelId ? { ...l, name, color: labelForm.color, type: labelForm.type } : l) : [...cfg.labels, { id: `${configProject}-label-${Date.now()}`, name, color: labelForm.color, type: labelForm.type }]; return { ...prev, [configProject]: { ...cfg, labels: nextLabels } }; }); setLabelEditorOpen(false); setConfigMessage(editingLabelId ? "Label updated" : "Label added"); setTimeout(() => setConfigMessage(""), 2200); };
+  const deleteProjectLabel = (labelId) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: currentConfig.labels.filter(l => l.id !== labelId) } })); setConfigMessage("Label removed"); setTimeout(() => setConfigMessage(""), 2200); };
+  const updateProjectConfig = (patch) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, ...patch } })); setConfigMessage("Project configuration saved"); setTimeout(() => setConfigMessage(""), 2200); };
 
   return (
     <div className="app-shell">
@@ -822,6 +861,7 @@ function App() {
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateProject} onNavigate={navigate} />}
         {activePage === "Projects" && <ProjectsPage projects={filteredProjects} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} />}
+        {activePage === "Project Configuration" && <ProjectConfigurationPage projects={projects} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Annotation Workspace" && (
           <Workspace
             projects={projects} workspaceProject={workspaceProject} setWorkspaceProject={setWorkspaceProject}
@@ -1002,6 +1042,23 @@ function DrawingPreview({drawing,color}) {
   if (drawing.points?.length) return <svg className="annotation-svg drawing"><polyline points={drawing.points.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth=".6"/></svg>;
   return null;
 }
+
+function ProjectConfigurationPage({projects,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel}) {
+  const project = projects.find(p => p.id === configProject) || projects[0];
+  const reviewers = ["", "Priya Sharma", "Kavya Nair"];
+  return <div className="page project-config-page">
+    <div className="page-head"><div><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div><div className="config-project-picker"><span>PROJECT</span><select value={configProject} onChange={e=>setConfigProject(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div></div>
+    <div className="config-overview"><div className="config-project-icon"><Layers size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{project?.client || ""} · {project?.annotationType || "Annotation"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
+    <div className="config-tabs"><button className={tab==="Labels"?"active":""} onClick={()=>setTab("Labels")}><Palette size={16}/> Labels</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Guidelines"?"active":""} onClick={()=>setTab("Guidelines")}><FileText size={16}/> Guidelines</button></div>
+    {tab === "Labels" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Label schema</h2><p>These labels are available to annotators in the selected project.</p></div><button className="primary-btn" onClick={onAddLabel}><Plus size={16}/> Add Label</button></div><div className="label-schema-list">{config.labels.length ? config.labels.map((label,i)=><div className="schema-row" key={label.id}><span className="schema-number">{i+1}</span><span className="schema-color" style={{background:label.color}}></span><div className="schema-main"><b>{label.name}</b><span>{label.type}</span></div><span className="schema-shortcut">{label.type === "Rectangle" ? "BOX" : label.type.toUpperCase()}</span><div className="schema-actions"><button onClick={()=>onEditLabel(label)} title="Edit"><Edit3 size={15}/></button><button className="danger-icon" onClick={()=>onDeleteLabel(label.id)} title="Delete"><Trash2 size={15}/></button></div></div>) : <div className="config-empty"><Palette size={34}/><h3>No labels configured</h3><p>Add labels to make this project annotatable.</p></div>}</div></section>}
+    {tab === "Workflow" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Annotation workflow</h2><p>Control how tasks move from annotation to quality review.</p></div><CheckSquare size={20}/></div><div className="workflow-settings"><SettingToggle title="Require QA review" text="Every submitted task enters the QA Review queue before approval." checked={config.requireQa} onChange={v=>onUpdateConfig({requireQa:v})}/><SettingToggle title="Allow annotators to submit" text="Annotators can submit completed tasks directly for review." checked={config.allowAnnotatorSubmit} onChange={v=>onUpdateConfig({allowAnnotatorSubmit:v})}/><SettingToggle title="Auto-save annotations" text="Persist annotation changes locally while the task is being edited." checked={config.autoSave} onChange={v=>onUpdateConfig({autoSave:v})}/></div><div className="workflow-grid"><label><span>DEFAULT REVIEWER</span><select value={config.defaultReviewer||""} onChange={e=>onUpdateConfig({defaultReviewer:e.target.value})}>{reviewers.map(r=><option key={r} value={r}>{r || "No default reviewer"}</option>)}</select></label><label><span>MAX TASKS / ANNOTATOR</span><input type="number" min="1" max="1000" value={config.maxTasksPerAnnotator||10} onChange={e=>onUpdateConfig({maxTasksPerAnnotator:Number(e.target.value)||1})}/></label></div><div className="workflow-stages"><span>WORKFLOW</span><div><b>Pending</b><i>→</i><b>In Progress</b><i>→</i><b>Submitted</b><i>→</i><b>QA Review</b><i>→</i><b>Approved</b></div></div></section>}
+    {tab === "Guidelines" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Project instructions</h2><p>Give annotators clear, project-specific guidance that stays with the workspace.</p></div><FileText size={20}/></div><label className="guideline-editor"><span>ANNOTATION GUIDELINES</span><textarea value={config.instructions||""} onChange={e=>onUpdateConfig({instructions:e.target.value})} placeholder="Describe what should and should not be annotated..." rows="10"/></label><div className="guideline-tip"><ShieldCheck size={18}/><div><b>Recommended</b><p>Document edge cases, label definitions, occlusion rules, minimum object size and difficult scenes.</p></div></div></section>}
+    {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+    {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>setLabelEditorOpen(false)} onSave={onSaveLabel}/>} 
+  </div>;
+}
+function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
+function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
 function ProjectsPage({projects,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace}) {
   return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div><button className="primary-btn" onClick={onCreate}><Plus size={17}/> Create Project</button></div>
