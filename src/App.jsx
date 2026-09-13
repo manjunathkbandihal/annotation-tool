@@ -216,6 +216,10 @@ function App() {
   const panStart = useRef(null);
   const editRef = useRef(null);
 
+  const [notifications, setNotifications] = useState(() => readStorage("annotatepro_notifications_v1", []));
+  const [notificationFilter, setNotificationFilter] = useState("All");
+  const [notificationSearch, setNotificationSearch] = useState("");
+
   useEffect(() => {
     localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
   }, [projects]);
@@ -251,9 +255,6 @@ function App() {
   const [operationsFilter, setOperationsFilter] = useState("All");
   const [operationsProject, setOperationsProject] = useState("All Projects");
   const [operationsShowUnread, setOperationsShowUnread] = useState(false);
-  const [notifications, setNotifications] = useState(() => readStorage("annotatepro_notifications_v1", []));
-  const [notificationFilter, setNotificationFilter] = useState("All");
-  const [notificationSearch, setNotificationSearch] = useState("");
   const AUDIT_KEY = "annotatepro_audit_trail_v1";
   const [auditEvents, setAuditEvents] = useState(() => readStorage(AUDIT_KEY, []));
   const [auditSearch, setAuditSearch] = useState("");
