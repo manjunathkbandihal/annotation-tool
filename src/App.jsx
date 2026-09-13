@@ -225,6 +225,13 @@ function App() {
   useEffect(() => { localStorage.setItem(PROJECT_CONFIGS_KEY, JSON.stringify(projectConfigs)); }, [projectConfigs]);
   useEffect(() => { localStorage.setItem(TASK_PLANNER_KEY, JSON.stringify(plannerTargets)); }, [plannerTargets]);
   useEffect(() => { localStorage.setItem(WORKLOAD_KEY, JSON.stringify(workloadSettings)); }, [workloadSettings]);
+  const OPERATIONS_KEY = "annotatepro_operations_v1";
+  const [operationRead, setOperationRead] = useState(() => readStorage(OPERATIONS_KEY, {}));
+  const [operationsSearch, setOperationsSearch] = useState("");
+  const [operationsFilter, setOperationsFilter] = useState("All");
+  const [operationsProject, setOperationsProject] = useState("All Projects");
+  const [operationsShowUnread, setOperationsShowUnread] = useState(false);
+  useEffect(() => { localStorage.setItem(OPERATIONS_KEY, JSON.stringify(operationRead)); }, [operationRead]);
   useEffect(() => {
     setProjectConfigs(prev => {
       const next = { ...prev }; let changed = false;
@@ -1001,7 +1008,7 @@ function App() {
 
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Project Configuration", SlidersHorizontal], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
-    ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3],
+    ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3], ["Operations", Activity],
     ["Import Data", Upload], ["Export", Download], ["Settings", Settings]
   ];
 
@@ -1111,6 +1118,7 @@ function App() {
         />}
         {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} /> }
         {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
+        {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
         {activePage === "Import Data" && <ImportPage tasks={tasks} datasetMeta={datasetMeta} setDatasetMeta={setDatasetMeta} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={() => imageInputRef.current?.click()} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} />}
         {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
         {activePage === "Settings" && <SimplePage title="Settings" subtitle="Configure workspace and annotation preferences." icon={Settings} stats={["Autosave On", "Shortcuts On", "Local Storage"]} />}
@@ -1788,6 +1796,50 @@ function WorkloadPage({projects,rows,summary,tasks,project,setProject,projectOpt
     <section className="panel workload-panel"><div className="section-header"><div><h2>Team Capacity</h2><p>Live workload based on assigned tasks and each member's capacity.</p></div><span className="workload-project-chip">{projectName(project)}</span></div><div className="workload-table-wrap"><table className="workload-table"><thead><tr><th>MEMBER</th><th>ROLE</th><th>PROJECT ACCESS</th><th>ASSIGNED</th><th>CAPACITY</th><th>LOAD</th><th>PROGRESS</th><th>CAPACITY</th></tr></thead><tbody>{rows.length ? rows.map(r=><tr key={r.member.id}><td><div className="workload-member"><div className="user-avatar small">{r.member.name?.charAt(0)||"?"}</div><div><b>{r.member.name}</b><span>{r.member.email}</span></div></div></td><td><span className="role-pill">{r.member.role}</span></td><td><span className="project-access">{r.member.projects?.length || 0} project{r.member.projects?.length===1?"":"s"}</span></td><td><strong>{r.assigned}</strong><small>{r.inProgress} active · {r.submitted} review · {r.completed} done</small></td><td><strong>{r.capacity}</strong><small>{capacityMode.toLowerCase()} target</small></td><td><span className={`load-pill ${statusClass((r.assigned/r.capacity)*100)}`}>{Math.round((r.assigned/r.capacity)*100)}%</span><small>{statusForLoad((r.assigned/r.capacity)*100)}</small></td><td><div className="workload-progress"><span><i style={{width:`${Math.min(100,Math.round((r.assigned/r.capacity)*100))}%`}}/></span><b>{Math.min(100,Math.round((r.assigned/r.capacity)*100))}%</b></div></td><td><input className="capacity-input" type="number" min="1" value={r.capacity} onChange={e=>onCapacity(r.member.id,e.target.value)}/></td></tr>) : <tr><td colSpan="8" className="workload-empty">No active members match this view.</td></tr>}</tbody></table></div></section>
     <section className="workload-bottom-grid"><div className="panel workload-panel compact"><div className="section-header"><div><h2>Queue Health</h2><p>Tasks that need attention.</p></div></div><div className="queue-health-grid"><MiniStat label="Unassigned" value={summary.unassigned}/><MiniStat label="Pending" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&t.status==="Pending").length}/><MiniStat label="In Progress" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&t.status==="In Progress").length}/><MiniStat label="QA Review" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&["Submitted","QA Review"].includes(t.status)).length}/></div><div className="queue-health-note"><ShieldCheck size={16}/><span>Keep individual load below <b>100%</b> to reduce queue risk.</span></div></div><div className="panel workload-panel compact"><div className="section-header"><div><h2>Capacity Guide</h2><p>Recommended operating bands.</p></div></div><div className="capacity-guide"><div><span className="guide-dot available"></span><b>0–49%</b><small>Available</small></div><div><span className="guide-dot healthy"></span><b>50–79%</b><small>Healthy</small></div><div><span className="guide-dot high"></span><b>80–100%</b><small>High load</small></div><div><span className="guide-dot overloaded"></span><b>&gt;100%</b><small>Overloaded</small></div></div><p className="workload-tip"><Zap size={14}/> Auto Balance distributes pending unassigned tasks to the least-loaded eligible annotators.</p></div></section>
     {message && <div className="workload-toast"><CheckCircle2 size={16}/>{message}</div>}
+  </div>;
+}
+
+function OperationsPage({projects,tasks,teamMembers,qaReviews,exportHistory,search,setSearch,filter,setFilter,project,setProject,showUnread,setShowUnread,readMap,setReadMap}) {
+  const projectName = id => projects.find(p=>p.id===id)?.name || "Unknown Project";
+  const rows = useMemo(() => {
+    const events = [];
+    tasks.forEach(t => {
+      const p = t.projectId || "";
+      const assigned = t.assignee || t.annotator || t.assignedTo;
+      if (assigned) events.push({id:`task-assign-${t.id}`,type:"Assignment",icon:Users,title:"Task assigned",text:`${t.fileName || t.name || t.id} is assigned to ${assigned}.`,project:p,task:t.id,status:t.status || "Pending",time:t.updatedAt || t.createdAt || new Date().toISOString()});
+      if (["Submitted","QA Review"].includes(t.status)) events.push({id:`task-review-${t.id}`,type:"QA",icon:ClipboardCheck,title:"Task awaiting review",text:`${t.fileName || t.name || t.id} is ready for QA review.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+      if (t.status === "Changes Requested" || t.status === "Rejected") events.push({id:`task-rework-${t.id}`,type:"Rework",icon:RotateCcw,title:"Rework required",text:`${t.fileName || t.name || t.id} needs annotation changes.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+      if (t.status === "Approved" || t.status === "Completed") events.push({id:`task-done-${t.id}`,type:"Completion",icon:CheckCircle2,title:"Task completed",text:`${t.fileName || t.name || t.id} is ${t.status.toLowerCase()}.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+      if (!assigned && t.status === "Pending") events.push({id:`task-unassigned-${t.id}`,type:"Alert",icon:AlertCircle,title:"Unassigned task",text:`${t.fileName || t.name || t.id} is waiting for assignment.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+    });
+    Object.entries(qaReviews || {}).forEach(([taskId, review]) => {
+      const t = tasks.find(x=>x.id===taskId); events.push({id:`qa-record-${taskId}`,type:"QA",icon:ShieldCheck,title:`QA ${review.decision || "review"}`,text:`${t?.fileName || taskId} received a quality review${review.score != null ? ` with score ${review.score}%` : ""}.`,project:t?.projectId || "",task:taskId,status:review.decision || "Reviewed",time:review.updatedAt || review.timestamp || new Date().toISOString()});
+    });
+    (exportHistory || []).slice(0,30).forEach((h,i)=>events.push({id:`export-${h.id || i}`,type:"Export",icon:Download,title:"Export completed",text:`${h.format || "Dataset"} export created with ${h.taskCount ?? h.tasks ?? 0} tasks.`,project:h.projectId || "",task:"",status:"Completed",time:h.timestamp || new Date().toISOString()}));
+    teamMembers.forEach(m=>{ if(m.status==="Inactive") events.push({id:`member-${m.id}`,type:"Team",icon:Users,title:"Inactive team member",text:`${m.name} is currently inactive and cannot receive new work.`,project:"",task:"",status:"Inactive",time:new Date().toISOString()}); });
+    return events.sort((a,b)=>new Date(b.time)-new Date(a.time));
+  },[tasks,qaReviews,exportHistory,teamMembers,projects]);
+  const filtered = rows.filter(r=>{
+    const q=search.trim().toLowerCase();
+    const matchQ=!q || `${r.title} ${r.text} ${r.task} ${projectName(r.project)}`.toLowerCase().includes(q);
+    const matchF=filter==="All" || r.type===filter;
+    const matchP=project==="All Projects" || r.project===project;
+    const matchU=!showUnread || !readMap[r.id];
+    return matchQ&&matchF&&matchP&&matchU;
+  });
+  const unread=rows.filter(r=>!readMap[r.id]).length;
+  const alertCount=rows.filter(r=>["Alert","Rework"].includes(r.type)).length;
+  const markAll=()=>setReadMap(prev=>Object.fromEntries(rows.map(r=>[r.id,true]).map(([k,v])=>[k,v])));
+  const markRead=id=>setReadMap(prev=>({...prev,[id]:true}));
+  const clearRead=()=>setReadMap(prev=>Object.fromEntries(Object.entries(prev).filter(([,v])=>!v)));
+  const relative=t=>{const d=Date.now()-new Date(t).getTime();if(!Number.isFinite(d))return "Recently";const m=Math.floor(d/60000);if(m<1)return "Just now";if(m<60)return `${m}m ago`;const h=Math.floor(m/60);if(h<24)return `${h}h ago`;return `${Math.floor(h/24)}d ago`;};
+  return <div className="page operations-page">
+    <div className="page-head operations-head"><div><span className="eyebrow">OPERATIONS CONTROL CENTER</span><h1>Operations & Activity</h1><p>Monitor assignments, QA events, rework and delivery activity across every project.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={markAll}><Check size={15}/> Mark all read</button></div></div>
+    <div className="stats-grid operations-stats"><StatCard icon={Bell} label="Unread" value={unread} meta="New operational events"/><StatCard icon={AlertCircle} label="Alerts & Rework" value={alertCount} meta="Needs attention"/><StatCard icon={Activity} label="Total Events" value={rows.length} meta="Current activity stream"/><StatCard icon={Users} label="Team Members" value={teamMembers.filter(m=>m.status==="Active").length} meta="Active workforce"/></div>
+    <section className="panel operations-panel"><div className="operations-toolbar"><div className="operations-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search activity, task or project..."/></div><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Assignment</option><option>QA</option><option>Rework</option><option>Completion</option><option>Alert</option><option>Export</option><option>Team</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><label className="operations-unread"><input type="checkbox" checked={showUnread} onChange={e=>setShowUnread(e.target.checked)}/> Unread only</label></div></section>
+    <div className="operations-grid"><section className="panel operations-feed"><div className="section-header"><div><h2>Activity Feed</h2><p>Latest events generated from your shared project, task, QA and team data.</p></div><span className="operations-count">{filtered.length} events</span></div><div className="operations-list">{filtered.length ? filtered.map(r=>{const Icon=r.icon;const unreadRow=!readMap[r.id];return <button key={r.id} className={`operation-row ${unreadRow?"unread":""}`} onClick={()=>markRead(r.id)}><span className={`operation-icon ${r.type.toLowerCase()}`}><Icon size={15}/></span><span className="operation-body"><b>{r.title}</b><em>{r.text}</em><small>{r.task ? `${r.task} · ` : ""}{r.project ? projectName(r.project) : r.type}</small></span><time>{relative(r.time)}</time>{unreadRow&&<i className="unread-dot"/>}</button>}) : <div className="operations-empty"><Activity size={30}/><b>No activity matches your filters</b><span>Try another project, event type or search term.</span></div>}</div></section>
+      <aside className="operations-side"><section className="panel operations-alerts"><div className="section-header"><div><h2>Needs Attention</h2><p>Operational risks detected from current data.</p></div></div><div className="attention-list">{rows.filter(r=>["Alert","Rework"].includes(r.type)).slice(0,8).map(r=>{const Icon=r.icon;return <div className="attention-item" key={r.id}><span><Icon size={14}/></span><div><b>{r.title}</b><small>{r.text}</small></div></div>})}{!rows.some(r=>["Alert","Rework"].includes(r.type))&&<div className="attention-empty"><CheckCircle2 size={18}/> No critical operational alerts</div>}</div></section><section className="panel operations-read"><div className="section-header"><div><h2>Read State</h2><p>Control your activity inbox.</p></div></div><div className="read-actions"><button onClick={markAll}>Mark all read <Check size={13}/></button><button onClick={clearRead}>Reset read state <RefreshCw size={13}/></button></div><div className="read-note"><Eye size={14}/><span>Click any activity item to mark it as read. Read state is saved locally on this device.</span></div></section></aside>
+    </div>
   </div>;
 }
 
