@@ -225,12 +225,40 @@ function App() {
   useEffect(() => { localStorage.setItem(PROJECT_CONFIGS_KEY, JSON.stringify(projectConfigs)); }, [projectConfigs]);
   useEffect(() => { localStorage.setItem(TASK_PLANNER_KEY, JSON.stringify(plannerTargets)); }, [plannerTargets]);
   useEffect(() => { localStorage.setItem(WORKLOAD_KEY, JSON.stringify(workloadSettings)); }, [workloadSettings]);
+  useEffect(() => { localStorage.setItem("annotatepro_notifications_v1", JSON.stringify(notifications)); }, [notifications]);
   const OPERATIONS_KEY = "annotatepro_operations_v1";
   const [operationRead, setOperationRead] = useState(() => readStorage(OPERATIONS_KEY, {}));
   const [operationsSearch, setOperationsSearch] = useState("");
   const [operationsFilter, setOperationsFilter] = useState("All");
   const [operationsProject, setOperationsProject] = useState("All Projects");
   const [operationsShowUnread, setOperationsShowUnread] = useState(false);
+  const [notifications, setNotifications] = useState(() => readStorage("annotatepro_notifications_v1", []));
+  const [notificationFilter, setNotificationFilter] = useState("All");
+  const [notificationSearch, setNotificationSearch] = useState("");
+  const AUDIT_KEY = "annotatepro_audit_trail_v1";
+  const [auditEvents, setAuditEvents] = useState(() => readStorage(AUDIT_KEY, []));
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditFilter, setAuditFilter] = useState("All Actions");
+  const [auditProject, setAuditProject] = useState("All Projects");
+  const [auditUser, setAuditUser] = useState("All Users");
+  const [auditTask, setAuditTask] = useState("");
+  const [auditDate, setAuditDate] = useState("All Time");
+  const [auditSelectedTask, setAuditSelectedTask] = useState(null);
+  useEffect(() => { localStorage.setItem(AUDIT_KEY, JSON.stringify(auditEvents)); }, [auditEvents]);
+  useEffect(() => {
+    if (auditEvents.length || (!tasks.length && !projects.length)) return;
+    const now = Date.now();
+    const seed = [];
+    projects.forEach((p, i) => seed.push({ id:`audit-project-${p.id}`, action:"Project Created", actor:"Manjunath", actorRole:"Team Lead", projectId:p.id, taskId:null, details:`Project ${p.name} is available in the workspace.`, timestamp:new Date(now-(i+2)*86400000).toISOString() }));
+    tasks.forEach((t, i) => {
+      seed.push({ id:`audit-task-${t.id}`, action:"Task Created", actor:"System", actorRole:"System", projectId:t.projectId, taskId:t.id, details:`Task ${t.name} added to the dataset.`, timestamp:new Date(now-(i+1)*3600000).toISOString() });
+      if (t.assigneeId) seed.push({ id:`audit-assign-${t.id}`, action:"Task Assigned", actor:"Manjunath", actorRole:"Team Lead", projectId:t.projectId, taskId:t.id, details:`Assigned to ${teamMembers.find(m=>m.id===t.assigneeId)?.name || t.assigneeId}.`, timestamp:new Date(now-(i+1)*1800000).toISOString() });
+      if (t.status && t.status !== "Pending") seed.push({ id:`audit-status-${t.id}`, action:`Status → ${t.status}`, actor:"System", actorRole:"System", projectId:t.projectId, taskId:t.id, details:`Current task status is ${t.status}.`, timestamp:new Date(now-(i+1)*900000).toISOString() });
+    });
+    Object.entries(qaReviews).forEach(([taskId, r], i) => { const t=tasks.find(x=>x.id===taskId); if(t&&r) seed.push({id:`audit-qa-${taskId}`,action:`QA ${r.decision}`,actor:r.reviewer||"Manjunath",actorRole:"Reviewer",projectId:t.projectId,taskId,details:`QA score ${r.score ?? "—"}${r.comment ? ` · ${r.comment}` : ""}`,timestamp:r.reviewedAt||new Date(now-i*600000).toISOString()}); });
+    setAuditEvents(seed.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)));
+  }, []);
+
   useEffect(() => { localStorage.setItem(OPERATIONS_KEY, JSON.stringify(operationRead)); }, [operationRead]);
   useEffect(() => {
     setProjectConfigs(prev => {
@@ -577,9 +605,15 @@ function App() {
     resetView();
   }
 
+  function logAudit(action, taskId=null, projectId=null, details="", actor="Manjunath", actorRole="Team Lead") {
+    const event = { id:`audit-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, action, actor, actorRole, projectId:projectId || tasks.find(t=>t.id===taskId)?.projectId || workspaceProject, taskId, details, timestamp:new Date().toISOString() };
+    setAuditEvents(prev => [event, ...prev].slice(0, 2000));
+  }
+
   function saveTask() {
     if (!currentTask) return;
     setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: currentAnnotations.length ? "In Progress" : t.status } : t));
+    logAudit("Annotation Saved", currentTask.id, currentTask.projectId, `${currentAnnotations.length} annotation${currentAnnotations.length===1?"":"s"} saved.`);
     setWorkspaceMessage("Task saved");
     setTimeout(() => setWorkspaceMessage(""), 1800);
   }
@@ -587,6 +621,7 @@ function App() {
   function submitTask() {
     if (!currentTask) return;
     setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: "Submitted" } : t));
+    logAudit("Task Submitted", currentTask.id, currentTask.projectId, "Task submitted for QA review.");
     setWorkspaceMessage("Task submitted for QA review");
     setTimeout(() => setWorkspaceMessage(""), 1800);
   }
@@ -764,6 +799,7 @@ function App() {
       filename += "-yolo-manifest.txt"; content = buildYoloManifest(list); type = "text/plain;charset=utf-8";
     }
     downloadText(filename, content, type);
+    logAudit("Export Created", null, exportProject === "All Projects" ? null : exportProject, `${filename} exported with ${list.length} task${list.length===1?"":"s"}.`);
     const entry = { id: Date.now(), format: exportFormat, scope: exportScope, tasks: list.length, annotations: list.reduce((n,t) => n + (annotationsByTask[t.id] || []).length, 0), at: new Date().toISOString() };
     setExportHistory(prev => [entry, ...prev].slice(0, 12));
     setExportMessage(`${exportFormat} exported successfully.`);
@@ -826,6 +862,7 @@ function App() {
     setQaReviews(prev => ({ ...prev, [qaSelectedTask.id]: review }));
     const nextStatus = decision === "Approved" ? "Approved" : decision === "Rejected" ? "Rejected" : "QA Review";
     setTasks(prev => prev.map(t => t.id === qaSelectedTask.id ? { ...t, status: nextStatus } : t));
+    logAudit(`QA ${decision}`, qaSelectedTask.id, qaSelectedTask.projectId, `QA score ${qaScore}${qaComment.trim() ? ` · ${qaComment.trim()}` : ""}`, "Manjunath", "Reviewer");
     setQaMessage(`${qaSelectedTask.name} marked ${decision.toLowerCase()}`);
     setTimeout(() => setQaMessage(""), 2200);
   }
@@ -935,6 +972,7 @@ function App() {
   function assignTask(taskId, memberId) {
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigneeId: memberId || null, status: memberId && t.status === "Pending" ? "In Progress" : t.status } : t));
     const member = teamMembers.find(m => m.id === memberId);
+    logAudit(member ? "Task Assigned" : "Task Unassigned", taskId, tasks.find(t=>t.id===taskId)?.projectId, member ? `Assigned to ${member.name}.` : "Assignment cleared.");
     setTeamMessage(member ? `Task assigned to ${member.name}` : "Task assignment cleared");
     setTimeout(() => setTeamMessage(""), 2200);
   }
@@ -974,6 +1012,7 @@ function App() {
         status
       };
     }));
+    plannerAssignmentTaskIds.forEach(id => { const t=tasks.find(x=>x.id===id); logAudit(plannerAssignmentAssignee ? "Task Assigned" : "Task Unassigned", id, t?.projectId, plannerAssignmentAssignee ? `Assigned to ${teamMembers.find(m=>m.id===plannerAssignmentAssignee)?.name || plannerAssignmentAssignee}; reviewer ${teamMembers.find(m=>m.id===plannerAssignmentReviewer)?.name || plannerAssignmentReviewer || "None"}.` : "Assignment cleared."); });
     const count = plannerAssignmentTaskIds.length;
     const member = teamMembers.find(m => m.id === plannerAssignmentAssignee);
     flashPlanner(member ? `${count} task${count === 1 ? "" : "s"} assigned to ${member.name}` : `${count} task${count === 1 ? "" : "s"} unassigned`);
@@ -1008,7 +1047,7 @@ function App() {
 
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Project Configuration", SlidersHorizontal], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
-    ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3], ["Operations", Activity],
+    ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
     ["Import Data", Upload], ["Export", Download], ["Settings", Settings]
   ];
 
@@ -1058,7 +1097,7 @@ function App() {
           <div className="breadcrumb"><span>AnnotatePro</span><b>/</b><strong>{activePage}</strong></div>
           <div className="top-actions">
             <div className="global-search"><Search size={17} /><input placeholder="Search..." /></div>
-            <button className="icon-btn"><Bell size={19} /><i></i></button>
+            <button className="icon-btn notification-trigger" onClick={() => navigate("Notifications")}><Bell size={19} />{notifications.filter(n=>!n.read).length > 0 && <i>{notifications.filter(n=>!n.read).length > 9 ? "9+" : notifications.filter(n=>!n.read).length}</i>}</button>
             <div className="profile-wrap">
               <button className="profile-button" onClick={() => setProfileOpen(v => !v)}><div className="tiny-avatar">M</div><span>Manjunath</span><ChevronDown size={15} /></button>
               {profileOpen && <div className="profile-menu"><b>Manjunath</b><span>Team Lead</span><hr /><button onClick={() => navigate("Settings")}><Settings size={15}/> Settings</button></div>}
@@ -1119,6 +1158,8 @@ function App() {
         {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} /> }
         {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
+        {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
+        {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
         {activePage === "Import Data" && <ImportPage tasks={tasks} datasetMeta={datasetMeta} setDatasetMeta={setDatasetMeta} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={() => imageInputRef.current?.click()} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} />}
         {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
         {activePage === "Settings" && <SimplePage title="Settings" subtitle="Configure workspace and annotation preferences." icon={Settings} stats={["Autosave On", "Shortcuts On", "Local Storage"]} />}
@@ -1855,3 +1896,58 @@ function Quick({icon:Icon,title,onClick}){return <button className="quick-action
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
 
 export default App;
+
+
+function AuditTrailPage({events,projects,tasks,teamMembers,search,setSearch,filter,setFilter,project,setProject,user,setUser,task,setTask,date,setDate,selectedTask,setSelectedTask,onClear,onSeed}) {
+  const actions=["All Actions",...Array.from(new Set(events.map(e=>e.action))).sort()];
+  const users=["All Users",...Array.from(new Set(events.map(e=>e.actor).filter(Boolean))).sort()];
+  const projectName=id=>projects.find(p=>p.id===id)?.name||"General";
+  const taskName=id=>tasks.find(t=>t.id===id)?.name||id||"—";
+  const dayStart=days=>Date.now()-days*86400000;
+  const visible=events.filter(e=>{
+    const hay=`${e.action} ${e.actor} ${e.details} ${projectName(e.projectId)} ${taskName(e.taskId)}`.toLowerCase();
+    const dateOk=date==="All Time"||(date==="Today"&&new Date(e.timestamp)>=new Date(new Date().setHours(0,0,0,0)))||(date==="7 Days"&&new Date(e.timestamp).getTime()>=dayStart(7))||(date==="30 Days"&&new Date(e.timestamp).getTime()>=dayStart(30));
+    return (!search||hay.includes(search.toLowerCase()))&&(filter==="All Actions"||e.action===filter)&&(project==="All Projects"||e.projectId===project)&&(user==="All Users"||e.actor===user)&&(!task||taskName(e.taskId).toLowerCase().includes(task.toLowerCase())||(e.taskId||"").toLowerCase().includes(task.toLowerCase()))&&dateOk;
+  }).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const selected=selectedTask?visible.filter(e=>e.taskId===selectedTask):[];
+  const actionIcon=a=>a.includes("QA")||a.includes("Approved")?ClipboardCheck:a.includes("Assign")?Users:a.includes("Export")?Download:a.includes("Project")?FolderKanban:a.includes("Saved")?Save:a.includes("Submitted")?CheckCircle2:Activity;
+  const downloadAudit=()=>{ const rows=[["Timestamp","Action","Actor","Role","Project","Task","Details"],...visible.map(e=>[e.timestamp,e.action,e.actor,e.actorRole,projectName(e.projectId),taskName(e.taskId),e.details])]; const csv=rows.map(r=>r.map(v=>`"${String(v??"").replaceAll('"','""')}"`).join(",")).join("\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`annotatepro-audit-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url); };
+  const taskGroups=Array.from(new Set(visible.map(e=>e.taskId).filter(Boolean))).slice(0,12);
+  return <div className="page audit-page">
+    <div className="page-head"><div><span className="eyebrow">GOVERNANCE & TRACEABILITY</span><h1>Audit Trail</h1><p>Track who changed what, when it happened, and how each task moved through production.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={downloadAudit}><Download size={15}/> Export CSV</button><button className="danger-btn" onClick={onClear}><Trash2 size={15}/> Clear Log</button></div></div>
+    <div className="stats-grid audit-stats"><StatCard icon={Activity} label="Events" value={events.length} meta="Recorded actions"/><StatCard icon={Users} label="Contributors" value={new Set(events.map(e=>e.actor)).size} meta="Unique actors"/><StatCard icon={FileText} label="Tasks Tracked" value={new Set(events.map(e=>e.taskId).filter(Boolean)).size} meta="With history"/><StatCard icon={ShieldCheck} label="QA Events" value={events.filter(e=>e.action.includes("QA")||e.action.includes("Approved")||e.action.includes("Rejected")).length} meta="Review decisions"/></div>
+    <section className="panel audit-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search task, user, project or action..."/></div><select value={filter} onChange={e=>setFilter(e.target.value)}>{actions.map(a=><option key={a}>{a}</option>)}</select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><select value={user} onChange={e=>setUser(e.target.value)}>{users.map(u=><option key={u}>{u}</option>)}</select><select value={date} onChange={e=>setDate(e.target.value)}><option>All Time</option><option>Today</option><option>7 Days</option><option>30 Days</option></select><input value={task} onChange={e=>setTask(e.target.value)} placeholder="Task ID / name"/></section>
+    <div className="audit-grid"><section className="panel audit-list"><div className="section-header"><div><h2>Activity Timeline</h2><p>{visible.length} events match the current filters.</p></div></div>{visible.length?visible.map(e=>{const Icon=actionIcon(e.action);return <button className={`audit-row ${selectedTask===e.taskId&&e.taskId?"active":""}`} key={e.id} onClick={()=>e.taskId&&setSelectedTask(e.taskId)}><span className="audit-icon"><Icon size={16}/></span><span className="audit-body"><strong>{e.action}</strong><em>{e.details}</em><small>{e.actor} · {e.actorRole} · {projectName(e.projectId)}{e.taskId?` · ${taskName(e.taskId)}`:""}</small></span><time>{new Date(e.timestamp).toLocaleString()}</time></button>}) : <div className="empty-state"><Activity size={30}/><h3>No audit events</h3><p>Try changing the filters or generate a fresh activity snapshot.</p><button className="secondary-btn" onClick={onSeed}><RefreshCw size={14}/> Rebuild baseline</button></div>}</section>
+      <aside className="audit-side"><section className="panel"><div className="section-header"><div><h2>Task History</h2><p>{selectedTask?taskName(selectedTask):"Select a task from the timeline."}</p></div></div>{selectedTask?<div className="task-history">{selected.map(e=>{const Icon=actionIcon(e.action);return <div className="history-item" key={e.id}><span><Icon size={14}/></span><div><b>{e.action}</b><small>{e.details}</small><em>{e.actor} · {new Date(e.timestamp).toLocaleString()}</em></div></div>})}</div>:<div className="task-history-empty"><HistoryIcon/><span>Click a task event to inspect its complete history.</span></div>}</section><section className="panel"><div className="section-header"><div><h2>Tracked Tasks</h2><p>Quick task history access.</p></div></div><div className="audit-task-chips">{taskGroups.length?taskGroups.map(id=><button key={id} className={selectedTask===id?"active":""} onClick={()=>setSelectedTask(id)}>{taskName(id)}</button>):<span>No tasks in view</span>}</div></section></aside></div>
+  </div>;
+}
+function HistoryIcon(){return <Clock3 size={30}/>}
+
+function NotificationsPage({notifications,setNotifications,filter,setFilter,search,setSearch,tasks,projects,teamMembers}) {
+  const projectName = id => projects.find(p=>p.id===id)?.name || "General";
+  const memberName = id => teamMembers.find(m=>m.id===id)?.name || "System";
+  const typeOptions = ["All","Assignment","QA","Rework","Target","Project","System"];
+  const ensureSeed = () => {
+    if (notifications.length) return;
+    const now=Date.now();
+    const seed=[
+      {id:`n-${now}-1`,type:"Assignment",title:"Task assignment updated",message:"New annotation tasks are ready for the team.",projectId:tasks[0]?.projectId||projects[0]?.id,taskId:tasks[0]?.id,createdAt:new Date(now-8*60000).toISOString(),read:false},
+      {id:`n-${now}-2`,type:"QA",title:"QA review pending",message:"Submitted work is waiting for reviewer attention.",projectId:tasks[2]?.projectId||projects[0]?.id,taskId:tasks[2]?.id,createdAt:new Date(now-32*60000).toISOString(),read:false},
+      {id:`n-${now}-3`,type:"Target",title:"Daily target reminder",message:"Review team capacity and remaining targets for today.",createdAt:new Date(now-90*60000).toISOString(),read:true}
+    ]; setNotifications(seed);
+  };
+  useEffect(ensureSeed,[]);
+  const visible=notifications.filter(n=>(filter==="All"||n.type===filter)&&(`${n.title} ${n.message} ${projectName(n.projectId)}`.toLowerCase().includes(search.toLowerCase()))).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const unread=notifications.filter(n=>!n.read).length;
+  const markRead=id=>setNotifications(prev=>prev.map(n=>n.id===id?{...n,read:true}:n));
+  const markAll=()=>setNotifications(prev=>prev.map(n=>({...n,read:true})));
+  const remove=id=>setNotifications(prev=>prev.filter(n=>n.id!==id));
+  const clearAll=()=>setNotifications([]);
+  const iconFor=t=>t==="QA"?ClipboardCheck:t==="Rework"?RotateCcw:t==="Assignment"?Users:t==="Target"?Target:t==="Project"?FolderKanban:Bell;
+  return <div className="page notifications-page">
+    <div className="page-head"><div><span className="eyebrow">NOTIFICATION CENTER</span><h1>Notifications & Alerts</h1><p>Stay on top of assignments, QA, rework, targets and project activity.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={markAll}><Check size={15}/> Mark all read</button><button className="danger-btn" onClick={clearAll}><Trash2 size={15}/> Clear all</button></div></div>
+    <div className="stats-grid notifications-stats"><StatCard icon={Bell} label="Unread" value={unread} meta="Requires attention"/><StatCard icon={AlertCircle} label="Alerts" value={notifications.filter(n=>n.type==="Rework"||n.type==="QA").length} meta="QA & rework"/><StatCard icon={Users} label="Assignments" value={notifications.filter(n=>n.type==="Assignment").length} meta="Team activity"/><StatCard icon={Target} label="Targets" value={notifications.filter(n=>n.type==="Target").length} meta="Capacity reminders"/></div>
+    <div className="panel notification-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search notifications..."/></div><div className="notification-filters">{typeOptions.map(t=><button key={t} className={filter===t?"active":""} onClick={()=>setFilter(t)}>{t}</button>)}</div></div>
+    <div className="notification-list panel">{visible.length===0?<div className="empty-state"><Bell size={30}/><h3>No notifications</h3><p>Your notification center is clear.</p></div>:visible.map(n=>{const Icon=iconFor(n.type);return <div key={n.id} className={`notification-row ${n.read?"read":"unread"}`}><div className="notification-icon"><Icon size={18}/></div><div className="notification-main"><div className="notification-title"><strong>{n.title}</strong>{!n.read&&<span className="unread-dot"/>}</div><p>{n.message}</p><div className="notification-meta"><span>{n.type}</span>{n.projectId&&<span>{projectName(n.projectId)}</span>}{n.taskId&&<span>{n.taskId}</span>}<span>{new Date(n.createdAt).toLocaleString()}</span></div></div><div className="notification-actions">{!n.read&&<button className="secondary-btn small-btn" onClick={()=>markRead(n.id)}><Check size={14}/> Read</button>}<button className="icon-btn" onClick={()=>remove(n.id)} title="Delete notification"><Trash2 size={16}/></button></div></div>})}</div>
+  </div>;
+}
