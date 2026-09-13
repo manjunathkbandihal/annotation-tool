@@ -174,6 +174,18 @@ function App() {
   const [plannerReworkFilter, setPlannerReworkFilter] = useState("Issues");
   const [plannerReworkSelection, setPlannerReworkSelection] = useState([]);
   const [plannerMessage, setPlannerMessage] = useState("");
+  const [plannerAssignmentOpen, setPlannerAssignmentOpen] = useState(false);
+  const [plannerAssignmentTaskIds, setPlannerAssignmentTaskIds] = useState([]);
+  const [plannerAssignmentAssignee, setPlannerAssignmentAssignee] = useState("");
+  const [plannerAssignmentReviewer, setPlannerAssignmentReviewer] = useState("");
+  const [plannerAssignmentPriority, setPlannerAssignmentPriority] = useState("MEDIUM");
+  const [plannerAssignmentQueue, setPlannerAssignmentQueue] = useState("Now");
+  const WORKLOAD_KEY = "annotatepro_workload_v1";
+  const [workloadFilter, setWorkloadFilter] = useState("All Projects");
+  const [workloadRole, setWorkloadRole] = useState("Annotator");
+  const [workloadMessage, setWorkloadMessage] = useState("");
+  const [workloadCapacityMode, setWorkloadCapacityMode] = useState("Daily");
+  const [workloadSettings, setWorkloadSettings] = useState(() => readStorage(WORKLOAD_KEY, { defaultDailyCapacity: 8, defaultWeeklyCapacity: 40 }));
   const [labelEditorOpen, setLabelEditorOpen] = useState(false);
   const [editingLabelId, setEditingLabelId] = useState(null);
   const [labelForm, setLabelForm] = useState({ name: "", color: labelPalette[0], type: "Rectangle" });
@@ -212,6 +224,7 @@ function App() {
 
   useEffect(() => { localStorage.setItem(PROJECT_CONFIGS_KEY, JSON.stringify(projectConfigs)); }, [projectConfigs]);
   useEffect(() => { localStorage.setItem(TASK_PLANNER_KEY, JSON.stringify(plannerTargets)); }, [plannerTargets]);
+  useEffect(() => { localStorage.setItem(WORKLOAD_KEY, JSON.stringify(workloadSettings)); }, [workloadSettings]);
   useEffect(() => {
     setProjectConfigs(prev => {
       const next = { ...prev }; let changed = false;
@@ -226,6 +239,50 @@ function App() {
     setSelectedLabel(config?.labels?.[0]?.id || null);
   }, [workspaceProject, projectConfigs, projects]);
 
+  const flashWorkload = (msg) => { setWorkloadMessage(msg); window.setTimeout(() => setWorkloadMessage(""), 2400); };
+  const workloadProjects = useMemo(() => ["All Projects", ...projects.map(p => p.id)], [projects]);
+  const workloadRows = useMemo(() => {
+    const members = teamMembers.filter(m => m.status === "Active" && (m.role === workloadRole || workloadRole === "All Roles"));
+    return members.map(member => {
+      const memberTasks = tasks.filter(t => t.assigneeId === member.id && (workloadFilter === "All Projects" || t.projectId === workloadFilter));
+      const assigned = memberTasks.length;
+      const inProgress = memberTasks.filter(t => t.status === "In Progress").length;
+      const submitted = memberTasks.filter(t => ["Submitted", "QA Review"].includes(t.status)).length;
+      const completed = memberTasks.filter(t => ["Approved", "Completed"].includes(t.status)).length;
+      const capacity = Number(member.capacity) || workloadSettings.defaultDailyCapacity || 8;
+      const load = capacity ? Math.round((assigned / capacity) * 100) : 0;
+      return { member, memberTasks, assigned, inProgress, submitted, completed, capacity, load: Math.min(100, load) };
+    });
+  }, [teamMembers, tasks, workloadFilter, workloadRole, workloadSettings]);
+  const workloadSummary = useMemo(() => {
+    const active = workloadRows.length;
+    const assigned = workloadRows.reduce((n, r) => n + r.assigned, 0);
+    const capacity = workloadRows.reduce((n, r) => n + r.capacity, 0);
+    const unassigned = tasks.filter(t => (workloadFilter === "All Projects" || t.projectId === workloadFilter) && !t.assigneeId).length;
+    const overloaded = workloadRows.filter(r => r.assigned > r.capacity).length;
+    return { active, assigned, capacity, unassigned, overloaded, utilization: capacity ? Math.round((assigned / capacity) * 100) : 0 };
+  }, [workloadRows, tasks, workloadFilter]);
+  function autoBalanceWorkload() {
+    const pool = teamMembers.filter(m => m.status === "Active" && m.role === "Annotator" && (workloadFilter === "All Projects" || m.projects?.includes(workloadFilter)));
+    if (!pool.length) { flashWorkload("No eligible annotators for this project"); return; }
+    const candidates = tasks.filter(t => (workloadFilter === "All Projects" || t.projectId === workloadFilter) && !t.assigneeId && t.status === "Pending");
+    if (!candidates.length) { flashWorkload("No unassigned pending tasks to balance"); return; }
+    const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.assigneeId === m.id).length]));
+    const next = [...tasks];
+    candidates.forEach(task => {
+      const target = [...pool].sort((a,b) => (counts[a.id]||0) - (counts[b.id]||0))[0];
+      if (!target) return;
+      const idx = next.findIndex(t => t.id === task.id);
+      if (idx >= 0) next[idx] = { ...next[idx], assigneeId: target.id, priority: next[idx].priority || "MEDIUM", queue: next[idx].queue || "Now", status: "In Progress" };
+      counts[target.id] = (counts[target.id] || 0) + 1;
+    });
+    setTasks(next);
+    flashWorkload(`Balanced ${candidates.length} task${candidates.length === 1 ? "" : "s"} across ${pool.length} annotators`);
+  }
+  function updateMemberCapacity(memberId, value) {
+    const capacity = Math.max(1, Number(value) || 1);
+    setTeamMembers(prev => prev.map(m => m.id === memberId ? { ...m, capacity } : m));
+  }
   const currentTask = tasks[selectedTaskIndex] || tasks[0];
   const currentAnnotations = annotationsByTask[currentTask?.id] || [];
   const currentLabel = labels.find((l) => l.id === selectedLabel) || labels[0];
@@ -883,6 +940,40 @@ function App() {
     navigate("Task Planner");
   }
 
+  function openPlannerAssignment(taskIds = [], memberId = "") {
+    const ids = Array.isArray(taskIds) ? taskIds : [taskIds];
+    const first = tasks.find(t => ids.includes(t.id));
+    setPlannerAssignmentTaskIds(ids.filter(Boolean));
+    setPlannerAssignmentAssignee(memberId || first?.assigneeId || "");
+    setPlannerAssignmentReviewer(first?.reviewerId || "");
+    setPlannerAssignmentPriority(first?.priority || plannerPriority || "MEDIUM");
+    setPlannerAssignmentQueue(first?.queue || plannerQueue || "Now");
+    setPlannerAssignmentOpen(true);
+  }
+
+  function savePlannerAssignments() {
+    if (!plannerAssignmentTaskIds.length) { flashPlanner("Select at least one task"); return; }
+    setTasks(prev => prev.map(task => {
+      if (!plannerAssignmentTaskIds.includes(task.id)) return task;
+      let status = task.status;
+      if (plannerAssignmentAssignee && status === "Pending") status = "In Progress";
+      if (!plannerAssignmentAssignee && status === "In Progress") status = "Pending";
+      return {
+        ...task,
+        assigneeId: plannerAssignmentAssignee || null,
+        reviewerId: plannerAssignmentReviewer || null,
+        priority: plannerAssignmentPriority,
+        queue: plannerAssignmentQueue,
+        status
+      };
+    }));
+    const count = plannerAssignmentTaskIds.length;
+    const member = teamMembers.find(m => m.id === plannerAssignmentAssignee);
+    flashPlanner(member ? `${count} task${count === 1 ? "" : "s"} assigned to ${member.name}` : `${count} task${count === 1 ? "" : "s"} unassigned`);
+    setPlannerAssignmentOpen(false);
+    setPlannerAssignmentTaskIds([]);
+  }
+
   function setPlannerTarget(role, memberId, field, value) {
     setPlannerTargets(prev => ({
       ...prev,
@@ -909,7 +1000,7 @@ function App() {
   }
 
   const navItems = [
-    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Project Configuration", SlidersHorizontal], ["Task Planner", Target], ["Annotation Workspace", Grid3X3],
+    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Project Configuration", SlidersHorizontal], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
     ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3],
     ["Import Data", Upload], ["Export", Download], ["Settings", Settings]
   ];
@@ -977,7 +1068,18 @@ function App() {
           queue={plannerQueue} setQueue={setPlannerQueue} date={plannerDate} setDate={setPlannerDate}
           targets={plannerTargets} setTarget={setPlannerTarget} reworkFilter={plannerReworkFilter} setReworkFilter={setPlannerReworkFilter}
           selection={plannerReworkSelection} setSelection={setPlannerReworkSelection} onRework={applyPlannerRework} onRefresh={()=>flashPlanner("Task Planner refreshed")}
-          onBack={()=>setPlannerProjectId(null)} onOpenWorkspace={(id)=>{ setWorkspaceProject(id); navigate("Annotation Workspace"); }} message={plannerMessage}
+          onBack={()=>setPlannerProjectId(null)} onOpenWorkspace={(id)=>{ setWorkspaceProject(id); navigate("Annotation Workspace"); }}
+          onAssign={openPlannerAssignment} onCloseAssignment={()=>setPlannerAssignmentOpen(false)} onSaveAssignment={savePlannerAssignments}
+          assignmentOpen={plannerAssignmentOpen} assignmentTaskIds={plannerAssignmentTaskIds} assignmentAssignee={plannerAssignmentAssignee} setAssignmentAssignee={setPlannerAssignmentAssignee}
+          assignmentReviewer={plannerAssignmentReviewer} setAssignmentReviewer={setPlannerAssignmentReviewer} assignmentPriority={plannerAssignmentPriority} setAssignmentPriority={setPlannerAssignmentPriority}
+          assignmentQueue={plannerAssignmentQueue} setAssignmentQueue={setPlannerAssignmentQueue} message={plannerMessage}
+        />}
+        {activePage === "Workload" && <WorkloadPage
+          projects={projects} rows={workloadRows} summary={workloadSummary} tasks={tasks}
+          project={workloadFilter} setProject={setWorkloadFilter} projectOptions={workloadProjects}
+          role={workloadRole} setRole={setWorkloadRole} capacityMode={workloadCapacityMode} setCapacityMode={setWorkloadCapacityMode}
+          settings={workloadSettings} setSettings={setWorkloadSettings} onBalance={autoBalanceWorkload}
+          onCapacity={updateMemberCapacity} message={workloadMessage} onOpenPlanner={openTaskPlanner}
         />}
         {activePage === "Annotation Workspace" && (
           <Workspace
@@ -1208,7 +1310,9 @@ function TaskPlannerPage({
   projects, tasks, teamMembers, annotations, qaReviews, selectedProjectId, setSelectedProjectId,
   priority, setPriority, queue, setQueue, date, setDate, targets, setTarget,
   reworkFilter, setReworkFilter, selection, setSelection, onRework, onRefresh, onBack,
-  onOpenWorkspace, message
+  onOpenWorkspace, onAssign, assignmentOpen, assignmentTaskIds, assignmentAssignee, setAssignmentAssignee,
+  assignmentReviewer, setAssignmentReviewer, assignmentPriority, setAssignmentPriority, assignmentQueue, setAssignmentQueue,
+  onCloseAssignment, onSaveAssignment, message
 }) {
   const [search, setSearch] = useState("");
   const [showAllProjects, setShowAllProjects] = useState(!selectedProjectId);
@@ -1288,10 +1392,24 @@ function TaskPlannerPage({
       <MiniStat label="Total Tasks" value={total.toLocaleString()}/><MiniStat label="Assigned" value={assigned.toLocaleString()}/><MiniStat label="Unassigned" value={unassigned.toLocaleString()}/><MiniStat label="Submitted" value={submitted.toLocaleString()}/><MiniStat label="Issues" value={issues.toLocaleString()}/><MiniStat label="Annotators" value={annotators.length}/><MiniStat label="Awaiting Review" value={awaiting.toLocaleString()}/><MiniStat label="In Review" value={inReview.toLocaleString()}/><MiniStat label="Reviewed" value={reviewed.toLocaleString()}/>
     </section>
 
+    <section className="panel planner-section assignment-section">
+      <div className="planner-section-head"><div><h2><UserPlus size={18}/> Task Assignment</h2><p>Assign tasks to annotators and reviewers, then control priority and queue placement.</p></div><button className="primary-btn" onClick={()=>onAssign(projectTasks.slice(0,1).map(t=>t.id))}><UserPlus size={15}/> Assign Tasks</button></div>
+      <div className="assignment-toolbar"><div className="assignment-summary"><span><b>{assigned}</b> assigned</span><span><b>{unassigned}</b> unassigned</span><span><b>{projectTasks.filter(t=>t.priority === "TOP").length}</b> top priority</span><span><b>{projectTasks.filter(t=>t.queue === "Hold").length}</b> on hold</span></div><button className="secondary-btn" onClick={()=>onAssign(projectTasks.filter(t=>!t.assigneeId).slice(0,20).map(t=>t.id))} disabled={!unassigned}><Plus size={14}/> Assign unassigned</button></div>
+      <div className="assignment-task-list">
+        {projectTasks.slice(0,25).map(t => { const a=teamMembers.find(m=>m.id===t.assigneeId); const r=teamMembers.find(m=>m.id===t.reviewerId); return <div className="assignment-task-row" key={t.id}>
+          <div className="assignment-task-main"><span className="task-id-chip">{t.id}</span><b>{t.name}</b><StatusBadge status={t.status}/></div>
+          <div className="assignment-task-meta"><span>{a ? `A: ${a.name}` : "Unassigned"}</span><span>{r ? `R: ${r.name}` : "No reviewer"}</span><span className={`priority-mini ${String(t.priority||"MEDIUM").toLowerCase()}`}>{t.priority||"MEDIUM"}</span><span>{t.queue||"Now"}</span></div>
+          <button className="tiny-outline" onClick={()=>onAssign([t.id])}>Manage</button>
+        </div> })}
+        {!projectTasks.length && <div className="planner-empty-row">No tasks are available for this project.</div>}
+      </div>
+      {projectTasks.length>25 && <div className="rework-more">Showing first 25 tasks. Use Import Data or the project workspace for the full dataset.</div>}
+    </section>
+
     <section className="panel planner-section">
       <div className="planner-section-head"><div><h2>Annotator Tracking</h2><p>Assignment, submission and approval progress for this project.</p></div><span className="planner-section-tag">{annotators.length} annotators</span></div>
       <div className="planner-table-wrap"><table className="planner-table"><thead><tr><th>ANNOTATOR</th><th>TOTAL</th><th>PENDING</th><th>SUBMITTED</th><th>HAS ANNOTATIONS</th><th>CLEAN/IRRELEVANT</th><th>APPROVED</th><th>PROGRESS</th><th>ACTIONS</th></tr></thead><tbody>
-        {annotators.map(member => { const mine=projectTasks.filter(t=>t.assigneeId===member.id); const pending=mine.filter(t=>["Pending","In Progress"].includes(t.status)).length; const sub=mine.filter(t=>["Submitted","QA Review","Approved","Rejected","Changes Requested"].includes(t.status)).length; const ann=mine.reduce((n,t)=>n+(annotations[t.id]||[]).length,0); const approved=mine.filter(t=>qaReviews[t.id]?.decision === "Approved" || t.status === "Approved").length; const bad=mine.filter(t=>["Rejected","Changes Requested"].includes(t.status) || ["Rejected","Changes Requested"].includes(qaReviews[t.id]?.decision)).length; const pct=mine.length?Math.round((sub/mine.length)*100):0; return <tr key={member.id}><td><b>{member.name}</b><small>{member.email}</small></td><td>{mine.length}</td><td className="planner-purple">{pending}</td><td className="planner-green">{sub}</td><td className="planner-purple">{ann}</td><td className="planner-red">{bad}</td><td className="planner-blue">{approved}</td><td><div className="planner-row-progress"><span><i style={{width:`${pct}%`}}/></span><b>{pct}%</b></div></td><td><button className="tiny-outline" onClick={()=>onOpenWorkspace(selectedProjectId)}>Re-assign</button><button className="tiny-danger" onClick={()=>onOpenWorkspace(selectedProjectId)}>Unassign</button></td></tr> })}
+        {annotators.map(member => { const mine=projectTasks.filter(t=>t.assigneeId===member.id); const pending=mine.filter(t=>["Pending","In Progress"].includes(t.status)).length; const sub=mine.filter(t=>["Submitted","QA Review","Approved","Rejected","Changes Requested"].includes(t.status)).length; const ann=mine.reduce((n,t)=>n+(annotations[t.id]||[]).length,0); const approved=mine.filter(t=>qaReviews[t.id]?.decision === "Approved" || t.status === "Approved").length; const bad=mine.filter(t=>["Rejected","Changes Requested"].includes(t.status) || ["Rejected","Changes Requested"].includes(qaReviews[t.id]?.decision)).length; const pct=mine.length?Math.round((sub/mine.length)*100):0; return <tr key={member.id}><td><b>{member.name}</b><small>{member.email}</small></td><td>{mine.length}</td><td className="planner-purple">{pending}</td><td className="planner-green">{sub}</td><td className="planner-purple">{ann}</td><td className="planner-red">{bad}</td><td className="planner-blue">{approved}</td><td><div className="planner-row-progress"><span><i style={{width:`${pct}%`}}/></span><b>{pct}%</b></div></td><td><button className="tiny-outline" onClick={()=>onAssign(mine.map(t=>t.id), member.id)}>Re-assign</button><button className="tiny-danger" onClick={()=>onAssign(mine.map(t=>t.id), "")}>Unassign</button></td></tr> })}
         {!annotators.length && <tr><td colSpan="9"><div className="planner-empty-row">No active annotators have access to this project.</div></td></tr>}
       </tbody></table></div>
     </section>
@@ -1316,8 +1434,32 @@ function TaskPlannerPage({
       <TargetTable role="reviewers" people={reviewers} tasks={projectTasks} annotations={annotations} qaReviews={qaReviews} targets={targets} setTarget={setTarget} date={date} reviewer />
     </section>
     {message && <div className="workspace-toast planner-toast"><CheckCircle2 size={17}/>{message}</div>}
+    {assignmentOpen && <PlannerAssignmentModal
+      tasks={projectTasks.filter(t=>assignmentTaskIds.includes(t.id))} teamMembers={teamMembers}
+      assignee={assignmentAssignee} setAssignee={setAssignmentAssignee} reviewer={assignmentReviewer} setReviewer={setAssignmentReviewer}
+      priority={assignmentPriority} setPriority={setAssignmentPriority} queue={assignmentQueue} setQueue={setAssignmentQueue}
+      onClose={onCloseAssignment} onSave={onSaveAssignment}
+    />}
   </div>;
 }
+
+function PlannerAssignmentModal({tasks, teamMembers, assignee, setAssignee, reviewer, setReviewer, priority, setPriority, queue, setQueue, onClose, onSave}) {
+  const annotators = teamMembers.filter(m=>m.status === "Active" && m.role === "Annotator");
+  const reviewers = teamMembers.filter(m=>m.status === "Active" && m.role === "Reviewer");
+  return <div className="modal-backdrop"><form className="modal planner-assignment-modal" onSubmit={e=>{e.preventDefault();onSave();}}>
+    <div className="modal-head"><div><span className="eyebrow">TASK OPERATIONS</span><h2>Manage Assignment</h2><p>{tasks.length} task{tasks.length===1?"":"s"} selected for this operation.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
+    <div className="planner-assignment-task-preview">{tasks.slice(0,8).map(t=><div key={t.id}><span>{t.id}</span><b>{t.name}</b></div>)}{tasks.length>8&&<small>+ {tasks.length-8} more tasks</small>}</div>
+    <div className="assignment-form-grid">
+      <label><span>ANNOTATOR</span><select value={assignee} onChange={e=>setAssignee(e.target.value)}><option value="">Unassigned</option>{annotators.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+      <label><span>REVIEWER</span><select value={reviewer} onChange={e=>setReviewer(e.target.value)}><option value="">No reviewer</option>{reviewers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+      <label><span>PRIORITY</span><select value={priority} onChange={e=>setPriority(e.target.value)}>{["TOP","HIGH","MEDIUM","LOW"].map(v=><option key={v}>{v}</option>)}</select></label>
+      <label><span>QUEUE</span><select value={queue} onChange={e=>setQueue(e.target.value)}>{["Now","Next","Later","Hold"].map(v=><option key={v}>{v}</option>)}</select></label>
+    </div>
+    <div className="assignment-capacity-note"><Zap size={16}/><span>Assignments update the Task Planner immediately and are saved locally.</span></div>
+    <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/> Save Assignment</button></div>
+  </form></div>;
+}
+
 
 function TargetTable({role, people, tasks, annotations, qaReviews, targets, setTarget}) {
   return <div className="planner-table-wrap"><table className="planner-table target-table"><thead><tr><th>{role === "reviewers" ? "REVIEWER" : "ANNOTATOR"}</th><th>ASSIGNED</th><th>{role === "reviewers" ? "REVIEWED" : "COMPLETED"}</th><th>REMAINING</th><th>DAILY TARGET</th><th>WEEKLY TARGET</th><th>DAYS NEEDED</th><th>TODAY'S PROGRESS</th><th>THIS WEEK</th><th>QUEUE MODE</th></tr></thead><tbody>
@@ -1633,6 +1775,20 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
 function TeamMemberModal({editing, form, setForm, projects, onClose, onSave}) {
   const toggleProject = id => setForm(prev => ({...prev, projects: prev.projects.includes(id) ? prev.projects.filter(x=>x!==id) : [...prev.projects, id]}));
   return <div className="modal-backdrop"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
+}
+
+function WorkloadPage({projects,rows,summary,tasks,project,setProject,projectOptions,role,setRole,capacityMode,setCapacityMode,settings,setSettings,onBalance,onCapacity,message,onOpenPlanner}) {
+  const projectName = id => projects.find(p => p.id === id)?.name || "All Projects";
+  const statusForLoad = load => load > 100 ? "Overloaded" : load >= 80 ? "High load" : load >= 50 ? "Healthy" : "Available";
+  const statusClass = load => load > 100 ? "overloaded" : load >= 80 ? "high" : load >= 50 ? "healthy" : "available";
+  return <div className="page workload-page">
+    <div className="page-head workload-head"><div><span className="eyebrow">WORKFORCE OPERATIONS</span><h1>Workload & Capacity</h1><p>Monitor team capacity, balance queues and prevent annotation bottlenecks.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={onOpenPlanner}><Target size={15}/> Task Planner</button><button className="primary-btn" onClick={onBalance}><Zap size={15}/> Auto Balance</button></div></div>
+    <div className="workload-controls panel"><div className="workload-control"><span>PROJECT</span><select value={project} onChange={e=>setProject(e.target.value)}>{projectOptions.map(id=><option key={id} value={id}>{projectName(id)}</option>)}</select></div><div className="workload-control"><span>ROLE</span><select value={role} onChange={e=>setRole(e.target.value)}><option>Annotator</option><option>Reviewer</option><option>All Roles</option></select></div><div className="workload-control"><span>CAPACITY VIEW</span><div className="segmented-control"><button className={capacityMode==="Daily"?"active":""} onClick={()=>setCapacityMode("Daily")}>Daily</button><button className={capacityMode==="Weekly"?"active":""} onClick={()=>setCapacityMode("Weekly")}>Weekly</button></div></div><div className="workload-settings"><label><span>Default {capacityMode.toLowerCase()} capacity</span><input type="number" min="1" value={capacityMode==="Daily"?settings.defaultDailyCapacity:settings.defaultWeeklyCapacity} onChange={e=>setSettings(prev=>({...prev,[capacityMode==="Daily"?"defaultDailyCapacity":"defaultWeeklyCapacity"]:Math.max(1,Number(e.target.value)||1)}))}/><b>tasks</b></label></div></div>
+    <div className="stats-grid workload-stats"><StatCard icon={Users} label="Active Members" value={summary.active} meta="Available workforce"/><StatCard icon={ClipboardCheck} label="Assigned Tasks" value={summary.assigned} meta="Current allocation"/><StatCard icon={AlertCircle} label="Unassigned" value={summary.unassigned} meta="Needs allocation"/><StatCard icon={Activity} label="Utilization" value={`${summary.utilization}%`} meta="Across visible capacity"/><StatCard icon={AlertCircle} label="Overloaded" value={summary.overloaded} meta="Above capacity"/></div>
+    <section className="panel workload-panel"><div className="section-header"><div><h2>Team Capacity</h2><p>Live workload based on assigned tasks and each member's capacity.</p></div><span className="workload-project-chip">{projectName(project)}</span></div><div className="workload-table-wrap"><table className="workload-table"><thead><tr><th>MEMBER</th><th>ROLE</th><th>PROJECT ACCESS</th><th>ASSIGNED</th><th>CAPACITY</th><th>LOAD</th><th>PROGRESS</th><th>CAPACITY</th></tr></thead><tbody>{rows.length ? rows.map(r=><tr key={r.member.id}><td><div className="workload-member"><div className="user-avatar small">{r.member.name?.charAt(0)||"?"}</div><div><b>{r.member.name}</b><span>{r.member.email}</span></div></div></td><td><span className="role-pill">{r.member.role}</span></td><td><span className="project-access">{r.member.projects?.length || 0} project{r.member.projects?.length===1?"":"s"}</span></td><td><strong>{r.assigned}</strong><small>{r.inProgress} active · {r.submitted} review · {r.completed} done</small></td><td><strong>{r.capacity}</strong><small>{capacityMode.toLowerCase()} target</small></td><td><span className={`load-pill ${statusClass((r.assigned/r.capacity)*100)}`}>{Math.round((r.assigned/r.capacity)*100)}%</span><small>{statusForLoad((r.assigned/r.capacity)*100)}</small></td><td><div className="workload-progress"><span><i style={{width:`${Math.min(100,Math.round((r.assigned/r.capacity)*100))}%`}}/></span><b>{Math.min(100,Math.round((r.assigned/r.capacity)*100))}%</b></div></td><td><input className="capacity-input" type="number" min="1" value={r.capacity} onChange={e=>onCapacity(r.member.id,e.target.value)}/></td></tr>) : <tr><td colSpan="8" className="workload-empty">No active members match this view.</td></tr>}</tbody></table></div></section>
+    <section className="workload-bottom-grid"><div className="panel workload-panel compact"><div className="section-header"><div><h2>Queue Health</h2><p>Tasks that need attention.</p></div></div><div className="queue-health-grid"><MiniStat label="Unassigned" value={summary.unassigned}/><MiniStat label="Pending" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&t.status==="Pending").length}/><MiniStat label="In Progress" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&t.status==="In Progress").length}/><MiniStat label="QA Review" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&["Submitted","QA Review"].includes(t.status)).length}/></div><div className="queue-health-note"><ShieldCheck size={16}/><span>Keep individual load below <b>100%</b> to reduce queue risk.</span></div></div><div className="panel workload-panel compact"><div className="section-header"><div><h2>Capacity Guide</h2><p>Recommended operating bands.</p></div></div><div className="capacity-guide"><div><span className="guide-dot available"></span><b>0–49%</b><small>Available</small></div><div><span className="guide-dot healthy"></span><b>50–79%</b><small>Healthy</small></div><div><span className="guide-dot high"></span><b>80–100%</b><small>High load</small></div><div><span className="guide-dot overloaded"></span><b>&gt;100%</b><small>Overloaded</small></div></div><p className="workload-tip"><Zap size={14}/> Auto Balance distributes pending unassigned tasks to the least-loaded eligible annotators.</p></div></section>
+    {message && <div className="workload-toast"><CheckCircle2 size={16}/>{message}</div>}
+  </div>;
 }
 
 function SimplePage({title,subtitle,icon:Icon,stats}) {
