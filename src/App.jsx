@@ -1293,20 +1293,6 @@ function Workspace({
           <div className="queue-footer"><span>Queue</span><b>{workspaceTasks.length} tasks</b></div>
         </aside>
 
-        <aside className="tool-panel build8-tool-panel">
-          <div className="tool-panel-scroll">
-            {toolGroups.map(([group, items]) => <div className="tool-group" key={group}><div className="tool-group-title">{group}</div>{items.map(([id,Icon,title,key]) => <button key={id} className={`tool-button ${tool===id?"active":""}`} title={`${title} (${key})`} onClick={()=>{setTool(id); if(id!=="polygon"&&id!=="polyline"){} }}><Icon size={18}/><span>{title}</span><kbd>{key}</kbd></button>)}</div>)}
-            <div className="tool-divider"/>
-            <button className="tool-button" onClick={onUndo}><Undo2 size={18}/><span>Undo</span><kbd>Ctrl Z</kbd></button>
-            <button className="tool-button" onClick={onRedo}><Redo2 size={18}/><span>Redo</span><kbd>Ctrl ⇧ Z</kbd></button>
-            <button className="tool-button" onClick={onDuplicate} disabled={!selectedAnnotation}><Copy size={18}/><span>Duplicate</span></button>
-            <button className="tool-button danger-tool" onClick={onDelete} disabled={!selectedAnnotation}><Trash2 size={18}/><span>Delete</span><kbd>Del</kbd></button>
-            <div className="tool-divider"/>
-            <button className="tool-button" onClick={()=>setShowShortcuts(true)}><Target size={18}/><span>Shortcuts</span></button>
-          </div>
-          <div className="tool-bottom"><button className="tool-button" onClick={onReset}><RotateCcw size={18}/><span>Reset View</span></button></div>
-        </aside>
-
         <section className="canvas-area build8-canvas-area">
           <div className="canvas-toolbar build8-toolbar">
             <div className="canvas-tool-status"><span className="tool-dot"></span><b>{toolGroups.flatMap(g=>g[1]).find(t=>t[0]===tool)?.[2] || "Select"}</b><small>{currentAnnotations.length} regions</small></div>
@@ -1323,6 +1309,24 @@ function Workspace({
               <div className="canvas-crosshair"><span></span></div>
             </div> : <div className="empty-canvas"><ImageIcon size={45}/><h3>No images yet</h3><p>Import images to start annotating.</p><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div>}
             {drawing && (drawing.type === "polygon" || drawing.type === "polyline") && <div className="drawing-hint">{drawing.points.length} points · double-click to finish · Esc to cancel</div>}
+            <div className="floating-tool-dock">
+              <div className="floating-zoom-slider" title={`Zoom ${Math.round(zoom*100)}%`}>
+                <input type="range" min="0.25" max="4" step="0.05" value={zoom} onChange={e=>setZoom(parseFloat(e.target.value))}/>
+              </div>
+              <div className="floating-tool-group">
+                {toolGroups.flatMap(g=>g[1]).map(([id,Icon,title,key]) => <button key={id} className={`floating-tool-btn ${tool===id?"active":""}`} title={`${title} (${key})`} onClick={()=>setTool(id)}><Icon size={16}/></button>)}
+              </div>
+              <div className="floating-tool-group">
+                <button className="floating-tool-btn" title="Undo (Ctrl+Z)" onClick={onUndo}><Undo2 size={16}/></button>
+                <button className="floating-tool-btn" title="Redo (Ctrl+Shift+Z)" onClick={onRedo}><Redo2 size={16}/></button>
+                <button className="floating-tool-btn" title="Duplicate" onClick={onDuplicate} disabled={!selectedAnnotation}><Copy size={16}/></button>
+                <button className="floating-tool-btn danger" title="Delete (Del)" onClick={onDelete} disabled={!selectedAnnotation}><Trash2 size={16}/></button>
+              </div>
+              <div className="floating-tool-group">
+                <button className="floating-tool-btn" title="Reset view" onClick={onReset}><RotateCcw size={16}/></button>
+                <button className="floating-tool-btn" title="Shortcuts" onClick={()=>setShowShortcuts(true)}><Target size={16}/></button>
+              </div>
+            </div>
           </div>
           <div className="canvas-bottom build8-bottom">
             <button onClick={onPrevious} disabled={selectedTaskIndex<=0}>← Previous</button><div className="task-counter"><b>{selectedTaskIndex+1}</b> / {tasks.length}</div><button onClick={onNext} disabled={selectedTaskIndex>=tasks.length-1}>Next →</button>
