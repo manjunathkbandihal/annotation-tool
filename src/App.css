@@ -43,7 +43,18 @@ body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);backgroun
 .category-drill-title h1{margin:0}
 .category-dot{width:9px;height:9px;border-radius:50%;flex:none}
 .category-count-pill{font-size:9px;font-weight:700;color:#5c6877;background:#f2f4f6;border:1px solid var(--line);border-radius:20px;padding:4px 9px}
-.category-chip{font-size:7px;font-weight:800;padding:3px 6px;border-radius:5px;letter-spacing:.02em}
+.category-tile-wrap{position:relative}
+.category-tile-wrap .category-tile{width:100%}
+.category-tile-actions{position:absolute;top:12px;right:12px;display:flex;gap:4px;opacity:0;transition:.15s}
+.category-tile-wrap:hover .category-tile-actions{opacity:1}
+.category-tile-actions button{width:26px;height:26px;border-radius:7px;border:1px solid var(--line);background:#fff;display:grid;place-items:center;color:#69747f}
+.category-tile-actions button:hover{background:#f4f6f8}
+.category-tile-actions button.danger-icon:hover{color:#dc2626;border-color:#fecaca;background:#fef2f2}
+.category-drill-desc{font-size:9px;color:var(--muted);margin:6px 0 0;max-width:480px}
+.category-drill-actions{display:flex;gap:8px}
+.icon-picker-row .icon-choice{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#5c6a78;padding:0;background:#fff;border:1px solid var(--line);box-shadow:none}
+.icon-picker-row .icon-choice.selected{background:#eff6ff;border-color:#93c5fd;color:#2563eb}
+@media(max-width:620px){.category-drill-actions{flex-direction:column;width:100%}}
 @media(max-width:900px){.category-tile-grid{grid-template-columns:1fr 1fr}}
 @media(max-width:620px){.category-tile-grid{grid-template-columns:1fr}.category-drill-head{flex-direction:column;gap:12px;align-items:stretch}}
 
