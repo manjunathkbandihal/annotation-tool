@@ -1127,7 +1127,7 @@ function App() {
   };
 
   const navItems = [
-    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Project Configuration", SlidersHorizontal], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
+    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
     ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
     ["Import Data", Upload], ["Export", Download], ["Settings", Settings]
   ];
@@ -1188,7 +1188,7 @@ function App() {
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} />}
         {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} />}
-        {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
+        {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
           selectedProjectId={plannerProjectId} setSelectedProjectId={setPlannerProjectId} priority={plannerPriority} setPriority={setPlannerPriority}
@@ -1603,7 +1603,7 @@ function TargetTable({role, people, tasks, annotations, qaReviews, targets, setT
   </tbody></table></div>;
 }
 
-function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel}) {
+function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,onBack,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel}) {
   const project = groups.find(g => g.id === configProject) || groups[0];
   const reviewers = ["", "Priya Sharma", "Kavya Nair"];
   const workspaceOptions = ["", "Production", "QA Sandbox", "Client Review"];
@@ -1616,7 +1616,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
     { id: "Uncertainty", title: "Uncertainty sampling", text: "Tasks are chosen according to model uncertainty score (active learning mode).", pro: true }
   ];
   return <div className="page project-config-page">
-    <div className="page-head"><div><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div><div className="config-project-picker"><span>PROJECT</span><select value={configProject} onChange={e=>setConfigProject(e.target.value)}>{groups.map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select></div></div>
+    <div className="page-head"><div><button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {project?.name || "Projects"}</button><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div></div>
     <div className="config-overview"><div className="config-project-icon" style={{background:project?.color?`${project.color}22`:undefined,color:project?.color||undefined}}><GroupIcon size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{groupTaskIds.length} task{groupTaskIds.length===1?"":"s"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
     <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button></div>
 
