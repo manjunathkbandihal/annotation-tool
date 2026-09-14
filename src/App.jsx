@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, AlertCircle, BarChart3, Bell, Calendar, CheckCircle2, ChevronDown,
+  Activity, AlertCircle, BarChart3, Bell, Brush, Calendar, CheckCircle2, ChevronDown,
   ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eye, FileText,
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
@@ -19,28 +19,34 @@ const labelPalette = [
   "#0891b2", "#ca8a04", "#db2777", "#4f46e5", "#65a30d"
 ];
 
+const PROJECT_CATEGORIES = [
+  { id: "Segmentation", icon: Brush, color: "#1D9E75" },
+  { id: "Detection", icon: Square, color: "#378ADD" },
+  { id: "Combined", icon: Layers, color: "#8B5CF6" }
+];
+
 const sampleProjects = [
   {
     id: "p1", name: "Road Object Detection", client: "Mobility AI",
-    annotationType: "Bounding Box", totalImages: 120, completedImages: 46,
+    annotationType: "Bounding Box", category: "Detection", totalImages: 120, completedImages: 46,
     team: "Road Vision Team", status: "In Progress", startDate: "2026-09-01",
     dueDate: "2026-09-25", description: "Vehicle and road-object detection dataset."
   },
   {
     id: "p2", name: "Pavement Segmentation", client: "Urban Mapping",
-    annotationType: "Segmentation", totalImages: 80, completedImages: 29,
+    annotationType: "Segmentation", category: "Segmentation", totalImages: 80, completedImages: 29,
     team: "Segmentation Team", status: "In Progress", startDate: "2026-08-25",
     dueDate: "2026-09-20", description: "Road and pavement segmentation."
   },
   {
     id: "p3", name: "Street Infrastructure", client: "City Intelligence",
-    annotationType: "Polygon", totalImages: 150, completedImages: 64,
+    annotationType: "Polygon", category: "Combined", totalImages: 150, completedImages: 64,
     team: "Infrastructure Team", status: "In Progress", startDate: "2026-08-20",
     dueDate: "2026-10-05", description: "Street infrastructure object annotation."
   },
   {
     id: "p4", name: "Traffic Sign Classification", client: "DriveSafe AI",
-    annotationType: "Classification", totalImages: 50, completedImages: 50,
+    annotationType: "Classification", category: "Combined", totalImages: 50, completedImages: 50,
     team: "Classification Team", status: "Completed", startDate: "2026-08-01",
     dueDate: "2026-09-10", description: "Traffic sign classification."
   }
@@ -64,7 +70,7 @@ const defaultLabels = [
 ];
 
 const emptyProject = {
-  name: "", client: "", annotationType: "Bounding Box", totalImages: 100,
+  name: "", client: "", annotationType: "Bounding Box", category: "Segmentation", totalImages: 100,
   completedImages: 0, team: "Annotation Team", status: "Pending",
   startDate: "", dueDate: "", description: ""
 };
@@ -174,14 +180,20 @@ function App() {
     projectId: project.id,
     labels: defaultLabels.map(label => ({ ...label, id: `${project.id}-${label.id}` })),
     requireQa: true, allowAnnotatorSubmit: true, autoSave: true, defaultReviewer: "", maxTasksPerAnnotator: 10,
-    instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality."
+    instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality.",
+    color: labelPalette[0],
+    workspace: "",
+    taskSampling: "Sequential",
+    showInstructionsBeforeLabeling: false,
+    usePredictions: false,
+    predictionSource: ""
   });
   const [projectConfigs, setProjectConfigs] = useState(() => {
     const saved = readStorage(PROJECT_CONFIGS_KEY, null);
     return saved || Object.fromEntries(sampleProjects.map(project => [project.id, makeDefaultProjectConfig(project)]));
   });
   const [configProject, setConfigProject] = useState(projects[0]?.id || "p1");
-  const [configTab, setConfigTab] = useState("Labels");
+  const [configTab, setConfigTab] = useState("General");
   const [configMessage, setConfigMessage] = useState("");
   const TASK_PLANNER_KEY = "annotatepro_task_planner_v1";
   const [plannerProjectId, setPlannerProjectId] = useState(null);
@@ -363,9 +375,9 @@ function App() {
     setSidebarOpen(false);
   }
 
-  function openCreateProject() {
+  function openCreateProject(category) {
     setEditingProjectId(null);
-    setProjectForm(emptyProject);
+    setProjectForm(category ? { ...emptyProject, category } : emptyProject);
     setProjectModalOpen(true);
   }
 
@@ -388,6 +400,11 @@ function App() {
     }
     setProjectModalOpen(false);
   }
+
+  function updateProjectMeta(id, patch) {
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, ...patch } : p));
+  }
+
 
   function deleteProject(id) {
     if (!window.confirm("Delete this project?")) return;
@@ -1140,7 +1157,7 @@ function App() {
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateProject} onNavigate={navigate} />}
         {activePage === "Projects" && <ProjectsPage projects={filteredProjects} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} />}
-        {activePage === "Project Configuration" && <ProjectConfigurationPage projects={projects} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
+        {activePage === "Project Configuration" && <ProjectConfigurationPage projects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateProjectMeta} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
           selectedProjectId={plannerProjectId} setSelectedProjectId={setPlannerProjectId} priority={plannerPriority} setPriority={setPlannerPriority}
@@ -1213,7 +1230,7 @@ function Dashboard({ projects, stats, onCreate, onNavigate }) {
     <div className="page">
       <div className="page-head">
         <div><span className="eyebrow">OVERVIEW</span><h1>Good afternoon, Manjunath</h1><p>Here’s what’s happening across your annotation workspace.</p></div>
-        <button className="primary-btn" onClick={onCreate}><Plus size={17}/> Create Project</button>
+        <button className="primary-btn" onClick={()=>onCreate()}><Plus size={17}/> Create Project</button>
       </div>
       <div className="stats-grid">
         <StatCard icon={FolderKanban} label="Active Projects" value={stats.active} meta="+2 this month" />
@@ -1554,16 +1571,68 @@ function TargetTable({role, people, tasks, annotations, qaReviews, targets, setT
   </tbody></table></div>;
 }
 
-function ProjectConfigurationPage({projects,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel}) {
+function ProjectConfigurationPage({projects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel}) {
   const project = projects.find(p => p.id === configProject) || projects[0];
   const reviewers = ["", "Priya Sharma", "Kavya Nair"];
+  const workspaceOptions = ["", "Production", "QA Sandbox", "Client Review"];
+  const previewTask = tasks?.find(t => t.projectId === project?.id);
+  const samplingOptions = [
+    { id: "Sequential", title: "Sequential sampling", text: "Tasks are ordered by Task ID." },
+    { id: "Random", title: "Random sampling", text: "Tasks are chosen with uniform random." },
+    { id: "Uncertainty", title: "Uncertainty sampling", text: "Tasks are chosen according to model uncertainty score (active learning mode).", pro: true }
+  ];
   return <div className="page project-config-page">
     <div className="page-head"><div><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div><div className="config-project-picker"><span>PROJECT</span><select value={configProject} onChange={e=>setConfigProject(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div></div>
-    <div className="config-overview"><div className="config-project-icon"><Layers size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{project?.client || ""} · {project?.annotationType || "Annotation"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
-    <div className="config-tabs"><button className={tab==="Labels"?"active":""} onClick={()=>setTab("Labels")}><Palette size={16}/> Labels</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Guidelines"?"active":""} onClick={()=>setTab("Guidelines")}><FileText size={16}/> Guidelines</button></div>
-    {tab === "Labels" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Label schema</h2><p>These labels are available to annotators in the selected project.</p></div><button className="primary-btn" onClick={onAddLabel}><Plus size={16}/> Add Label</button></div><div className="label-schema-list">{config.labels.length ? config.labels.map((label,i)=><div className="schema-row" key={label.id}><span className="schema-number">{i+1}</span><span className="schema-color" style={{background:label.color}}></span><div className="schema-main"><b>{label.name}</b><span>{label.type}</span></div><span className="schema-shortcut">{label.type === "Rectangle" ? "BOX" : label.type.toUpperCase()}</span><div className="schema-actions"><button onClick={()=>onEditLabel(label)} title="Edit"><Edit3 size={15}/></button><button className="danger-icon" onClick={()=>onDeleteLabel(label.id)} title="Delete"><Trash2 size={15}/></button></div></div>) : <div className="config-empty"><Palette size={34}/><h3>No labels configured</h3><p>Add labels to make this project annotatable.</p></div>}</div></section>}
+    <div className="config-overview"><div className="config-project-icon" style={{background:config.color?`${config.color}22`:undefined,color:config.color||undefined}}><Layers size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{project?.client || ""} · {project?.annotationType || "Annotation"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
+    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button></div>
+
+    {tab === "General" && <section className="panel config-panel general-settings-panel">
+      <div className="config-panel-head"><div><h2>General Settings</h2><p>Basic identity and task-ordering rules for this project.</p></div><SlidersHorizontal size={20}/></div>
+      <div className="general-settings-grid">
+        <label><span>PROJECT NAME</span><input value={project?.name||""} onChange={e=>onUpdateProject(project.id,{name:e.target.value})} placeholder="Project name"/></label>
+        <label className="full"><span>DESCRIPTION</span><textarea rows="3" value={project?.description||""} onChange={e=>onUpdateProject(project.id,{description:e.target.value})} placeholder="What is this project about?"/></label>
+        <label><span>WORKSPACE</span><select value={config.workspace||""} onChange={e=>onUpdateConfig({workspace:e.target.value})}>{workspaceOptions.map(w=><option key={w} value={w}>{w||"Select an option"}</option>)}</select></label>
+      </div>
+      <div className="general-settings-section">
+        <span className="section-label">COLOR</span>
+        <div className="color-picker-row general-color-row"><button type="button" className={!config.color?"selected":""} style={{background:"#e5e9ee"}} onClick={()=>onUpdateConfig({color:""})}/>{labelPalette.map(c=><button type="button" key={c} className={config.color===c?"selected":""} style={{background:c}} onClick={()=>onUpdateConfig({color:c})}/>)}</div>
+      </div>
+      <div className="general-settings-section">
+        <span className="section-label">TASK SAMPLING</span>
+        <div className="sampling-options">{samplingOptions.map(opt=><label key={opt.id} className={`sampling-option ${config.taskSampling===opt.id?"active":""}`}><input type="radio" name="taskSampling" checked={config.taskSampling===opt.id} onChange={()=>onUpdateConfig({taskSampling:opt.id})}/><div><b>{opt.title}{opt.pro && <em className="pro-badge">Enterprise</em>}</b><span>{opt.text}</span></div></label>)}</div>
+      </div>
+    </section>}
+
+    {tab === "Labeling Interface" && <section className="panel config-panel labeling-interface-panel">
+      <div className="config-panel-head"><div><h2>Labeling Interface</h2><p>These labels are available to annotators, with a live preview of how the workspace will look.</p></div><button className="primary-btn" onClick={onAddLabel}><Plus size={16}/> Add Label</button></div>
+      <div className="labeling-interface-grid">
+        <div className="label-schema-list">{config.labels.length ? config.labels.map((label,i)=><div className="schema-row" key={label.id}><span className="schema-number">{i+1}</span><span className="schema-color" style={{background:label.color}}></span><div className="schema-main"><b>{label.name}</b><span>{label.type}</span></div><span className="schema-shortcut">{label.type === "Rectangle" ? "BOX" : label.type.toUpperCase()}</span><div className="schema-actions"><button onClick={()=>onEditLabel(label)} title="Edit"><Edit3 size={15}/></button><button className="danger-icon" onClick={()=>onDeleteLabel(label.id)} title="Delete"><Trash2 size={15}/></button></div></div>) : <div className="config-empty"><Palette size={34}/><h3>No labels configured</h3><p>Add labels to make this project annotatable.</p></div>}</div>
+        <div className="ui-preview-panel">
+          <span className="section-label">UI PREVIEW</span>
+          <div className="ui-preview-image">{previewTask ? <img src={previewTask.image} alt=""/> : <div className="ui-preview-empty"><ImageIcon size={26}/><span>No sample image yet</span></div>}</div>
+          <div className="ui-preview-labels"><span className="section-label">labels</span><div className="ui-preview-label-chips">{config.labels.length ? config.labels.map(l=><span key={l.id} className="preview-chip" style={{background:`${l.color}22`,color:l.color,borderColor:`${l.color}55`}}>{l.name}</span>) : <span className="preview-chip-empty">No labels yet</span>}</div></div>
+          <div className="ui-preview-regions"><span className="section-label">regions</span><div className="ui-preview-regions-empty"><MousePointer2 size={16}/><span>Labeled regions will appear here once annotators start working.</span></div></div>
+        </div>
+      </div>
+    </section>}
+
+    {tab === "Annotation" && <section className="panel config-panel annotation-settings-panel">
+      <div className="config-panel-head"><div><h2>Annotation Settings</h2><p>Instructions annotators see, plus optional prelabeling from predictions.</p></div><FileText size={20}/></div>
+      <div className="annotation-settings-block">
+        <h3>Labeling instructions</h3>
+        <p className="settings-subtext">Write instructions to help annotators complete labeling tasks.</p>
+        <SettingToggle title="Show before labeling" text="Display these instructions to annotators before they start a task." checked={!!config.showInstructionsBeforeLabeling} onChange={v=>onUpdateConfig({showInstructionsBeforeLabeling:v})}/>
+        <textarea className="guideline-editor-textarea" value={config.instructions||""} onChange={e=>onUpdateConfig({instructions:e.target.value})} placeholder="Describe what should and should not be annotated..." rows="8"/>
+      </div>
+      <div className="annotation-settings-block">
+        <h3>Prelabeling</h3>
+        <SettingToggle title="Use predictions to prelabel tasks" text="Enable and select which set of predictions to use for prelabeling." checked={!!config.usePredictions} onChange={v=>onUpdateConfig({usePredictions:v})}/>
+        {config.usePredictions && <label className="prelabel-select"><span>SELECT WHICH PREDICTIONS OR MODEL YOU WANT TO USE</span><select value={config.predictionSource||""} onChange={e=>onUpdateConfig({predictionSource:e.target.value})}><option value="">No predictions available yet</option><option value="latest-export">{project?.name} — latest export</option></select></label>}
+      </div>
+      <div className="guideline-tip"><ShieldCheck size={18}/><div><b>Recommended</b><p>Document edge cases, label definitions, occlusion rules, minimum object size and difficult scenes.</p></div></div>
+    </section>}
+
     {tab === "Workflow" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Annotation workflow</h2><p>Control how tasks move from annotation to quality review.</p></div><CheckSquare size={20}/></div><div className="workflow-settings"><SettingToggle title="Require QA review" text="Every submitted task enters the QA Review queue before approval." checked={config.requireQa} onChange={v=>onUpdateConfig({requireQa:v})}/><SettingToggle title="Allow annotators to submit" text="Annotators can submit completed tasks directly for review." checked={config.allowAnnotatorSubmit} onChange={v=>onUpdateConfig({allowAnnotatorSubmit:v})}/><SettingToggle title="Auto-save annotations" text="Persist annotation changes locally while the task is being edited." checked={config.autoSave} onChange={v=>onUpdateConfig({autoSave:v})}/></div><div className="workflow-grid"><label><span>DEFAULT REVIEWER</span><select value={config.defaultReviewer||""} onChange={e=>onUpdateConfig({defaultReviewer:e.target.value})}>{reviewers.map(r=><option key={r} value={r}>{r || "No default reviewer"}</option>)}</select></label><label><span>MAX TASKS / ANNOTATOR</span><input type="number" min="1" max="1000" value={config.maxTasksPerAnnotator||10} onChange={e=>onUpdateConfig({maxTasksPerAnnotator:Number(e.target.value)||1})}/></label></div><div className="workflow-stages"><span>WORKFLOW</span><div><b>Pending</b><i>→</i><b>In Progress</b><i>→</i><b>Submitted</b><i>→</i><b>QA Review</b><i>→</i><b>Approved</b></div></div></section>}
-    {tab === "Guidelines" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Project instructions</h2><p>Give annotators clear, project-specific guidance that stays with the workspace.</p></div><FileText size={20}/></div><label className="guideline-editor"><span>ANNOTATION GUIDELINES</span><textarea value={config.instructions||""} onChange={e=>onUpdateConfig({instructions:e.target.value})} placeholder="Describe what should and should not be annotated..." rows="10"/></label><div className="guideline-tip"><ShieldCheck size={18}/><div><b>Recommended</b><p>Document edge cases, label definitions, occlusion rules, minimum object size and difficult scenes.</p></div></div></section>}
     {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
     {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>setLabelEditorOpen(false)} onSave={onSaveLabel}/>} 
   </div>;
@@ -1572,26 +1641,58 @@ function SettingToggle({title,text,checked,onChange}) { return <button type="but
 function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
 function ProjectsPage({projects,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner}) {
-  return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div><button className="primary-btn" onClick={onCreate}><Plus size={17}/> Create Project</button></div>
+  const [activeCategory, setActiveCategory] = useState(null);
+  const categoryOf = p => p.category || "Combined";
+  const activeCategoryMeta = PROJECT_CATEGORIES.find(c => c.id === activeCategory);
+
+  if (activeCategory) {
+    const categoryProjects = projects.filter(p => categoryOf(p) === activeCategory);
+    return <div className="page">
+      <div className="page-head category-drill-head">
+        <div>
+          <button className="category-back-btn" onClick={()=>setActiveCategory(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Projects</button>
+          <div className="category-drill-title"><span className="category-dot" style={{background:activeCategoryMeta?.color}}/><h1>{activeCategory}</h1><span className="category-count-pill">{categoryProjects.length} project{categoryProjects.length===1?"":"s"}</span></div>
+        </div>
+        <button className="primary-btn" onClick={()=>onCreate(activeCategory)}><Plus size={17}/> Add {activeCategory} Project</button>
+      </div>
+      <section className="panel">
+        <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search projects..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
+        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)}/>)}</div>
+        {!categoryProjects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No {activeCategory.toLowerCase()} projects yet</h3><p>Create one to get started.</p></div>}
+      </section>
+    </div>;
+  }
+
+  return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div><button className="primary-btn" onClick={()=>onCreate()}><Plus size={17}/> Create Project</button></div>
     <div className="project-summary"><MiniStat label="Total Projects" value={projects.length}/><MiniStat label="In Progress" value={projects.filter(p=>p.status==="In Progress").length}/><MiniStat label="Completed" value={projects.filter(p=>p.status==="Completed").length}/><MiniStat label="Pending" value={projects.filter(p=>p.status==="Pending").length}/></div>
-    <section className="panel"><div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search projects..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
-      <div className="project-grid">{projects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)}/>)}</div>
-      {!projects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No projects found</h3><p>Try another search or create a new project.</p></div>}
-    </section>
+    <div className="project-filters standalone"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search projects..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
+    <div className="category-tile-grid">
+      {PROJECT_CATEGORIES.map(cat => {
+        const count = projects.filter(p => categoryOf(p) === cat.id).length;
+        const Icon = cat.icon;
+        return <button key={cat.id} className="category-tile" onClick={()=>setActiveCategory(cat.id)}>
+          <span className="category-tile-icon" style={{background:`${cat.color}22`,color:cat.color}}><Icon size={20}/></span>
+          <b>{cat.id}</b>
+          <span className="category-tile-count">{count} project{count===1?"":"s"}</span>
+        </button>;
+      })}
+    </div>
+    {!projects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No projects found</h3><p>Try another search or create a new project.</p></div>}
   </div>;
 }
 
 function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onPlanner}) {
-  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div><button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button></div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button></div></div></article>;
+  const catMeta = PROJECT_CATEGORIES.find(c => c.id === (p.category || "Combined"));
+  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div><button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button></div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta">{catMeta && <span className="category-chip" style={{background:`${catMeta.color}1a`,color:catMeta.color}}>{catMeta.id}</span>}<span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button></div></div></article>;
 }
 
 function ProjectModal({form,setForm,editing,onClose,onSave}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
-  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT CONFIGURATION</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label>Project name<input required value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Vehicle Detection"/></label><label>Client / organization<input required value={form.client} onChange={e=>set("client",e.target.value)} placeholder="Client name"/></label><label>Annotation type<select value={form.annotationType} onChange={e=>set("annotationType",e.target.value)}><option>Bounding Box</option><option>Polygon</option><option>Segmentation</option><option>Classification</option><option>Keypoints</option><option>Polyline</option></select></label><label>Team<select value={form.team} onChange={e=>set("team",e.target.value)}><option>Annotation Team</option><option>Road Vision Team</option><option>Segmentation Team</option><option>Infrastructure Team</option><option>Classification Team</option></select></label><label>Total images<input type="number" min="1" value={form.totalImages} onChange={e=>set("totalImages",e.target.value)}/></label><label>Completed images<input type="number" min="0" value={form.completedImages} onChange={e=>set("completedImages",e.target.value)}/></label><label>Start date<input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}/></label><label>Due date<input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)}/></label><label>Status<select value={form.status} onChange={e=>set("status",e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Project description..."/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
+  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT CONFIGURATION</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label>Project name<input required value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Vehicle Detection"/></label><label>Client / organization<input required value={form.client} onChange={e=>set("client",e.target.value)} placeholder="Client name"/></label><label>Category<select value={form.category||"Segmentation"} onChange={e=>set("category",e.target.value)}>{PROJECT_CATEGORIES.map(c=><option key={c.id} value={c.id}>{c.id}</option>)}</select></label><label>Annotation type<select value={form.annotationType} onChange={e=>set("annotationType",e.target.value)}><option>Bounding Box</option><option>Polygon</option><option>Segmentation</option><option>Classification</option><option>Keypoints</option><option>Polyline</option></select></label><label>Team<select value={form.team} onChange={e=>set("team",e.target.value)}><option>Annotation Team</option><option>Road Vision Team</option><option>Segmentation Team</option><option>Infrastructure Team</option><option>Classification Team</option></select></label><label>Total images<input type="number" min="1" value={form.totalImages} onChange={e=>set("totalImages",e.target.value)}/></label><label>Completed images<input type="number" min="0" value={form.completedImages} onChange={e=>set("completedImages",e.target.value)}/></label><label>Start date<input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}/></label><label>Due date<input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)}/></label><label>Status<select value={form.status} onChange={e=>set("status",e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Project description..."/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
 }
 
 function ProjectDetails({project,onClose,onEdit}) {
-  return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">PROJECT DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Project</button></div></div></div>;
+  return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">PROJECT DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Category" value={project.category||"Combined"}/><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Project</button></div></div></div>;
 }
 
 function ImportPage({tasks,datasetMeta,setDatasetMeta,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport}) {
