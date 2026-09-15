@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, AlertCircle, Archive, ArrowUpDown, BarChart3, Bell, Brush, Calendar, CheckCircle2, ChevronDown,
-  ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eye, FileText,
+  ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eraser, Eye, FileText,
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
   Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
@@ -11,7 +11,7 @@ import "./App.css";
 
 const PROJECTS_KEY = "annotatepro_projects_v2";
 const TASKS_KEY = "annotatepro_tasks_v1";
-const DATASET_META_KEY = "annotatepro_dataset_meta_v1";
+const DATASETS_KEY = "annotatepro_datasets_v1";
 const SETTINGS_KEY = "annotatepro_settings_v1";
 
 const labelPalette = [
@@ -55,13 +55,18 @@ const sampleProjects = [
 ];
 
 const sampleTasks = [
-  { id: "task-001", projectId: "p1", name: "road_scene_001.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-002", projectId: "p1", name: "road_scene_002.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1494783367193-149034c05e8f?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-003", projectId: "p2", name: "road_scene_003.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-004", projectId: "p2", name: "street_scene_004.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-005", projectId: "p3", name: "street_scene_005.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1600&q=85" },
-  { id: "task-006", projectId: "p4", name: "traffic_scene_006.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1600&q=85" }
+  { id: "task-001", projectId: "p1", datasetId: "ds-p1-default", name: "road_scene_001.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-002", projectId: "p1", datasetId: "ds-p1-default", name: "road_scene_002.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1494783367193-149034c05e8f?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-003", projectId: "p2", datasetId: "ds-p2-default", name: "road_scene_003.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-004", projectId: "p2", datasetId: "ds-p2-default", name: "street_scene_004.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-005", projectId: "p3", datasetId: "ds-p3-default", name: "street_scene_005.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-006", projectId: "p4", datasetId: "ds-p4-default", name: "traffic_scene_006.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1600&q=85" }
 ];
+
+function defaultDatasetFor(project) {
+  return { id: `ds-${project.id}-default`, projectId: project.id, name: "Default Dataset", description: "Initial imported dataset.", version: 1, status: "Active", createdAt: new Date().toISOString() };
+}
+const defaultDatasets = sampleProjects.map(defaultDatasetFor);
 
 const defaultLabels = [
   { id: "car", name: "Car", color: "#2563eb", type: "Rectangle" },
@@ -172,7 +177,50 @@ function App() {
 
 
   const [tasks, setTasks] = useState(() => readStorage(TASKS_KEY, sampleTasks));
-  const [datasetMeta, setDatasetMeta] = useState(() => readStorage(DATASET_META_KEY, { name: "Production Dataset", description: "AnnotatePro image dataset", created: new Date().toISOString() }));
+  const [datasets, setDatasets] = useState(() => readStorage(DATASETS_KEY, defaultDatasets));
+  useEffect(() => { localStorage.setItem(DATASETS_KEY, JSON.stringify(datasets)); }, [datasets]);
+  useEffect(() => {
+    setDatasets(prev => {
+      const next = [...prev]; let changed = false;
+      projects.forEach(project => { if (!next.some(d => d.projectId === project.id)) { next.push(defaultDatasetFor(project)); changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [projects]);
+
+  const emptyDatasetForm = { name: "", description: "", version: 1 };
+  const [datasetModalOpen, setDatasetModalOpen] = useState(false);
+  const [editingDatasetId, setEditingDatasetId] = useState(null);
+  const [datasetForm, setDatasetForm] = useState(emptyDatasetForm);
+  const [importTaskId, setImportTaskId] = useState(sampleProjects[0]?.id || "");
+  const [activeDatasetId, setActiveDatasetId] = useState(null);
+  const [datasetListSearch, setDatasetListSearch] = useState("");
+  const [datasetListStatus, setDatasetListStatus] = useState("Active");
+  const [importTargetDataset, setImportTargetDataset] = useState(null);
+
+  function openCreateDataset(projectId) { setEditingDatasetId(null); setDatasetForm({ ...emptyDatasetForm, projectId }); setDatasetModalOpen(true); }
+  function openEditDataset(ds) { setEditingDatasetId(ds.id); setDatasetForm({ name: ds.name, description: ds.description || "", version: ds.version || 1, projectId: ds.projectId }); setDatasetModalOpen(true); }
+  function saveDataset(e) {
+    e.preventDefault();
+    if (!datasetForm.name.trim()) return;
+    if (editingDatasetId) {
+      setDatasets(prev => prev.map(d => d.id === editingDatasetId ? { ...d, ...datasetForm } : d));
+    } else {
+      setDatasets(prev => [...prev, { ...datasetForm, id: `ds-${Date.now()}`, status: "Active", createdAt: new Date().toISOString() }]);
+    }
+    setDatasetModalOpen(false);
+  }
+  function archiveDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Archived" } : d)); }
+  function restoreDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Active" } : d)); }
+  function deleteDataset(id) {
+    if (tasks.some(t => t.datasetId === id)) {
+      setDatasetToast("Remove or move this dataset's images before deleting it.");
+      setTimeout(() => setDatasetToast(""), 3000);
+      return;
+    }
+    setDatasets(prev => prev.filter(d => d.id !== id));
+    if (activeDatasetId === id) setActiveDatasetId(null);
+  }
+
   const [datasetSearch, setDatasetSearch] = useState("");
   const [datasetStatus, setDatasetStatus] = useState("All");
   const [datasetView, setDatasetView] = useState("table");
@@ -183,6 +231,12 @@ function App() {
   const [labels, setLabels] = useState(defaultLabels);
   const [annotationsByTask, setAnnotationsByTask] = useState({});
   const [selectedAnnotationId, setSelectedAnnotationId] = useState(null);
+  const [additionalSelectedIds, setAdditionalSelectedIds] = useState([]);
+  const [marquee, setMarquee] = useState(null);
+  const clipboardRef = useRef([]);
+  const selectedIds = useMemo(() => (
+    selectedAnnotationId ? [selectedAnnotationId, ...additionalSelectedIds.filter(id => id !== selectedAnnotationId)] : additionalSelectedIds
+  ), [selectedAnnotationId, additionalSelectedIds]);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [drawing, setDrawing] = useState(null);
@@ -272,6 +326,142 @@ function App() {
   const [labelForm, setLabelForm] = useState({ name: "", color: labelPalette[0], type: "Rectangle" });
   const [importOpen, setImportOpen] = useState(false);
   const [imageUploadOpen, setImageUploadOpen] = useState(false);
+  const IMPORT_HISTORY_KEY = "annotatepro_import_history_v1";
+  const [importHistory, setImportHistory] = useState(() => readStorage(IMPORT_HISTORY_KEY, []));
+  useEffect(() => { localStorage.setItem(IMPORT_HISTORY_KEY, JSON.stringify(importHistory)); }, [importHistory]);
+  const [importStep, setImportStep] = useState("upload");
+  const [importRows, setImportRows] = useState([]);
+  const [importColumns, setImportColumns] = useState([]);
+  const [importMapping, setImportMapping] = useState({ name: "", image: "", status: "" });
+  const [importFileName, setImportFileName] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importDuplicateMode, setImportDuplicateMode] = useState("Skip");
+  const structuredInputRef = useRef(null);
+
+  function resetImportWizard() {
+    setImportStep("upload"); setImportRows([]); setImportColumns([]);
+    setImportMapping({ name: "", image: "", status: "" }); setImportFileName(""); setImportError("");
+  }
+
+  function parseCsv(text) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (!lines.length) return { columns: [], rows: [] };
+    const splitLine = (line) => {
+      const out = []; let cur = ""; let quoted = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { if (quoted && line[i+1] === '"') { cur += '"'; i++; } else quoted = !quoted; }
+        else if (ch === "," && !quoted) { out.push(cur); cur = ""; }
+        else cur += ch;
+      }
+      out.push(cur);
+      return out.map(v => v.trim());
+    };
+    const columns = splitLine(lines[0]);
+    const rows = lines.slice(1).map(line => {
+      const values = splitLine(line);
+      return Object.fromEntries(columns.map((c, i) => [c, values[i] ?? ""]));
+    });
+    return { columns, rows };
+  }
+
+  function flattenRecord(record) {
+    const out = {};
+    const walk = (obj, prefix) => {
+      Object.entries(obj || {}).forEach(([k, v]) => {
+        const key = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === "object" && !Array.isArray(v)) walk(v, key);
+        else out[key] = Array.isArray(v) ? JSON.stringify(v) : v;
+      });
+    };
+    walk(record, "");
+    return out;
+  }
+
+  function autoMap(columns) {
+    const find = (patterns) => columns.find(c => patterns.some(p => c.toLowerCase().includes(p))) || "";
+    return {
+      name: find(["name", "file", "title", "id"]),
+      image: find(["image", "url", "src", "path", "uri"]),
+      status: find(["status", "state"])
+    };
+  }
+
+  async function handleStructuredFile(file) {
+    if (!file) return;
+    setImportFileName(file.name);
+    setImportError("");
+    try {
+      const text = await file.text();
+      let parsed;
+      if (file.name.toLowerCase().endsWith(".json")) {
+        const data = JSON.parse(text);
+        const list = Array.isArray(data) ? data : Array.isArray(data.tasks) ? data.tasks : Array.isArray(data.data) ? data.data : [data];
+        const flat = list.map(flattenRecord);
+        const columns = [...new Set(flat.flatMap(r => Object.keys(r)))];
+        parsed = { columns, rows: flat };
+      } else {
+        parsed = parseCsv(text);
+      }
+      if (!parsed.rows.length) { setImportError("No rows found in this file."); return; }
+      setImportColumns(parsed.columns);
+      setImportRows(parsed.rows);
+      setImportMapping(autoMap(parsed.columns));
+      setImportStep("mapping");
+    } catch (err) {
+      setImportError(`Could not parse this file: ${err.message}`);
+    }
+  }
+
+  const importValidation = useMemo(() => {
+    if (!importRows.length) return { valid: [], invalid: [], duplicates: [] };
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id;
+    const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
+    const seen = new Set();
+    const valid = [], invalid = [], duplicates = [];
+    importRows.forEach((row, i) => {
+      const name = String(row[importMapping.name] ?? "").trim();
+      const image = String(row[importMapping.image] ?? "").trim();
+      const status = String(row[importMapping.status] ?? "").trim();
+      const entry = { row: i + 1, name, image, status: ["Pending","In Progress","Completed"].includes(status) ? status : "Pending" };
+      if (!name) { invalid.push({ ...entry, reason: "Missing name" }); return; }
+      if (!image) { invalid.push({ ...entry, reason: "Missing image URL" }); return; }
+      if (!/^https?:\/\/|^data:image\//i.test(image)) { invalid.push({ ...entry, reason: "Invalid image URL" }); return; }
+      if (existingNames.has(name) || seen.has(name)) { duplicates.push({ ...entry, reason: "Duplicate name" }); return; }
+      seen.add(name);
+      valid.push(entry);
+    });
+    return { valid, invalid, duplicates };
+  }, [importRows, importMapping, tasks, datasets, importTargetDataset, importTaskId]);
+
+  function runStructuredImport() {
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id;
+    const targetDataset = datasets.find(d => d.id === targetDatasetId);
+    if (!targetDataset) { setImportError("Select a dataset to import into."); return; }
+    const toImport = importDuplicateMode === "Import anyway"
+      ? [...importValidation.valid, ...importValidation.duplicates]
+      : importValidation.valid;
+    if (!toImport.length) { setImportError("Nothing valid to import."); return; }
+    const newTasks = toImport.map((entry, i) => ({
+      id: `import-${Date.now()}-${i}`,
+      name: entry.name, status: entry.status, image: entry.image,
+      source: importFileName.toLowerCase().endsWith(".json") ? "JSON import" : "CSV import",
+      projectId: targetDataset.projectId, datasetId: targetDatasetId,
+      createdAt: new Date().toISOString()
+    }));
+    setTasks(prev => [...prev, ...newTasks]);
+    setImportHistory(prev => [{
+      id: `imp-${Date.now()}`, fileName: importFileName, datasetId: targetDatasetId,
+      datasetName: targetDataset.name, imported: newTasks.length,
+      skipped: importValidation.invalid.length + (importDuplicateMode === "Import anyway" ? 0 : importValidation.duplicates.length),
+      at: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+    setImportOpen(false);
+    resetImportWizard();
+    setDatasetToast(`${newTasks.length} task${newTasks.length > 1 ? "s" : ""} imported from ${importFileName}`);
+    setTimeout(() => setDatasetToast(""), 2600);
+  }
+
   const fileInputRef = useRef(null);
   const imageInputRef = useRef(null);
   const canvasRef = useRef(null);
@@ -290,10 +480,6 @@ function App() {
   useEffect(() => {
     localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
   }, [tasks]);
-
-  useEffect(() => {
-    localStorage.setItem(DATASET_META_KEY, JSON.stringify(datasetMeta));
-  }, [datasetMeta]);
 
   useEffect(() => {
     localStorage.setItem("annotatepro_qa_reviews_v1", JSON.stringify(qaReviews));
@@ -487,34 +673,159 @@ function App() {
     updateCurrentAnnotations(next);
   }
 
-  function selectAnnotation(id) {
-    setSelectedAnnotationId(id);
+  function selectAnnotation(id, shiftKey = false) {
+    if (shiftKey) {
+      if (id === selectedAnnotationId) {
+        const [next, ...rest] = additionalSelectedIds;
+        setSelectedAnnotationId(next || null);
+        setAdditionalSelectedIds(rest);
+      } else if (additionalSelectedIds.includes(id)) {
+        setAdditionalSelectedIds(prev => prev.filter(x => x !== id));
+      } else if (selectedAnnotationId) {
+        setAdditionalSelectedIds(prev => [...prev, id]);
+      } else {
+        setSelectedAnnotationId(id);
+      }
+    } else {
+      setSelectedAnnotationId(id);
+      setAdditionalSelectedIds([]);
+    }
     setTool("select");
   }
 
+  function annotationBounds(a) {
+    if (a.type === "rectangle") return { minX: a.x, minY: a.y, maxX: a.x + a.w, maxY: a.y + a.h };
+    if (a.points?.length) {
+      const xs = a.points.map(p => p.x), ys = a.points.map(p => p.y);
+      return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+    }
+    return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  }
+
+  function copySelection() {
+    if (!selectedIds.length) return;
+    clipboardRef.current = selectedIds.map(id => currentAnnotations.find(a => a.id === id)).filter(Boolean).map(a => JSON.parse(JSON.stringify(a)));
+    setWorkspaceMessage(`Copied ${clipboardRef.current.length} object${clipboardRef.current.length > 1 ? "s" : ""}`);
+    setTimeout(() => setWorkspaceMessage(""), 1600);
+  }
+
+  function pasteClipboard() {
+    if (!clipboardRef.current.length) return;
+    const copies = clipboardRef.current.map((a, i) => ({
+      ...a,
+      id: `${a.type}-${Date.now()}-${i}`,
+      x: a.x == null ? a.x : Math.min(94, a.x + 3),
+      y: a.y == null ? a.y : Math.min(94, a.y + 3),
+      points: a.points?.map(p => ({ x: Math.min(96, p.x + 3), y: Math.min(96, p.y + 3) }))
+    }));
+    pushHistory([...currentAnnotations, ...copies]);
+    setSelectedAnnotationId(copies[0]?.id || null);
+    setAdditionalSelectedIds(copies.slice(1).map(c => c.id));
+  }
+
+  function eraseAt(point) {
+    if (!currentTask) return;
+    const ERASE_RADIUS = 3;
+    setAnnotationsByTask(prev => {
+      const list = prev[currentTask.id] || [];
+      const next = list
+        .map(a => {
+          if (a.type !== "brush" || a.locked) return a;
+          const points = a.points.filter(p => distance(p, point) > ERASE_RADIUS);
+          return points.length >= 2 ? { ...a, points } : null;
+        })
+        .filter(Boolean);
+      return { ...prev, [currentTask.id]: next };
+    });
+  }
+
+  function selectAll() {
+    if (!currentAnnotations.length) return;
+    setSelectedAnnotationId(currentAnnotations[0].id);
+    setAdditionalSelectedIds(currentAnnotations.slice(1).map(a => a.id));
+  }
+
   function deleteSelected() {
-    if (!selectedAnnotationId) return;
-    const next = currentAnnotations.filter(a => a.id !== selectedAnnotationId);
+    if (!selectedIds.length) return;
+    const targets = selectedIds.map(id => currentAnnotations.find(a => a.id === id)).filter(Boolean);
+    const lockedCount = targets.filter(a => a.locked).length;
+    if (lockedCount === targets.length) {
+      setWorkspaceMessage("These objects are locked — unlock them first");
+      setTimeout(() => setWorkspaceMessage(""), 2000);
+      return;
+    }
+    const removeIds = new Set(targets.filter(a => !a.locked).map(a => a.id));
+    const next = currentAnnotations.filter(a => !removeIds.has(a.id));
     pushHistory(next);
     setSelectedAnnotationId(null);
+    setAdditionalSelectedIds([]);
+    if (lockedCount) { setWorkspaceMessage(`${lockedCount} locked object${lockedCount>1?"s were":" was"} skipped`); setTimeout(() => setWorkspaceMessage(""), 2000); }
   }
 
   function duplicateSelected() {
-    const item = currentAnnotations.find(a => a.id === selectedAnnotationId);
-    if (!item) return;
-    const copy = {
+    if (!selectedIds.length) return;
+    const items = selectedIds.map(id => currentAnnotations.find(a => a.id === id)).filter(Boolean);
+    if (!items.length) return;
+    const copies = items.map((item, i) => ({
       ...item,
-      id: `${item.type}-${Date.now()}`,
+      id: `${item.type}-${Date.now()}-${i}`,
       x: item.x == null ? item.x : Math.min(94, item.x + 3),
       y: item.y == null ? item.y : Math.min(94, item.y + 3),
       points: item.points?.map(p => ({ x: Math.min(96, p.x + 3), y: Math.min(96, p.y + 3) }))
-    };
-    pushHistory([...currentAnnotations, copy]);
-    setSelectedAnnotationId(copy.id);
+    }));
+    pushHistory([...currentAnnotations, ...copies]);
+    setSelectedAnnotationId(copies[0]?.id || null);
+    setAdditionalSelectedIds(copies.slice(1).map(c => c.id));
   }
 
   function updateAnnotation(id, patch) {
     updateCurrentAnnotations(currentAnnotations.map(a => a.id === id ? { ...a, ...patch } : a));
+  }
+
+  function toggleAnnotationLock(id) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item) return;
+    pushHistory(currentAnnotations.map(a => a.id === id ? { ...a, locked: !a.locked } : a));
+  }
+
+  function toggleAnnotationVisible(id) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item) return;
+    pushHistory(currentAnnotations.map(a => a.id === id ? { ...a, hidden: !a.hidden } : a));
+  }
+
+  function moveAnnotationOrder(id, delta) {
+    const index = currentAnnotations.findIndex(a => a.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= currentAnnotations.length) return;
+    const next = [...currentAnnotations];
+    [next[index], next[target]] = [next[target], next[index]];
+    pushHistory(next);
+  }
+
+  function insertVertex(id, afterIndex) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item?.points?.length) return;
+    const points = item.points;
+    const a = points[afterIndex];
+    const b = points[(afterIndex + 1) % points.length];
+    if (!b) return;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const nextPoints = [...points.slice(0, afterIndex + 1), mid, ...points.slice(afterIndex + 1)];
+    pushHistory(currentAnnotations.map(x => x.id === id ? { ...x, points: nextPoints } : x));
+  }
+
+  function deleteVertex(id, vertexIndex) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item?.points?.length) return;
+    const minPoints = item.type === "polygon" ? 3 : 2;
+    if (item.points.length <= minPoints) {
+      setWorkspaceMessage(`A ${item.type} needs at least ${minPoints} points`);
+      setTimeout(() => setWorkspaceMessage(""), 2000);
+      return;
+    }
+    const nextPoints = item.points.filter((_, i) => i !== vertexIndex);
+    pushHistory(currentAnnotations.map(x => x.id === id ? { ...x, points: nextPoints } : x));
   }
 
   function imagePoint(e) {
@@ -529,11 +840,23 @@ function App() {
   function onCanvasPointerDown(e) {
     if (tool === "select") {
       const hit = [...currentAnnotations].reverse().find(a => hitTest(a, imagePoint(e)));
-      setSelectedAnnotationId(hit?.id || null);
+      if (hit) { selectAnnotation(hit.id, e.shiftKey); return; }
+      if (!e.shiftKey) { setSelectedAnnotationId(null); setAdditionalSelectedIds([]); }
+      const point = imagePoint(e);
+      setMarquee({ start: point, current: point, additive: e.shiftKey });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
       return;
     }
     if (tool === "pan") {
       panStart.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    if (tool === "eraser") {
+      setHistory(prev => [...prev, currentAnnotations]);
+      setFuture([]);
+      setDrawing({ type: "eraser" });
+      eraseAt(imagePoint(e));
       e.currentTarget.setPointerCapture?.(e.pointerId);
       return;
     }
@@ -591,31 +914,59 @@ function App() {
       setPan({ x: panStart.current.px + (e.clientX - panStart.current.x), y: panStart.current.py + (e.clientY - panStart.current.y) });
       return;
     }
+    if (marquee) {
+      setMarquee(prev => ({ ...prev, current: imagePoint(e) }));
+      return;
+    }
     if (editRef.current) {
       const edit = editRef.current;
       const rect = canvasRef.current?.getBoundingClientRect();
       if (!rect) return;
       const dx = ((e.clientX - edit.startClientX) / rect.width) * 100;
       const dy = ((e.clientY - edit.startClientY) / rect.height) * 100;
-      const a = edit.original;
-      let next = { ...a };
-      if (a.type === "rectangle") {
-        if (edit.mode === "move") {
-          next.x = Math.max(0, Math.min(100 - a.w, a.x + dx));
-          next.y = Math.max(0, Math.min(100 - a.h, a.y + dy));
-        } else {
-          const minSize = 1.2;
-          let left = a.x, top = a.y, right = a.x + a.w, bottom = a.y + a.h;
-          if (edit.mode.includes("w")) left = Math.min(right - minSize, Math.max(0, a.x + dx));
-          if (edit.mode.includes("e")) right = Math.max(left + minSize, Math.min(100, a.x + a.w + dx));
-          if (edit.mode.includes("n")) top = Math.min(bottom - minSize, Math.max(0, a.y + dy));
-          if (edit.mode.includes("s")) bottom = Math.max(top + minSize, Math.min(100, a.y + a.h + dy));
-          next = { ...a, x: left, y: top, w: right - left, h: bottom - top };
-        }
-      } else if (a.points?.length) {
-        next.points = a.points.map(p => ({ x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }));
+      if (edit.mode === "rotate") {
+        const a = edit.originals[0];
+        const cx = a.type === "rectangle" ? a.x + a.w / 2 : a.points.reduce((s,p)=>s+p.x,0)/a.points.length;
+        const cy = a.type === "rectangle" ? a.y + a.h / 2 : a.points.reduce((s,p)=>s+p.y,0)/a.points.length;
+        const cxPx = rect.left + (cx / 100) * rect.width, cyPx = rect.top + (cy / 100) * rect.height;
+        const angle = Math.atan2(e.clientY - cyPx, e.clientX - cxPx) * 180 / Math.PI + 90;
+        const next = { ...a, rotation: Math.round(angle) };
+        setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(item => item.id === a.id ? next : item) }));
+        return;
       }
-      setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(item => item.id === a.id ? next : item) }));
+      const updates = {};
+      edit.originals.forEach(a => {
+        let next = { ...a };
+        if (a.type === "rectangle") {
+          if (edit.mode === "move") {
+            next.x = Math.max(0, Math.min(100 - a.w, a.x + dx));
+            next.y = Math.max(0, Math.min(100 - a.h, a.y + dy));
+          } else {
+            const minSize = 1.2;
+            let left = a.x, top = a.y, right = a.x + a.w, bottom = a.y + a.h;
+            if (edit.mode.includes("w")) left = Math.min(right - minSize, Math.max(0, a.x + dx));
+            if (edit.mode.includes("e")) right = Math.max(left + minSize, Math.min(100, a.x + a.w + dx));
+            if (edit.mode.includes("n")) top = Math.min(bottom - minSize, Math.max(0, a.y + dy));
+            if (edit.mode.includes("s")) bottom = Math.max(top + minSize, Math.min(100, a.y + a.h + dy));
+            next = { ...a, x: left, y: top, w: right - left, h: bottom - top };
+          }
+        } else if (a.points?.length) {
+          if (edit.mode.startsWith("vertex:")) {
+            const vi = Number(edit.mode.split(":")[1]);
+            next.points = a.points.map((p, i) => i === vi
+              ? { x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }
+              : p);
+          } else {
+            next.points = a.points.map(p => ({ x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }));
+          }
+        }
+        updates[a.id] = next;
+      });
+      setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(item => updates[item.id] || item) }));
+      return;
+    }
+    if (drawing && drawing.type === "eraser") {
+      eraseAt(imagePoint(e));
       return;
     }
     if (drawing && drawing.type === "brush") {
@@ -630,7 +981,28 @@ function App() {
 
   function onCanvasPointerUp() {
     if (panStart.current) { panStart.current = null; return; }
+    if (marquee) {
+      const { start, current, additive } = marquee;
+      const minX = Math.min(start.x, current.x), maxX = Math.max(start.x, current.x);
+      const minY = Math.min(start.y, current.y), maxY = Math.max(start.y, current.y);
+      setMarquee(null);
+      if (maxX - minX < 0.6 && maxY - minY < 0.6) return;
+      const hits = currentAnnotations.filter(a => {
+        const b = annotationBounds(a);
+        return b.minX <= maxX && b.maxX >= minX && b.minY <= maxY && b.maxY >= minY;
+      }).map(a => a.id);
+      if (!hits.length) return;
+      if (additive) {
+        setAdditionalSelectedIds(prev => [...new Set([...prev, ...hits.filter(id=>id!==selectedAnnotationId)])]);
+        if (!selectedAnnotationId) setSelectedAnnotationId(hits[0]);
+      } else {
+        setSelectedAnnotationId(hits[0]);
+        setAdditionalSelectedIds(hits.slice(1));
+      }
+      return;
+    }
     if (editRef.current) { editRef.current = null; return; }
+    if (drawing && drawing.type === "eraser") { setDrawing(null); return; }
     if (!drawing) return;
     if (drawing.type === "brush") {
       if (drawing.points.length >= 2) {
@@ -656,9 +1028,17 @@ function App() {
     e.stopPropagation();
     const original = currentAnnotations.find(a => a.id === id);
     if (!original) return;
-    setSelectedAnnotationId(id);
+    const isBatchMove = mode === "move" && selectedIds.includes(id) && selectedIds.length > 1;
+    if (!isBatchMove) selectAnnotation(id, e.shiftKey);
     setTool("select");
-    editRef.current = { id, mode, original: JSON.parse(JSON.stringify(original)), startClientX: e.clientX, startClientY: e.clientY };
+    if (original.locked && !isBatchMove) return;
+    const targetIds = isBatchMove ? selectedIds : [id];
+    const originals = targetIds
+      .map(tid => currentAnnotations.find(a => a.id === tid))
+      .filter(a => a && !a.locked)
+      .map(a => JSON.parse(JSON.stringify(a)));
+    if (!originals.length) return;
+    editRef.current = { mode, originals, startClientX: e.clientX, startClientY: e.clientY };
     setHistory(prev => [...prev, currentAnnotations]);
     setFuture([]);
     e.currentTarget.setPointerCapture?.(e.pointerId);
@@ -714,25 +1094,34 @@ function App() {
   async function importImages(files) {
     const selectedFiles = Array.from(files || []).filter(file => file.type.startsWith("image/"));
     if (!selectedFiles.length) return;
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === workspaceProject)?.id || datasets[0]?.id;
+    const targetDataset = datasets.find(d => d.id === targetDatasetId);
+    const targetProjectId = targetDataset?.projectId || workspaceProject;
+    const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
+    const duplicateNames = selectedFiles.filter(f => existingNames.has(f.name)).map(f => f.name);
+    const newFiles = selectedFiles.filter(f => !existingNames.has(f.name));
     const readFile = file => new Promise(resolve => {
       const reader = new FileReader();
       reader.onload = () => resolve({
         id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name: file.name, status: "Pending", image: reader.result, size: file.size,
-        source: "Local upload", projectId: workspaceProject, createdAt: new Date().toISOString()
+        source: "Local upload", projectId: targetProjectId, datasetId: targetDatasetId, createdAt: new Date().toISOString()
       });
       reader.onerror = () => resolve(null);
       reader.readAsDataURL(file);
     });
-    const next = (await Promise.all(selectedFiles.map(readFile))).filter(Boolean);
-    if (!next.length) return;
-    const startIndex = tasks.length;
-    setTasks(prev => [...prev, ...next]);
-    setSelectedTaskIndex(startIndex);
+    const next = (await Promise.all(newFiles.map(readFile))).filter(Boolean);
+    if (next.length) {
+      const startIndex = tasks.length;
+      setTasks(prev => [...prev, ...next]);
+      setSelectedTaskIndex(startIndex);
+    }
     setImageUploadOpen(false);
-    setDatasetToast(`${next.length} image${next.length > 1 ? "s" : ""} imported successfully`);
-    setTimeout(() => setDatasetToast(""), 2200);
-    navigate("Annotation Workspace");
+    const skippedNote = duplicateNames.length ? `, skipped ${duplicateNames.length} duplicate${duplicateNames.length > 1 ? "s" : ""}` : "";
+    setDatasetToast(next.length ? `${next.length} image${next.length > 1 ? "s" : ""} imported${skippedNote}` : `No new images imported${skippedNote}`);
+    setTimeout(() => setDatasetToast(""), 2600);
+    if (next.length && !importTargetDataset) navigate("Annotation Workspace");
+    setImportTargetDataset(null);
   }
 
   function removeTask(id) {
@@ -741,17 +1130,17 @@ function App() {
     if (!window.confirm(`Remove ${tasks[index].name} from the dataset?`)) return;
     setTasks(prev => prev.filter(t => t.id !== id));
     setSelectedTaskIndex(prev => Math.max(0, Math.min(prev, tasks.length - 2)));
-    setDatasetToast("Task removed");
+    setDatasetToast("Image removed");
     setTimeout(() => setDatasetToast(""), 1800);
   }
 
-  function clearDataset() {
-    if (!tasks.length) return;
-    if (!window.confirm("Remove all imported tasks? Sample tasks will also be removed.")) return;
-    setTasks([]);
+  function clearDataset(datasetId) {
+    const count = tasks.filter(t => t.datasetId === datasetId).length;
+    if (!count) return;
+    if (!window.confirm(`Remove all ${count} image${count>1?"s":""} in this dataset?`)) return;
+    setTasks(prev => prev.filter(t => t.datasetId !== datasetId));
     setSelectedTaskIndex(0);
-    setAnnotationsByTask({});
-    setDatasetToast("Dataset cleared");
+    setDatasetToast("Dataset images cleared");
     setTimeout(() => setDatasetToast(""), 1800);
   }
 
@@ -961,9 +1350,13 @@ function App() {
       const tag = document.activeElement?.tagName;
       if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
       if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
-      else if (e.ctrlKey && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
       else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); redo(); }
-      else if (e.key === "Escape") { setDrawing(null); setSelectedAnnotationId(null); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "c") { e.preventDefault(); copySelection(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "v") { e.preventDefault(); pasteClipboard(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "a") { e.preventDefault(); selectAll(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
+      else if (e.key === "Escape") { setDrawing(null); setSelectedAnnotationId(null); setAdditionalSelectedIds([]); }
       else if (e.key.toLowerCase() === "v") setTool("select");
       else if (e.key.toLowerCase() === "b") setTool("rectangle");
       else if (e.key.toLowerCase() === "p") setTool("polygon");
@@ -971,6 +1364,7 @@ function App() {
       else if (e.key.toLowerCase() === "k") setTool("keypoint");
       else if (e.key.toLowerCase() === "g") setTool("polyline");
       else if (e.key.toLowerCase() === "r") setTool("brush");
+      else if (e.key.toLowerCase() === "e") setTool("eraser");
       else if (e.key === "+" || e.key === "=") setZoom(z => Math.min(4, +(z + 0.1).toFixed(2)));
       else if (e.key === "-") setZoom(z => Math.max(0.25, +(z - 0.1).toFixed(2)));
       else if (e.key === "ArrowRight") changeTask(1);
@@ -983,8 +1377,8 @@ function App() {
 
   const datasetFilteredTasks = useMemo(() => tasks.filter(t => {
     const q = datasetSearch.toLowerCase();
-    return (!q || `${t.name} ${t.id}`.toLowerCase().includes(q)) && (datasetStatus === "All" || t.status === datasetStatus);
-  }), [tasks, datasetSearch, datasetStatus]);
+    return t.datasetId === activeDatasetId && (!q || `${t.name} ${t.id}`.toLowerCase().includes(q)) && (datasetStatus === "All" || t.status === datasetStatus);
+  }), [tasks, datasetSearch, datasetStatus, activeDatasetId]);
 
   useEffect(() => {
     const handler = (e) => {
@@ -1242,6 +1636,8 @@ function App() {
             updateAnnotation={updateAnnotation} startAnnotationEdit={startAnnotationEdit} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
             onImport={() => imageInputRef.current?.click()}
             imageInputRef={imageInputRef} importImages={importImages}
+            insertVertex={insertVertex} deleteVertex={deleteVertex} selectedIds={selectedIds} marquee={marquee}
+            onToggleVisible={toggleAnnotationVisible} onToggleLock={toggleAnnotationLock} onReorder={moveAnnotationOrder}
           />
         )}
         {activePage === "Team" && <TeamPage
@@ -1258,7 +1654,7 @@ function App() {
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
         {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
         {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
-        {activePage === "Import Data" && <ImportPage tasks={tasks} datasetMeta={datasetMeta} setDatasetMeta={setDatasetMeta} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={() => imageInputRef.current?.click()} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} />}
+        {activePage === "Import Data" && <ImportPage projects={projects} tasks={tasks} datasets={datasets} importHistory={importHistory} onClearHistory={() => setImportHistory([])} importTaskId={importTaskId} setImportTaskId={setImportTaskId} activeDatasetId={activeDatasetId} setActiveDatasetId={setActiveDatasetId} listSearch={datasetListSearch} setListSearch={setDatasetListSearch} listStatus={datasetListStatus} setListStatus={setDatasetListStatus} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={(datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} onCreateDataset={openCreateDataset} onEditDataset={openEditDataset} onArchiveDataset={archiveDataset} onRestoreDataset={restoreDataset} onDeleteDataset={deleteDataset} />}
         {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
         {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage} />}
 
@@ -1268,8 +1664,9 @@ function App() {
 
       {projectModalOpen && <ProjectModal form={projectForm} setForm={setProjectForm} editing={!!editingProjectId} onClose={() => setProjectModalOpen(false)} onSave={saveProject} />}
       {groupModalOpen && <GroupModal form={groupForm} setForm={setGroupForm} editing={!!editingGroupId} onClose={() => setGroupModalOpen(false)} onSave={saveGroup} teamMembers={teamMembers} />}
+      {datasetModalOpen && <DatasetModal form={datasetForm} setForm={setDatasetForm} editing={!!editingDatasetId} onClose={() => setDatasetModalOpen(false)} onSave={saveDataset} />}
       {projectDetails && <ProjectDetails project={projectDetails} onClose={() => setProjectDetails(null)} onEdit={() => { setProjectDetails(null); openEditProject(projectDetails); }} />}
-      {importOpen && <ImportModal onClose={() => setImportOpen(false)} onImport={() => { setImportOpen(false); imageInputRef.current?.click(); }} />}
+      {importOpen && <ImportModal onClose={() => { setImportOpen(false); resetImportWizard(); }} onImport={() => { setImportOpen(false); resetImportWizard(); imageInputRef.current?.click(); }} step={importStep} setStep={setImportStep} fileName={importFileName} columns={importColumns} rows={importRows} mapping={importMapping} setMapping={setImportMapping} validation={importValidation} error={importError} duplicateMode={importDuplicateMode} setDuplicateMode={setImportDuplicateMode} datasets={datasets} projects={projects} targetDatasetId={importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id} setTargetDataset={setImportTargetDataset} onFile={handleStructuredFile} fileRef={structuredInputRef} onRun={runStructuredImport} />}
     </div>
   );
 }
@@ -1307,7 +1704,8 @@ function Workspace({
   currentAnnotations, selectedAnnotationId, selectAnnotation, selectedAnnotation, drawing, zoom, setZoom, pan, setPan,
   canvasRef, imageRef, onCanvasPointerDown, onCanvasPointerMove, onCanvasPointerUp, onCanvasDoubleClick, handleImageError,
   onDelete, onDuplicate, onUndo, onRedo, onReset, onPrevious, onNext, onSave, onSubmit, message,
-  updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport
+  updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport,
+  insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee
 }) {
   const [taskSearch, setTaskSearch] = useState("");
   const [rightTab, setRightTab] = useState("Labels");
@@ -1327,7 +1725,7 @@ function Workspace({
   const toolGroups = [
     ["NAVIGATE", [["select", MousePointer2, "Select", "V"], ["pan", Move, "Pan", "Space"]]],
     ["SHAPES", [["rectangle", Square, "Bounding Box", "B"], ["polygon", Grid3X3, "Polygon", "P"], ["polyline", Activity, "Polyline", "G"], ["line", Minus, "Line", "L"]]],
-    ["POINT / MASK", [["keypoint", Target, "Keypoint", "K"], ["brush", Edit3, "Brush", "R"]]]
+    ["POINT / MASK", [["keypoint", Target, "Keypoint", "K"], ["brush", Edit3, "Brush", "R"], ["eraser", Eraser, "Eraser", "E"]]]
   ];
 
   return (
@@ -1365,12 +1763,13 @@ function Workspace({
             <div className="canvas-help"><span>Double-click to finish polygon/polyline</span><span>Drag objects to move</span></div>
             <div className="canvas-controls"><button onClick={()=>setZoom(z=>Math.max(.25,+(z-.1).toFixed(2)))}><ZoomOut size={15}/></button><b>{Math.round(zoom*100)}%</b><button onClick={()=>setZoom(z=>Math.min(4,+(z+.1).toFixed(2)))}><ZoomIn size={15}/></button><button onClick={onReset}>Fit</button><button onClick={()=>document.documentElement.requestFullscreen?.()} title="Full screen"><Grid3X3 size={14}/></button></div>
           </div>
-          <div className={`canvas-stage build8-stage ${tool === "pan" ? "pan-mode" : ""}`}>
+          <div className={`canvas-stage build8-stage ${tool === "pan" ? "pan-mode" : ""} ${tool === "eraser" ? "eraser-mode" : ""}`}>
             {currentTask ? <div ref={canvasRef} className="annotation-canvas build8-canvas" style={{transform:`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={onCanvasPointerUp} onDoubleClick={onCanvasDoubleClick}>
               <img ref={imageRef} src={currentTask.image} alt={currentTask.name} onError={handleImageError} draggable="false"/>
               <div className="annotation-overlay">
-                {currentAnnotations.map((a,index)=><AnnotationShape key={a.id} a={a} index={index} selected={a.id===selectedAnnotationId} onSelect={()=>selectAnnotation(a.id)} update={updateAnnotation} onEditStart={startAnnotationEdit} labels={labels}/>) }
-                {drawing && <DrawingPreview drawing={drawing} color={selectedLabelObject?.color || "#2563eb"}/>} 
+                {currentAnnotations.map((a,index)=><AnnotationShape key={a.id} a={a} index={index} selected={(selectedIds||[a.id===selectedAnnotationId?a.id:null]).includes(a.id)} onSelect={()=>selectAnnotation(a.id)} update={updateAnnotation} onEditStart={startAnnotationEdit} labels={labels} onInsertVertex={insertVertex} onDeleteVertex={deleteVertex}/>) }
+                {drawing && <DrawingPreview drawing={drawing} color={selectedLabelObject?.color || "#2563eb"}/>}
+                {marquee && <div className="marquee-box" style={{left:`${Math.min(marquee.start.x,marquee.current.x)}%`,top:`${Math.min(marquee.start.y,marquee.current.y)}%`,width:`${Math.abs(marquee.current.x-marquee.start.x)}%`,height:`${Math.abs(marquee.current.y-marquee.start.y)}%`}}/>}
               </div>
               <div className="canvas-crosshair"><span></span></div>
             </div> : <div className="empty-canvas"><ImageIcon size={45}/><h3>No images yet</h3><p>Import images to start annotating.</p><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div>}
@@ -1413,7 +1812,7 @@ function Workspace({
               <div className="label-search-build8"><Search size={13}/><input value={labelSearch} onChange={e=>setLabelSearch(e.target.value)} placeholder="Filter labels..."/></div>
               <div className="label-list build8-label-list">{filteredLabels.map(label=><button key={label.id} className={`label-item build8-label-item ${selectedLabel===label.id?"selected":""}`} onClick={()=>setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span><b>{objectCountByLabel[label.id] || 0}</b><kbd>{label.type}</kbd></button>)}</div>
               {!filteredLabels.length && <div className="empty-objects"><Target size={24}/><p>No labels found</p></div>}
-            </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas</small></div></div>{currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);return <button key={a.id} className={`object-item build8-object-item ${selectedAnnotationId===a.id?"selected":""}`} onClick={()=>selectAnnotation(a.id)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><Eye size={14}/></button>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
+            </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>{currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div></div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
             {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
           </div>
           <div className="right-footer build8-right-footer"><div><span>Task status</span><StatusBadge status={currentTask?.status || "Pending"}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
@@ -1426,23 +1825,37 @@ function Workspace({
   );
 }
 
-function AnnotationShape({ a, index, selected, onSelect, onEditStart, labels }) {
+function AnnotationShape({ a, index, selected, onSelect, onEditStart, labels, onInsertVertex, onDeleteVertex }) {
   const label = labels.find(l=>l.id===a.labelId);
   const color = a.color || label?.color || "#2563eb";
   const style = { "--annotation-color": color };
+  if (a.hidden) return null;
+  const lockClass = a.locked ? "locked" : "";
   if (a.type === "rectangle") {
-    return <div className={`annotation-box build8-annotation-box ${selected?"selected":""}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`}} onPointerDown={e=>{e.stopPropagation();onSelect();onEditStart(a.id,e,"move");}}>
-      <span>{index+1}</span><b>{label?.name || "Object"}</b>
-      {selected && <div className="resize-handles">{["nw","n","ne","e","se","s","sw","w"].map(pos=><i key={pos} className={`handle-${pos}`} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,pos);}}/>)}</div>}
+    const rotation = a.rotation || 0;
+    const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
+    return <div className={`annotation-box build8-annotation-box ${selected?"selected":""} ${lockClass}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,transform:rotation?`rotate(${rotation}deg)`:undefined,transformOrigin:"center center"}} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}>
+      <span>{index+1}</span><b>{label?.name || "Object"}{a.locked && " 🔒"}</b>
+      {selected && !a.locked && <div className="resize-handles">{["nw","n","ne","e","se","s","sw","w"].map(pos=><i key={pos} className={`handle-${pos}`} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,pos);}}/>)}<i className="handle-rotate" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"rotate");}}/></div>}
     </div>;
   }
-  if (a.type === "keypoint") return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onSelect();onEditStart(a.id,e,"move");}}><circle cx={a.points[0].x} cy={a.points[0].y} r="1.25" fill="#fff" stroke={color} strokeWidth=".55"/><circle cx={a.points[0].x} cy={a.points[0].y} r=".38" fill={color}/><text x={a.points[0].x+1.5} y={a.points[0].y-1.5} fill={color} fontSize="2.2">{index+1}</text></svg>;
+  if (a.type === "keypoint") return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""} ${lockClass}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}><circle cx={a.points[0].x} cy={a.points[0].y} r="1.25" fill="#fff" stroke={color} strokeWidth=".55"/><circle cx={a.points[0].x} cy={a.points[0].y} r=".38" fill={color}/><text x={a.points[0].x+1.5} y={a.points[0].y-1.5} fill={color} fontSize="2.2">{index+1}</text></svg>;
   if (a.points?.length) {
     const points = a.points.map(p=>`${p.x},${p.y}`).join(" ");
-    const isLine = a.type === "line" || a.type === "polyline" || a.type === "brush";
-    return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onSelect();onEditStart(a.id,e,"move");}}>
+    const editable = selected && !a.locked && (a.type === "polygon" || a.type === "polyline" || a.type === "line");
+    const midpoints = editable ? a.points.map((p,i)=>{
+      const nextPoint = a.points[(i+1) % a.points.length];
+      if (a.type !== "polygon" && i === a.points.length-1) return null;
+      return { x:(p.x+nextPoint.x)/2, y:(p.y+nextPoint.y)/2, afterIndex:i };
+    }).filter(Boolean) : [];
+    return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""} ${lockClass}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}>
       {a.type === "polygon" ? <polygon points={points} fill={`${color}22`} stroke={color} strokeWidth=".55"/> : <polyline points={points} fill={a.type === "brush" ? `${color}12` : "none"} stroke={color} strokeWidth={a.type === "brush" ? "2.2" : ".65"} strokeLinecap="round" strokeLinejoin="round"/>}
-      {selected && a.points.map((p,i)=><circle key={i} cx={p.x} cy={p.y} r=".65" fill="#fff" stroke={color} strokeWidth=".35"/>)}
+      {midpoints.map(m=><circle key={`mid-${m.afterIndex}`} className="vertex-midpoint" cx={m.x} cy={m.y} r=".55" fill={color} fillOpacity=".45" stroke="#fff" strokeWidth=".18" onPointerDown={e=>{e.stopPropagation();onInsertVertex?.(a.id,m.afterIndex);}}><title>Click to add a point here</title></circle>)}
+      {selected && a.points.map((p,i)=><circle key={i} className={editable?"vertex-handle":""} cx={p.x} cy={p.y} r=".8" fill="#fff" stroke={color} strokeWidth=".35"
+        onPointerDown={editable ? e=>{e.stopPropagation(); if(e.altKey||e.metaKey){onDeleteVertex?.(a.id,i);} else {onEditStart(a.id,e,`vertex:${i}`);}} : undefined}
+        onDoubleClick={editable ? e=>{e.stopPropagation();onDeleteVertex?.(a.id,i);} : undefined}>
+        {editable && <title>Drag to move · double-click or Alt-click to delete</title>}
+      </circle>)}
       <text x={(a.points[0]?.x||2)+1.2} y={(a.points[0]?.y||3)-1.2} fill={color} fontSize="2.3">{index+1}</text>
     </svg>;
   }
@@ -1823,20 +2236,70 @@ function ProjectDetails({project,onClose,onEdit}) {
   return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Task</button></div></div></div>;
 }
 
-function ImportPage({tasks,datasetMeta,setDatasetMeta,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport}) {
-  const pending=tasks.filter(t=>t.status==="Pending").length;
-  const progress=tasks.filter(t=>t.status==="In Progress").length;
-  const completed=tasks.filter(t=>t.status==="Completed").length;
+function ImportPage({projects,tasks,datasets,importHistory,onClearHistory,importTaskId,setImportTaskId,activeDatasetId,setActiveDatasetId,listSearch,setListSearch,listStatus,setListStatus,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport,onCreateDataset,onEditDataset,onArchiveDataset,onRestoreDataset,onDeleteDataset}) {
+  const taskProjects = projects.length ? projects : [];
+  const currentTask = taskProjects.find(p => p.id === importTaskId) || taskProjects[0];
+  const taskDatasets = datasets.filter(d => d.projectId === currentTask?.id);
+  const activeDataset = datasets.find(d => d.id === activeDatasetId && d.projectId === currentTask?.id);
+
+  if (activeDataset) {
+    const dsTasks = tasks.filter(t => t.datasetId === activeDataset.id);
+    const annotated = dsTasks.filter(t => t.status === "Completed").length;
+    const invalid = dsTasks.filter(t => !t.image).length;
+    const pending=dsTasks.filter(t=>t.status==="Pending").length;
+    const progress=dsTasks.filter(t=>t.status==="In Progress").length;
+    return <div className="page dataset-page">
+      <div className="page-head category-drill-head"><div><button className="category-back-btn" onClick={()=>setActiveDatasetId(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {currentTask?.name} Datasets</button><span className="eyebrow">DATASET</span><h1>{activeDataset.name}</h1><p>Version {activeDataset.version || 1} · {dsTasks.length} images{invalid?` · ${invalid} invalid`:""}</p></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={16}/> Add Images</button></div></div>
+      <div className="dataset-cards"><MiniStat label="Total Images" value={dsTasks.length}/><MiniStat label="Annotated" value={annotated}/><MiniStat label="Unannotated" value={dsTasks.length-annotated}/><MiniStat label="Invalid Files" value={invalid}/></div>
+      <section className="dataset-info panel"><div className="dataset-info-main"><div className="dataset-logo"><Database size={22}/></div><div><b className="dataset-name-input" style={{display:"block"}}>{activeDataset.name}</b><span className="dataset-description-input" style={{display:"block",color:"var(--muted)"}}>{activeDataset.description||"No description"}</span><div className="dataset-meta-line"><span>Created {new Date(activeDataset.createdAt).toLocaleDateString()}</span><span>•</span><span>{currentTask?.name}</span><span>•</span><span>Autosaved</span></div></div></div><div className="dataset-info-actions"><button className="secondary-btn" onClick={()=>onEditDataset(activeDataset)}><Edit3 size={15}/> Edit</button>{activeDataset.status==="Archived" ? <button className="secondary-btn" onClick={()=>onRestoreDataset(activeDataset.id)}><RotateCcw size={15}/> Restore</button> : <button className="secondary-btn" onClick={()=>onArchiveDataset(activeDataset.id)}><Archive size={15}/> Archive</button>}<button className="danger-outline" onClick={()=>onClear(activeDataset.id)}><Trash2 size={15}/> Clear Images</button></div></section>
+      <section className="panel task-library"><div className="task-library-head"><div><h2>Dataset Images</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
+        <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search image name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {dsTasks.length}</span></div>
+        {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{filteredTasks.map((t)=>{const originalIndex=tasks.findIndex(x=>x.id===t.id);return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt=""/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{filteredTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name}/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+      </section>
+      <div className="dataset-help"><div><ShieldCheck size={18}/><div><b>Local-first dataset storage</b><p>Uploaded images are stored in your browser as data URLs, so your imported tasks remain available after refreshing the page on the same device.</p></div></div><span>Build 17</span></div>
+    </div>;
+  }
+
+  const visibleDatasets = taskDatasets
+    .filter(d => listStatus === "All" || (d.status || "Active") === listStatus)
+    .filter(d => d.name.toLowerCase().includes(listSearch.toLowerCase()));
+
   return <div className="page dataset-page">
-    <div className="page-head"><div><span className="eyebrow">DATASET MANAGEMENT</span><h1>Import Data</h1><p>Build and manage the task queue that powers the annotation workspace.</p></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div></div>
-    <div className="dataset-cards"><MiniStat label="Total Tasks" value={tasks.length}/><MiniStat label="Pending" value={pending}/><MiniStat label="In Progress" value={progress}/><MiniStat label="Completed" value={completed}/></div>
-    <section className="dataset-info panel"><div className="dataset-info-main"><div className="dataset-logo"><Database size={22}/></div><div><input className="dataset-name-input" value={datasetMeta.name} onChange={e=>setDatasetMeta(m=>({...m,name:e.target.value}))}/><input className="dataset-description-input" value={datasetMeta.description} onChange={e=>setDatasetMeta(m=>({...m,description:e.target.value}))}/><div className="dataset-meta-line"><span>Local dataset</span><span>•</span><span>{tasks.length} tasks</span><span>•</span><span>Autosaved</span></div></div></div><div className="dataset-info-actions"><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="danger-outline" onClick={onClear}><Trash2 size={15}/> Clear Dataset</button></div></section>
-    <section className="panel task-library"><div className="task-library-head"><div><h2>Task Library</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
-      <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search task name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {tasks.length}</span></div>
-      {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{tasks.length ? "No matching tasks" : "Your dataset is empty"}</h3><p>{tasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!tasks.length && <button className="primary-btn" onClick={onImport}><Upload size={15}/> Import Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>TASK</th><th>PREVIEW</th><th>STATUS</th><th>ANNOTATIONS</th><th>SOURCE</th><th></th></tr></thead><tbody>{filteredTasks.map((t)=>{const originalIndex=tasks.findIndex(x=>x.id===t.id);return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt=""/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td><span className="annotation-count">—</span></td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{filteredTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name}/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+    <div className="page-head"><div><span className="eyebrow">DATASET MANAGEMENT</span><h1>Datasets</h1><p>Every project can hold multiple datasets — organize imports by batch, version or source.</p></div><div className="dataset-head-actions"><div className="select-wrap"><FolderKanban size={15}/><select value={importTaskId} onChange={e=>{setImportTaskId(e.target.value);setActiveDatasetId(null);}}>{taskProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div><button className="primary-btn" onClick={()=>onCreateDataset(currentTask?.id)}><Plus size={16}/> Create Dataset</button></div></div>
+    <div className="dataset-cards"><MiniStat label="Datasets" value={taskDatasets.length}/><MiniStat label="Total Images" value={tasks.filter(t=>taskDatasets.some(d=>d.id===t.datasetId)).length}/><MiniStat label="Active" value={taskDatasets.filter(d=>(d.status||"Active")==="Active").length}/><MiniStat label="Archived" value={taskDatasets.filter(d=>d.status==="Archived").length}/></div>
+    <div className="project-filters standalone"><div className="filter-search"><Search size={17}/><input value={listSearch} onChange={e=>setListSearch(e.target.value)} placeholder="Search datasets..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={listStatus} onChange={e=>setListStatus(e.target.value)}><option>All</option><option>Active</option><option>Archived</option></select></div></div>
+    <div className="dataset-grid">
+      {visibleDatasets.map(ds => {
+        const dsTasks = tasks.filter(t => t.datasetId === ds.id);
+        const annotated = dsTasks.filter(t => t.status === "Completed").length;
+        const preview = dsTasks.slice(0,4);
+        const archived = ds.status === "Archived";
+        return <article key={ds.id} className={`dataset-card ${archived?"archived":""}`}>
+          {archived && <span className="archived-badge">Archived</span>}
+          <button className="dataset-card-main" onClick={()=>setActiveDatasetId(ds.id)}>
+            <div className="dataset-card-thumbs">{preview.length ? preview.map(t=><img key={t.id} src={t.image} alt=""/>) : <div className="dataset-card-thumb-empty"><ImageIcon size={18}/></div>}</div>
+            <b>{ds.name}</b>
+            <span className="dataset-card-meta">v{ds.version || 1} · {dsTasks.length} images · {annotated} annotated</span>
+          </button>
+          <div className="category-tile-actions">
+            <button title="Edit dataset" onClick={()=>onEditDataset(ds)}><Edit3 size={14}/></button>
+            {archived ? <button title="Restore dataset" onClick={()=>onRestoreDataset(ds.id)}><RotateCcw size={14}/></button> : <button title="Archive dataset" onClick={()=>onArchiveDataset(ds.id)}><Archive size={14}/></button>}
+            <button title="Delete dataset" className="danger-icon" onClick={()=>onDeleteDataset(ds.id)}><Trash2 size={14}/></button>
+          </div>
+        </article>;
+      })}
+    </div>
+    {!visibleDatasets.length && <div className="empty-state"><Database size={40}/><h3>No datasets found</h3><p>Create a dataset to start importing images into {currentTask?.name}.</p></div>}
+    <section className="panel import-history-panel">
+      <div className="panel-head"><div><h2>Import History</h2><p>Recent structured imports across all datasets</p></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> Import CSV / JSON</button>{importHistory.length>0 && <button className="secondary-btn" onClick={onClearHistory}><Trash2 size={15}/> Clear</button>}</div></div>
+      {importHistory.length ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>FILE</th><th>DATASET</th><th>IMPORTED</th><th>SKIPPED</th><th>WHEN</th></tr></thead><tbody>{importHistory.map(h=><tr key={h.id}><td><b>{h.fileName}</b></td><td>{h.datasetName}</td><td><span className="source-pill valid-pill">{h.imported}</span></td><td>{h.skipped ? <span className="source-pill invalid-pill">{h.skipped}</span> : <span className="source-pill">0</span>}</td><td>{new Date(h.at).toLocaleString()}</td></tr>)}</tbody></table></div> : <div className="dataset-empty"><FileSpreadsheet size={32}/><h3>No imports yet</h3><p>Import a CSV or JSON file to see its history here.</p></div>}
     </section>
-    <div className="dataset-help"><div><ShieldCheck size={18}/><div><b>Local-first dataset storage</b><p>Uploaded images are stored in your browser as data URLs, so your imported tasks remain available after refreshing the page on the same device.</p></div></div><span>Build 2</span></div>
   </div>;
+}
+
+function DatasetModal({form,setForm,editing,onClose,onSave}) {
+  const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
+  return <div className="modal-backdrop"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
 }
 
 function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message}) {
@@ -1877,13 +2340,63 @@ function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat,
   </div>;
 }
 
-function ImportModal({onClose,onImport}) {
-  const [format,setFormat]=useState("CSV");
-  return <div className="modal-backdrop"><div className="modal small-modal"><div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Task Data</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="guide"><div className="import-format-tabs"><button className={format==="CSV"?"active":""} onClick={()=>setFormat("CSV")}>CSV</button><button className={format==="JSON"?"active":""} onClick={()=>setFormat("JSON")}>JSON</button></div><FileText size={30}/><h3>Structured task import</h3><p>Use this guide for the next connector-ready dataset format. Build 2 also gives you immediate bulk image importing from your device.</p><div className="code-sample">{format==="CSV" ? 'id,name,image,status\n001,car-001.jpg,https://...,Pending' : '{ "data": { "image": "https://...", "name": "task-001" } }'}</div><div className="guide-note"><AlertCircle size={14}/><span>For production datasets, image files should be uploaded through the Image Importer so they are retained locally.</span></div></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div></div></div>;
+function ImportModal({onClose,onImport,step,setStep,fileName,columns,rows,mapping,setMapping,validation,error,duplicateMode,setDuplicateMode,datasets,projects,targetDatasetId,setTargetDataset,onFile,fileRef,onRun}) {
+  const mapFields = [["name","Task name","Required — becomes the task's display name"],["image","Image URL","Required — http(s) link or data: URI"],["status","Status","Optional — Pending / In Progress / Completed"]];
+  const preview = validation.valid.slice(0,5);
+  const problems = [...validation.invalid, ...validation.duplicates].slice(0,6);
+  return <div className="modal-backdrop"><div className="modal import-wizard-modal">
+    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import Tasks</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div>
+    <div className="import-steps">
+      {["upload","mapping","preview"].map((s,i)=><div key={s} className={`import-step ${step===s?"active":""} ${["upload","mapping","preview"].indexOf(step)>i?"done":""}`}><span>{i+1}</span>{s==="upload"?"Upload":s==="mapping"?"Map Columns":"Preview"}</div>)}
+    </div>
+
+    {step==="upload" && <div className="import-body">
+      <input ref={fileRef} type="file" accept=".csv,.json" hidden onChange={e=>{onFile(e.target.files?.[0]); e.target.value="";}}/>
+      <button className="import-dropzone" onClick={()=>fileRef.current?.click()}>
+        <Upload size={30}/>
+        <b>Choose a CSV or JSON file</b>
+        <span>Columns are detected automatically — you'll map them in the next step.</span>
+      </button>
+      <div className="import-format-help">
+        <div><FileSpreadsheet size={16}/><div><b>CSV</b><code>name,image,status</code></div></div>
+        <div><FileJson size={16}/><div><b>JSON</b><code>{`[{ "name": "...", "image": "https://..." }]`}</code></div></div>
+      </div>
+      <div className="guide-note"><AlertCircle size={14}/><span>Images referenced by URL are linked, not downloaded. To store image files locally, use the Add Images button on a dataset instead.</span></div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="mapping" && <div className="import-body">
+      <div className="import-file-row"><FileText size={16}/><b>{fileName}</b><span>{rows.length} rows · {columns.length} columns</span></div>
+      <label className="export-label">IMPORT INTO DATASET</label>
+      <div className="export-select"><Database size={15}/><select value={targetDatasetId||""} onChange={e=>setTargetDataset(e.target.value)}>{datasets.map(d=>{const proj=projects.find(p=>p.id===d.projectId);return <option key={d.id} value={d.id}>{proj?`${proj.name} — `:""}{d.name}</option>;})}</select></div>
+      <label className="export-label" style={{marginTop:"16px"}}>COLUMN MAPPING</label>
+      <div className="import-mapping-list">{mapFields.map(([key,title,hint])=><div className="import-mapping-row" key={key}><div><b>{title}</b><small>{hint}</small></div><select value={mapping[key]||""} onChange={e=>setMapping(m=>({...m,[key]:e.target.value}))}><option value="">— not mapped —</option>{columns.map(c=><option key={c} value={c}>{c}</option>)}</select></div>)}</div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="preview" && <div className="import-body">
+      <div className="import-validation-cards">
+        <div className="import-valid-card"><b>{validation.valid.length}</b><span>Ready to import</span></div>
+        <div className="import-dupe-card"><b>{validation.duplicates.length}</b><span>Duplicates</span></div>
+        <div className="import-invalid-card"><b>{validation.invalid.length}</b><span>Invalid rows</span></div>
+      </div>
+      {validation.duplicates.length>0 && <div className="import-dupe-choice"><span>Duplicate handling</span><div>{["Skip","Import anyway"].map(m=><button key={m} className={duplicateMode===m?"active":""} onClick={()=>setDuplicateMode(m)}>{m}</button>)}</div></div>}
+      {preview.length>0 && <><label className="export-label">PREVIEW</label><div className="import-preview-table"><table className="task-table"><thead><tr><th>ROW</th><th>NAME</th><th>IMAGE</th><th>STATUS</th></tr></thead><tbody>{preview.map(p=><tr key={p.row}><td>{p.row}</td><td><b>{p.name}</b></td><td className="import-url-cell">{p.image}</td><td>{p.status}</td></tr>)}</tbody></table>{validation.valid.length>5 && <div className="rework-more">+ {validation.valid.length-5} more rows</div>}</div></>}
+      {problems.length>0 && <><label className="export-label" style={{marginTop:"14px"}}>ISSUES</label><div className="import-problem-list">{problems.map((p,i)=><div key={i}><span className="source-pill invalid-pill">Row {p.row}</span><b>{p.name||"(no name)"}</b><small>{p.reason}</small></div>)}</div></>}
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    <div className="modal-foot">
+      {step!=="upload" && <button className="secondary-btn" onClick={()=>setStep(step==="preview"?"mapping":"upload")}>Back</button>}
+      <button className="secondary-btn" onClick={onImport}><Upload size={15}/> Image Upload Instead</button>
+      {step==="mapping" && <button className="primary-btn" disabled={!mapping.name||!mapping.image} onClick={()=>setStep("preview")}>Continue</button>}
+      {step==="preview" && <button className="primary-btn" onClick={onRun}><Check size={16}/> Import {duplicateMode==="Import anyway"?validation.valid.length+validation.duplicates.length:validation.valid.length} tasks</button>}
+    </div>
+  </div></div>;
 }
 
 function Shortcuts({onClose}) {
-  const rows=[["V","Select"],["B","Bounding Box"],["P","Polygon"],["L","Line"],["Space","Pan"],["Delete","Delete selected"],["Ctrl + Z","Undo"],["Ctrl + Shift + Z","Redo"],["+ / -","Zoom"],["← / →","Previous / next task"]];
+  const rows=[["V","Select"],["B","Bounding Box"],["P","Polygon"],["L","Line"],["R","Brush"],["E","Eraser"],["Space","Pan"],["Delete","Delete selected"],["Ctrl + Z","Undo"],["Ctrl + Shift + Z","Redo"],["Ctrl + C","Copy selected"],["Ctrl + V","Paste"],["Ctrl + D","Duplicate selected"],["Ctrl + A","Select all"],["Shift + Click","Add / remove from selection"],["Drag on empty canvas","Marquee select"],["Alt + Click vertex","Delete vertex"],["+ / -","Zoom"],["← / →","Previous / next task"]];
   return <div className="modal-backdrop"><div className="modal shortcuts-modal"><div className="modal-head"><div><span className="eyebrow">WORKSPACE</span><h2>Keyboard shortcuts</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="shortcut-list">{rows.map(r=><div key={r[0]}><kbd>{r[0]}</kbd><span>{r[1]}</span></div>)}</div></div></div>;
 }
 
