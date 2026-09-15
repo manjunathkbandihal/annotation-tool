@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, AlertCircle, BarChart3, Bell, Brush, Calendar, CheckCircle2, ChevronDown,
+  Activity, AlertCircle, Archive, ArrowUpDown, BarChart3, Bell, Brush, Calendar, CheckCircle2, ChevronDown,
   ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eye, FileText,
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
@@ -22,9 +22,9 @@ const labelPalette = [
 const GROUP_ICONS = { Brush, Square, Layers, FolderKanban, Target, ShieldCheck };
 
 const defaultProjectGroups = [
-  { id: "grp-segmentation", name: "Segmentation", description: "Pixel-level segmentation work — masks, polygons and brush labels.", icon: "Brush", color: "#1D9E75" },
-  { id: "grp-detection", name: "Detection", description: "Bounding-box object detection work.", icon: "Square", color: "#378ADD" },
-  { id: "grp-combined", name: "Combined", description: "Projects mixing multiple annotation types.", icon: "Layers", color: "#8B5CF6" }
+  { id: "grp-segmentation", name: "Segmentation", description: "Pixel-level segmentation work — masks, polygons and brush labels.", icon: "Brush", color: "#1D9E75", status: "Active", ownerId: "m1", teamIds: ["m1","m4"] },
+  { id: "grp-detection", name: "Detection", description: "Bounding-box object detection work.", icon: "Square", color: "#378ADD", status: "Active", ownerId: "m1", teamIds: ["m1","m3","m7"] },
+  { id: "grp-combined", name: "Combined", description: "Projects mixing multiple annotation types.", icon: "Layers", color: "#8B5CF6", status: "Active", ownerId: "", teamIds: [] }
 ];
 
 const sampleProjects = [
@@ -83,6 +83,10 @@ function progressOf(p) {
   return total ? Math.round((completed / total) * 100) : 0;
 }
 
+function initials(name = "?") {
+  return name.split(" ").map(x => x[0]).join("").slice(0, 2).toUpperCase();
+}
+
 function readStorage(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -123,7 +127,7 @@ function App() {
   const [projectDetails, setProjectDetails] = useState(null);
 
   const PROJECT_GROUPS_KEY = "annotatepro_project_groups_v1";
-  const emptyGroupForm = { name: "", description: "", icon: "FolderKanban", color: labelPalette[0] };
+  const emptyGroupForm = { name: "", description: "", icon: "FolderKanban", color: labelPalette[0], status: "Active", ownerId: "", teamIds: [] };
   const [projectGroups, setProjectGroups] = useState(() => readStorage(PROJECT_GROUPS_KEY, defaultProjectGroups));
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState(null);
@@ -132,7 +136,7 @@ function App() {
   useEffect(() => { localStorage.setItem(PROJECT_GROUPS_KEY, JSON.stringify(projectGroups)); }, [projectGroups]);
 
   function openCreateGroup() { setEditingGroupId(null); setGroupForm(emptyGroupForm); setGroupModalOpen(true); }
-  function openEditGroup(group) { setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description || "", icon: group.icon || "FolderKanban", color: group.color || labelPalette[0] }); setGroupModalOpen(true); }
+  function openEditGroup(group) { setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description || "", icon: group.icon || "FolderKanban", color: group.color || labelPalette[0], status: group.status || "Active", ownerId: group.ownerId || "", teamIds: group.teamIds || [] }); setGroupModalOpen(true); }
   function saveGroup(e) {
     e.preventDefault();
     if (!groupForm.name.trim()) return;
@@ -153,6 +157,19 @@ function App() {
     setProjectConfigs(prev => { const next = { ...prev }; delete next[id]; return next; });
   }
   function updateGroupMeta(id, patch) { setProjectGroups(prev => prev.map(g => g.id === id ? { ...g, ...patch } : g)); }
+  function archiveGroup(id) { updateGroupMeta(id, { status: "Archived" }); }
+  function restoreGroup(id) { updateGroupMeta(id, { status: "Active" }); }
+  function duplicateGroup(id) {
+    const source = projectGroups.find(g => g.id === id);
+    if (!source) return;
+    const newId = `grp-${Date.now()}`;
+    setProjectGroups(prev => [...prev, { ...source, id: newId, name: `${source.name} (Copy)`, status: "Active" }]);
+    setProjectConfigs(prev => {
+      const sourceConfig = prev[id] || makeDefaultProjectConfig(source);
+      return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: sourceConfig.labels.map(l => ({ ...l, id: `${newId}-${l.id}` })) } };
+    });
+  }
+
 
   const [tasks, setTasks] = useState(() => readStorage(TASKS_KEY, sampleTasks));
   const [datasetMeta, setDatasetMeta] = useState(() => readStorage(DATASET_META_KEY, { name: "Production Dataset", description: "AnnotatePro image dataset", created: new Date().toISOString() }));
@@ -1187,7 +1204,7 @@ function App() {
         </header>
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} />}
-        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} />}
+        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
@@ -1250,7 +1267,7 @@ function App() {
       </main>
 
       {projectModalOpen && <ProjectModal form={projectForm} setForm={setProjectForm} editing={!!editingProjectId} onClose={() => setProjectModalOpen(false)} onSave={saveProject} />}
-      {groupModalOpen && <GroupModal form={groupForm} setForm={setGroupForm} editing={!!editingGroupId} onClose={() => setGroupModalOpen(false)} onSave={saveGroup} />}
+      {groupModalOpen && <GroupModal form={groupForm} setForm={setGroupForm} editing={!!editingGroupId} onClose={() => setGroupModalOpen(false)} onSave={saveGroup} teamMembers={teamMembers} />}
       {projectDetails && <ProjectDetails project={projectDetails} onClose={() => setProjectDetails(null)} onEdit={() => { setProjectDetails(null); openEditProject(projectDetails); }} />}
       {importOpen && <ImportModal onClose={() => setImportOpen(false)} onImport={() => { setImportOpen(false); imageInputRef.current?.click(); }} />}
     </div>
@@ -1674,19 +1691,28 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
 function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
 function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
-function ProjectsPage({groups,projects,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onOpenConfig,groupMessage}) {
+function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage}) {
   const [activeCategory, setActiveCategory] = useState(null);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [groupStatusFilter, setGroupStatusFilter] = useState("Active");
+  const [groupSort, setGroupSort] = useState("Name");
   const groupOf = p => p.groupId;
   const activeGroup = groups.find(g => g.id === activeCategory);
+  const memberById = id => teamMembers.find(m => m.id === id);
 
   if (activeGroup) {
     const categoryProjects = projects.filter(p => groupOf(p) === activeGroup.id);
+    const groupTaskIds = categoryProjects.map(p => p.id);
     const GroupIcon = GROUP_ICONS[activeGroup.icon] || Layers;
+    const config = projectConfigs[activeGroup.id];
+    const owner = memberById(activeGroup.ownerId);
+    const team = (activeGroup.teamIds || []).map(memberById).filter(Boolean);
+    const recentActivity = auditEvents.filter(e => groupTaskIds.includes(e.projectId)).slice(0, 5);
     return <div className="page">
       <div className="page-head category-drill-head">
         <div>
           <button className="category-back-btn" onClick={()=>setActiveCategory(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Projects</button>
-          <div className="category-drill-title"><span className="category-dot" style={{background:activeGroup.color}}/><h1>{activeGroup.name}</h1><span className="category-count-pill">{categoryProjects.length} task{categoryProjects.length===1?"":"s"}</span></div>
+          <div className="category-drill-title"><span className="category-dot" style={{background:activeGroup.color}}/><h1>{activeGroup.name}</h1><span className="category-count-pill">{categoryProjects.length} task{categoryProjects.length===1?"":"s"}</span>{activeGroup.status==="Archived" && <span className="category-count-pill archived-pill">Archived</span>}</div>
           {activeGroup.description && <p className="category-drill-desc">{activeGroup.description}</p>}
         </div>
         <div className="category-drill-actions">
@@ -1695,6 +1721,32 @@ function ProjectsPage({groups,projects,search,setSearch,filter,setFilter,onCreat
         </div>
       </div>
       <div className="project-summary"><MiniStat label="Total Tasks" value={categoryProjects.length}/><MiniStat label="In Progress" value={categoryProjects.filter(p=>p.status==="In Progress").length}/><MiniStat label="Completed" value={categoryProjects.filter(p=>p.status==="Completed").length}/><MiniStat label="Pending" value={categoryProjects.filter(p=>p.status==="Pending").length}/></div>
+
+      <div className="project-overview-grid">
+        <section className="panel overview-card">
+          <div className="panel-head"><div><h2>Team</h2><p>Owner and members assigned to this project</p></div><Users size={17}/></div>
+          <div className="overview-team-body">
+            <div className="overview-owner-row"><span className="overview-label">OWNER</span>{owner ? <div className="overview-person"><div className="member-avatar small">{initials(owner.name)}</div><span>{owner.name}</span></div> : <span className="no-access">No owner assigned</span>}</div>
+            <div className="overview-owner-row"><span className="overview-label">TEAM ({team.length})</span>{team.length ? <div className="overview-avatar-stack">{team.map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div> : <span className="no-access">No team members assigned</span>}</div>
+          </div>
+        </section>
+        <section className="panel overview-card">
+          <div className="panel-head"><div><h2>Configuration Summary</h2><p>Workflow and labeling setup</p></div><SlidersHorizontal size={17}/></div>
+          <div className="overview-summary-list">
+            <div><span>Labels configured</span><b>{config?.labels?.length || 0}</b></div>
+            <div><span>QA review</span><b>{config?.requireQa ? "Required" : "Optional"}</b></div>
+            <div><span>Auto-save</span><b>{config?.autoSave ? "On" : "Off"}</b></div>
+            <div><span>Task sampling</span><b>{config?.taskSampling || "Sequential"}</b></div>
+          </div>
+        </section>
+        <section className="panel overview-card">
+          <div className="panel-head"><div><h2>Recent Activity</h2><p>Latest events across this project's tasks</p></div><Activity size={17}/></div>
+          <div className="overview-activity-list">
+            {recentActivity.length ? recentActivity.map(e=><div key={e.id} className="overview-activity-row"><b>{e.action}</b><span>{e.actor} · {new Date(e.timestamp).toLocaleDateString()}</span></div>) : <span className="no-access">No activity yet</span>}
+          </div>
+        </section>
+      </div>
+
       <section className="panel">
         <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
         <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)}/>)}</div>
@@ -1703,26 +1755,49 @@ function ProjectsPage({groups,projects,search,setSearch,filter,setFilter,onCreat
     </div>;
   }
 
+  const visibleGroups = groups
+    .filter(g => groupStatusFilter === "All" || (g.status || "Active") === groupStatusFilter)
+    .filter(g => g.name.toLowerCase().includes(groupSearch.toLowerCase()))
+    .sort((a,b) => {
+      if (groupSort === "Most tasks") return projects.filter(p=>groupOf(p)===b.id).length - projects.filter(p=>groupOf(p)===a.id).length;
+      if (groupSort === "Newest") return (b.id > a.id ? 1 : -1);
+      return a.name.localeCompare(b.name);
+    });
+
   return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div><button className="primary-btn" onClick={onCreateGroup}><Plus size={17}/> Create Project</button></div>
     {groupMessage && <div className="workspace-toast"><AlertCircle size={17}/>{groupMessage}</div>}
+    <div className="project-filters standalone">
+      <div className="filter-search"><Search size={17}/><input value={groupSearch} onChange={e=>setGroupSearch(e.target.value)} placeholder="Search projects..."/></div>
+      <div className="select-wrap"><ListFilter size={16}/><select value={groupStatusFilter} onChange={e=>setGroupStatusFilter(e.target.value)}><option>All</option><option>Active</option><option>Archived</option></select></div>
+      <div className="select-wrap"><ArrowUpDown size={16}/><select value={groupSort} onChange={e=>setGroupSort(e.target.value)}><option>Name</option><option>Most tasks</option><option>Newest</option></select></div>
+    </div>
     <div className="category-tile-grid">
-      {groups.map(group => {
+      {visibleGroups.map(group => {
         const count = projects.filter(p => groupOf(p) === group.id).length;
         const Icon = GROUP_ICONS[group.icon] || Layers;
-        return <div key={group.id} className="category-tile-wrap">
+        const owner = memberById(group.ownerId);
+        const team = (group.teamIds || []).map(memberById).filter(Boolean);
+        const archived = group.status === "Archived";
+        return <div key={group.id} className={`category-tile-wrap ${archived?"archived":""}`}>
+          {archived && <span className="archived-badge">Archived</span>}
           <button className="category-tile" onClick={()=>setActiveCategory(group.id)}>
             <span className="category-tile-icon" style={{background:`${group.color}22`,color:group.color}}><Icon size={20}/></span>
             <b>{group.name}</b>
-            <span className="category-tile-count">{count} task{count===1?"":"s"}</span>
+            <span className="category-tile-count">{count} task{count===1?"":"s"}{owner?` · Owner: ${owner.name}`:""}</span>
+            {team.length > 0 && <div className="overview-avatar-stack tile-avatars">{team.slice(0,4).map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div>}
           </button>
           <div className="category-tile-actions">
+            <button title="Duplicate project" onClick={()=>onDuplicateGroup(group.id)}><Copy size={14}/></button>
             <button title="Edit project" onClick={()=>onEditGroup(group)}><Edit3 size={14}/></button>
+            {archived
+              ? <button title="Restore project" onClick={()=>onRestoreGroup(group.id)}><RotateCcw size={14}/></button>
+              : <button title="Archive project" onClick={()=>onArchiveGroup(group.id)}><Archive size={14}/></button>}
             <button title="Delete project" className="danger-icon" onClick={()=>onDeleteGroup(group.id)}><Trash2 size={14}/></button>
           </div>
         </div>;
       })}
     </div>
-    {!groups.length && <div className="empty-state"><FolderKanban size={40}/><h3>No projects yet</h3><p>Create your first project to start organizing work.</p></div>}
+    {!visibleGroups.length && <div className="empty-state"><FolderKanban size={40}/><h3>No projects found</h3><p>Try another search or create a new project.</p></div>}
   </div>;
 }
 
@@ -1735,10 +1810,13 @@ function ProjectModal({form,setForm,editing,onClose,onSave}) {
   return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{editing?"Edit Task":"Create Task"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label>Task name<input required value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. momah_seg_jul_2"/></label><label>Client / organization<input required value={form.client} onChange={e=>set("client",e.target.value)} placeholder="Client name"/></label><label>Annotation type<select value={form.annotationType} onChange={e=>set("annotationType",e.target.value)}><option>Bounding Box</option><option>Polygon</option><option>Segmentation</option><option>Classification</option><option>Keypoints</option><option>Polyline</option></select></label><label>Team<select value={form.team} onChange={e=>set("team",e.target.value)}><option>Annotation Team</option><option>Road Vision Team</option><option>Segmentation Team</option><option>Infrastructure Team</option><option>Classification Team</option></select></label><label>Total images<input type="number" min="1" value={form.totalImages} onChange={e=>set("totalImages",e.target.value)}/></label><label>Completed images<input type="number" min="0" value={form.completedImages} onChange={e=>set("completedImages",e.target.value)}/></label><label>Start date<input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}/></label><label>Due date<input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)}/></label><label>Status<select value={form.status} onChange={e=>set("status",e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Task description..."/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Task"}</button></div></form></div>;
 }
 
-function GroupModal({form,setForm,editing,onClose,onSave}) {
+function GroupModal({form,setForm,editing,onClose,onSave,teamMembers}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
   const iconChoices = Object.keys(GROUP_ICONS);
-  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
+  const toggleTeam = (id) => setForm(prev => ({ ...prev, teamIds: prev.teamIds.includes(id) ? prev.teamIds.filter(x=>x!==id) : [...prev.teamIds, id] }));
+  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label>Owner<select value={form.ownerId} onChange={e=>set("ownerId",e.target.value)}><option value="">No owner</option>{teamMembers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div>
+  <div className="team-project-form"><span>ASSIGNED TEAM</span><div>{teamMembers.map(m=>{const active=form.teamIds.includes(m.id);return <button type="button" key={m.id} className={`project-check ${active?"active":""}`} onClick={()=>toggleTeam(m.id)}><span>{active?<CheckCircle2 size={13}/>:<Users size={13}/>}</span><div><b>{m.name}</b><small>{m.role}</small></div></button>;})}</div></div>
+  <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
 }
 
 function ProjectDetails({project,onClose,onEdit}) {
