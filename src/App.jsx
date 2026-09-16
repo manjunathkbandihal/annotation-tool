@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Activity, AlertCircle, Archive, ArrowUpDown, BarChart3, Bell, Brush, Calendar, CheckCircle2, ChevronDown,
-  ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eraser, Eye, FileText,
+  ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eraser, Eye, EyeOff, FileText,
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
-  Minus, MoreHorizontal, Move, MousePointer2, PanelRight, Pause, Play, Plus,
+  Minus, MoreHorizontal, Move, MousePointer2, LogOut, PanelRight, Pause, Play, Plus,
   Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
   TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap, Palette, SlidersHorizontal, Layers, Workflow, CheckSquare
 } from "lucide-react";
@@ -106,6 +106,42 @@ function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authView, setAuthView] = useState("login"); // login | signup | forgot | reset
+  const [authProfile, setAuthProfile] = useState(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+    return () => listener?.subscription?.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user) { setAuthProfile(null); return; }
+    supabase.from("profiles").select("*").eq("id", session.user.id).single().then(({ data }) => {
+      setAuthProfile(data || null);
+    });
+  }, [session?.user?.id]);
+
+  const currentUserName = authProfile?.full_name || session?.user?.email?.split("@")[0] || "there";
+  const currentUserEmail = session?.user?.email || "";
+  const currentUserInitial = initials(currentUserName);
+
+  async function signOut() {
+    await supabase.auth.signOut();
+    setProfileOpen(false);
+  }
+
   const [appSettings, setAppSettings] = useState(() => readStorage(SETTINGS_KEY, {
     workspaceName: "Production Workspace",
     timezone: "Asia/Kolkata",
@@ -129,6 +165,30 @@ function App() {
   const [verifyStatus, setVerifyStatus] = useState({});
   const [verifying, setVerifying] = useState(false);
   const [lastMigratedAt, setLastMigratedAt] = useState(() => localStorage.getItem("annotatepro_last_migration_v1"));
+  const [imageMigration, setImageMigration] = useState({ running: false, total: 0, done: 0, failed: 0 });
+
+  async function migrateImagesToStorage() {
+    const base64Tasks = tasks.filter(t => t.image && t.image.startsWith("data:"));
+    if (!base64Tasks.length) { setImageMigration({ running: false, total: 0, done: 0, failed: 0, complete: true }); return; }
+    setImageMigration({ running: true, total: base64Tasks.length, done: 0, failed: 0 });
+    for (const task of base64Tasks) {
+      try {
+        const res = await fetch(task.image);
+        const blob = await res.blob();
+        const ext = (blob.type.split("/")[1] || "jpg").split("+")[0];
+        const path = `${task.projectId || "unassigned"}/${task.datasetId || "unassigned"}/${Date.now()}-${task.id}.${ext}`;
+        const { error } = await supabase.storage.from("task-images").upload(path, blob, { cacheControl: "3600", upsert: false });
+        if (error) throw error;
+        const { data } = supabase.storage.from("task-images").getPublicUrl(path);
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, image: data.publicUrl, source: "Cloud Storage" } : t));
+        setImageMigration(prev => ({ ...prev, done: prev.done + 1 }));
+      } catch (err) {
+        console.warn("[Storage] image migration failed for", task.id, err.message);
+        setImageMigration(prev => ({ ...prev, failed: prev.failed + 1 }));
+      }
+    }
+    setImageMigration(prev => ({ ...prev, running: false, complete: true }));
+  }
 
   function migrationDomains() {
     return [
@@ -1226,7 +1286,7 @@ function App() {
     resetView();
   }
 
-  function logAudit(action, taskId=null, projectId=null, details="", actor="Manjunath", actorRole="Team Lead") {
+  function logAudit(action, taskId=null, projectId=null, details="", actor=currentUserName, actorRole="Team Lead") {
     const event = { id:`audit-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, action, actor, actorRole, projectId:projectId || tasks.find(t=>t.id===taskId)?.projectId || workspaceProject, taskId, details, timestamp:new Date().toISOString() };
     setAuditEvents(prev => [event, ...prev].slice(0, 2000));
   }
@@ -1256,17 +1316,36 @@ function App() {
     const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
     const duplicateNames = selectedFiles.filter(f => existingNames.has(f.name)).map(f => f.name);
     const newFiles = selectedFiles.filter(f => !existingNames.has(f.name));
-    const readFile = file => new Promise(resolve => {
+
+    const readAsDataUrl = file => new Promise(resolve => {
       const reader = new FileReader();
-      reader.onload = () => resolve({
-        id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name: file.name, status: "Pending", image: reader.result, size: file.size,
-        source: "Local upload", projectId: targetProjectId, datasetId: targetDatasetId, createdAt: new Date().toISOString()
-      });
+      reader.onload = () => resolve(reader.result);
       reader.onerror = () => resolve(null);
       reader.readAsDataURL(file);
     });
-    const next = (await Promise.all(newFiles.map(readFile))).filter(Boolean);
+
+    const uploadFile = async file => {
+      const path = `${targetProjectId || "unassigned"}/${targetDatasetId || "unassigned"}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${file.name}`;
+      const { error } = await supabase.storage.from("task-images").upload(path, file, { cacheControl: "3600", upsert: false });
+      if (error) {
+        console.warn("[Storage] upload failed, falling back to local base64:", error.message);
+        return { image: await readAsDataUrl(file), source: "Local upload (offline)" };
+      }
+      const { data } = supabase.storage.from("task-images").getPublicUrl(path);
+      return { image: data.publicUrl, source: "Cloud Storage" };
+    };
+
+    const buildTask = async file => {
+      const { image, source } = await uploadFile(file);
+      if (!image) return null;
+      return {
+        id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name, status: "Pending", image, size: file.size,
+        source, projectId: targetProjectId, datasetId: targetDatasetId, createdAt: new Date().toISOString()
+      };
+    };
+
+    const next = (await Promise.all(newFiles.map(buildTask))).filter(Boolean);
     if (next.length) {
       const startIndex = tasks.length;
       setTasks(prev => [...prev, ...next]);
@@ -1481,18 +1560,18 @@ function App() {
       score: Number(qaScore),
       reason: decision === "Rejected" || decision === "Changes Requested" ? qaReason : "",
       comment: qaComment.trim(),
-      reviewer: "Manjunath",
+      reviewer: currentUserName,
       reviewedAt: now,
       annotationCount: qaSelectedAnnotations.length,
       history: [
         ...(qaSelectedReview?.history || []),
-        { decision, score: Number(qaScore), reason: decision === "Approved" ? "" : qaReason, comment: qaComment.trim(), reviewer: "Manjunath", reviewedAt: now }
+        { decision, score: Number(qaScore), reason: decision === "Approved" ? "" : qaReason, comment: qaComment.trim(), reviewer: currentUserName, reviewedAt: now }
       ]
     };
     setQaReviews(prev => ({ ...prev, [qaSelectedTask.id]: review }));
     const nextStatus = decision === "Approved" ? "Approved" : decision === "Rejected" ? "Rejected" : "QA Review";
     setTasks(prev => prev.map(t => t.id === qaSelectedTask.id ? { ...t, status: nextStatus } : t));
-    logAudit(`QA ${decision}`, qaSelectedTask.id, qaSelectedTask.projectId, `QA score ${qaScore}${qaComment.trim() ? ` · ${qaComment.trim()}` : ""}`, "Manjunath", "Reviewer");
+    logAudit(`QA ${decision}`, qaSelectedTask.id, qaSelectedTask.projectId, `QA score ${qaScore}${qaComment.trim() ? ` · ${qaComment.trim()}` : ""}`, currentUserName, "Reviewer");
     setQaMessage(`${qaSelectedTask.name} marked ${decision.toLowerCase()}`);
     setTimeout(() => setQaMessage(""), 2200);
   }
@@ -1706,6 +1785,16 @@ function App() {
   const deleteProjectLabel = (labelId) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: currentConfig.labels.filter(l => l.id !== labelId) } })); setConfigMessage("Label removed"); setTimeout(() => setConfigMessage(""), 2200); };
   const updateProjectConfig = (patch) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, ...patch } })); setConfigMessage("Project configuration saved"); setTimeout(() => setConfigMessage(""), 2200); };
 
+  if (authLoading) {
+    return <div className="auth-loading-screen"><div className="brand-mark"><Grid3X3 size={22}/></div><RefreshCw size={20} className="mig-spin"/><span>Loading AnnotatePro...</span></div>;
+  }
+  if (!session) {
+    return <AuthScreen view={authView} setView={setAuthView}/>;
+  }
+  if (passwordRecovery) {
+    return <UpdatePasswordScreen onDone={() => setPasswordRecovery(false)}/>;
+  }
+
   return (
     <div className="app-shell">
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
@@ -1732,9 +1821,9 @@ function App() {
         <div className="sidebar-bottom">
           <div className="online-status"><span></span> System operational</div>
           <div className="user-card">
-            <div className="user-avatar">M</div>
-            <div><b>Manjunath</b><span>Team Lead</span></div>
-            <MoreHorizontal size={17} />
+            <div className="user-avatar">{currentUserInitial}</div>
+            <div><b>{currentUserName}</b><span>{currentUserEmail}</span></div>
+            <button className="sidebar-signout" title="Sign out" onClick={signOut}><LogOut size={16}/></button>
           </div>
         </div>
       </aside>
@@ -1747,13 +1836,13 @@ function App() {
             <div className="global-search"><Search size={17} /><input placeholder="Search..." /></div>
             <button className="icon-btn notification-trigger" onClick={() => navigate("Notifications")}><Bell size={19} />{notifications.filter(n=>!n.read).length > 0 && <i>{notifications.filter(n=>!n.read).length > 9 ? "9+" : notifications.filter(n=>!n.read).length}</i>}</button>
             <div className="profile-wrap">
-              <button className="profile-button" onClick={() => setProfileOpen(v => !v)}><div className="tiny-avatar">M</div><span>Manjunath</span><ChevronDown size={15} /></button>
-              {profileOpen && <div className="profile-menu"><b>Manjunath</b><span>Team Lead</span><hr /><button onClick={() => navigate("Settings")}><Settings size={15}/> Settings</button></div>}
+              <button className="profile-button" onClick={() => setProfileOpen(v => !v)}><div className="tiny-avatar">{currentUserInitial}</div><span>{currentUserName}</span><ChevronDown size={15} /></button>
+              {profileOpen && <div className="profile-menu"><b>{currentUserName}</b><span>{currentUserEmail}</span><hr /><button onClick={() => { setProfileOpen(false); navigate("Settings"); }}><Settings size={15}/> Settings</button><button onClick={signOut}><LogOut size={15}/> Sign out</button></div>}
             </div>
           </div>
         </header>
 
-        {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} />}
+        {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} userName={currentUserName} />}
         {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
@@ -1815,7 +1904,10 @@ function App() {
         {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage}
           migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={runMigration}
           verifyStatus={verifyStatus} verifying={verifying} onVerify={verifyMigrationCounts} lastMigratedAt={lastMigratedAt}
-          migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} />}
+          migrationDomains={migrationDomains} migrationSingletons={migrationSingletons}
+          imageMigration={imageMigration} onMigrateImages={migrateImagesToStorage}
+          base64ImageCount={tasks.filter(t => t.image && t.image.startsWith("data:")).length}
+          userName={currentUserName} userEmail={currentUserEmail} userInitial={currentUserInitial} onSignOut={signOut} />}
 
         <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
         {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
@@ -1830,11 +1922,11 @@ function App() {
   );
 }
 
-function Dashboard({ projects, stats, onCreate, onNavigate }) {
+function Dashboard({ projects, stats, onCreate, onNavigate, userName }) {
   return (
     <div className="page">
       <div className="page-head">
-        <div><span className="eyebrow">OVERVIEW</span><h1>Good afternoon, Manjunath</h1><p>Here’s what’s happening across your annotation workspace.</p></div>
+        <div><span className="eyebrow">OVERVIEW</span><h1>Good afternoon, {userName}</h1><p>Here’s what’s happening across your annotation workspace.</p></div>
         <button className="primary-btn" onClick={()=>onCreate()}><Plus size={17}/> Create Project</button>
       </div>
       <div className="stats-grid">
@@ -2554,6 +2646,110 @@ function ImportModal({onClose,onImport,step,setStep,fileName,columns,rows,mappin
   </div></div>;
 }
 
+function AuthScreen({ view, setView }) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const switchView = (v) => { setView(v); setError(""); setMessage(""); };
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setLoading(true); setError(""); setMessage("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) setError(error.message);
+  }
+
+  async function handleSignup(e) {
+    e.preventDefault();
+    setLoading(true); setError(""); setMessage("");
+    const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    setMessage("Account created. Check your email to confirm it, then sign in.");
+    setView("login");
+  }
+
+  async function handleForgot(e) {
+    e.preventDefault();
+    setLoading(true); setError(""); setMessage("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    setMessage("Password reset email sent — check your inbox.");
+  }
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-brand"><div className="brand-mark"><Grid3X3 size={22}/></div><div><strong>AnnotatePro</strong><span>Annotation Platform</span></div></div>
+
+        {view === "login" && <form onSubmit={handleLogin} className="auth-form">
+          <h1>Welcome back</h1><p>Sign in to your workspace.</p>
+          <label>Email<input type="email" required autoFocus value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
+          <label>Password<div className="auth-password-field"><input type={showPassword?"text":"password"} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div></label>
+          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
+          {message && <div className="auth-message"><CheckCircle2 size={14}/>{message}</div>}
+          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Signing in..." : "Sign in"}</button>
+          <div className="auth-links"><button type="button" onClick={()=>switchView("forgot")}>Forgot password?</button><button type="button" onClick={()=>switchView("signup")}>Create an account</button></div>
+        </form>}
+
+        {view === "signup" && <form onSubmit={handleSignup} className="auth-form">
+          <h1>Create your account</h1><p>Join your team's AnnotatePro workspace.</p>
+          <label>Full name<input required autoFocus value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Your name"/></label>
+          <label>Email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
+          <label>Password<div className="auth-password-field"><input type={showPassword?"text":"password"} required minLength={6} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div></label>
+          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
+          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Creating account..." : "Create account"}</button>
+          <div className="auth-links"><button type="button" onClick={()=>switchView("login")}>Already have an account? Sign in</button></div>
+        </form>}
+
+        {view === "forgot" && <form onSubmit={handleForgot} className="auth-form">
+          <h1>Reset your password</h1><p>We'll email you a link to set a new one.</p>
+          <label>Email<input type="email" required autoFocus value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
+          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
+          {message && <div className="auth-message"><CheckCircle2 size={14}/>{message}</div>}
+          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Sending..." : "Send reset link"}</button>
+          <div className="auth-links"><button type="button" onClick={()=>switchView("login")}>Back to sign in</button></div>
+        </form>}
+      </div>
+    </div>
+  );
+}
+
+function UpdatePasswordScreen({ onDone }) {
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleUpdate(e) {
+    e.preventDefault();
+    setLoading(true); setError("");
+    const { error } = await supabase.auth.updateUser({ password });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    onDone();
+  }
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-brand"><div className="brand-mark"><Grid3X3 size={22}/></div><div><strong>AnnotatePro</strong><span>Annotation Platform</span></div></div>
+        <form onSubmit={handleUpdate} className="auth-form">
+          <h1>Set a new password</h1><p>Choose a new password for your account.</p>
+          <label>New password<input type="password" required minLength={6} autoFocus value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/></label>
+          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
+          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Updating..." : "Update password"}</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 function Shortcuts({onClose}) {
   const rows=[["V","Select"],["B","Bounding Box"],["P","Polygon"],["L","Line"],["R","Brush"],["E","Eraser"],["Space","Pan"],["Delete","Delete selected"],["Ctrl + Z","Undo"],["Ctrl + Shift + Z","Redo"],["Ctrl + C","Copy selected"],["Ctrl + V","Paste"],["Ctrl + D","Duplicate selected"],["Ctrl + A","Select all"],["Shift + Click","Add / remove from selection"],["Drag on empty canvas","Marquee select"],["Alt + Click vertex","Delete vertex"],["+ / -","Zoom"],["← / →","Previous / next task"]];
   return <div className="modal-backdrop"><div className="modal shortcuts-modal"><div className="modal-head"><div><span className="eyebrow">WORKSPACE</span><h2>Keyboard shortcuts</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="shortcut-list">{rows.map(r=><div key={r[0]}><kbd>{r[0]}</kbd><span>{r[1]}</span></div>)}</div></div></div>;
@@ -2834,7 +3030,7 @@ function Quick({icon:Icon,title,onClick}){return <button className="quick-action
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
 
 
-function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons }) {
+function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut }) {
   const tabs = [
     ["Workspace", SlidersHorizontal, "Workspace"],
     ["Annotation", Grid3X3, "Annotation"],
@@ -2887,18 +3083,18 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
           </div>}
           {tab === "Preferences" && <div className="settings-card panel">
             <div className="settings-card-title"><div><h2>User preferences</h2><p>Personal interface defaults for the current operator.</p></div><Settings size={20}/></div>
-            <div className="settings-profile"><div className="settings-avatar">M</div><div><b>Manjunath</b><span>Team Lead · Production operator</span></div><span className="settings-role">TEAM LEAD</span></div>
+            <div className="settings-profile"><div className="settings-avatar">{userInitial}</div><div><b>{userName}</b><span>{userEmail}</span></div><button className="secondary-btn" onClick={onSignOut}><LogOut size={14}/> Sign out</button></div>
             <div className="settings-shortcuts"><h3>Workspace shortcuts</h3><div><kbd>V</kbd><span>Select</span><kbd>B</kbd><span>Bounding Box</span><kbd>P</kbd><span>Polygon</span><kbd>Space</kbd><span>Pan canvas</span><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div></div>
             <div className="settings-danger"><div><h3>Restore default settings</h3><p>Reset only AnnotatePro settings. Projects, tasks, annotations, team and audit data are not deleted.</p></div><button className="btn secondary" onClick={onReset}><RotateCcw size={15}/> Restore defaults</button></div>
           </div>}
-          {tab === "Cloud" && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} />}
+          {tab === "Cloud" && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
         </section>
       </div>
     </div>
   );
 }
 
-function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,verifyStatus,verifying,onVerify,lastMigratedAt,migrationDomains,migrationSingletons}) {
+function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,verifyStatus,verifying,onVerify,lastMigratedAt,migrationDomains,migrationSingletons,imageMigration,onMigrateImages,base64ImageCount}) {
   const domains = migrationDomains();
   const singletons = migrationSingletons();
   const all = [...domains, ...singletons];
@@ -2944,6 +3140,20 @@ function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,ve
         </div>;
       })}
     </div>}
+
+    <div className="cloud-storage-section">
+      <h3>Cloud Storage — Images</h3>
+      <p>New uploads (Build 23 onward) already go straight to Supabase Storage instead of being embedded as base64. This converts any images imported before that change.</p>
+      {base64ImageCount > 0 ? <>
+        <div className="cloud-migration-actions">
+          <button className="secondary-btn" disabled={imageMigration.running} onClick={onMigrateImages}>
+            {imageMigration.running ? <RefreshCw size={15} className="mig-spin"/> : <Upload size={15}/>}
+            {imageMigration.running ? `Uploading ${imageMigration.done}/${imageMigration.total}...` : `Migrate ${base64ImageCount} local image${base64ImageCount===1?"":"s"} to Storage`}
+          </button>
+        </div>
+        {imageMigration.complete && !imageMigration.running && <div className="cloud-status-row state-done"><CheckCircle2 size={15} className="mig-ok"/><span className="cloud-status-label">Image migration</span><span className="cloud-status-detail">{imageMigration.done} uploaded{imageMigration.failed ? `, ${imageMigration.failed} failed` : ""}</span></div>}
+      </> : <div className="cloud-status-row state-done"><CheckCircle2 size={15} className="mig-ok"/><span className="cloud-status-label">All images already in Cloud Storage</span></div>}
+    </div>
 
     <div className="guide-note"><ShieldCheck size={14}/><span>This uses upsert, so re-running the migration is always safe — existing cloud rows just get refreshed with your latest local data instead of duplicated.</span></div>
   </div>;
