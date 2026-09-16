@@ -163,6 +163,29 @@ body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);backgroun
 .import-problem-list b{font-size:9px}
 .import-problem-list small{font-size:7px;color:#dc2626;margin-left:auto}
 .import-history-panel{margin-top:16px}
+.cloud-migration-panel .settings-card-title p{max-width:520px}
+.cloud-detected-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;padding:0 20px 16px}
+.cloud-detected-card{background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:10px;text-align:center}
+.cloud-detected-card b{display:block;font-size:16px;color:#1e293b}
+.cloud-detected-card span{font-size:8px;color:#8994a1}
+.cloud-migration-actions{display:flex;align-items:center;gap:10px;padding:0 20px 16px;flex-wrap:wrap}
+.cloud-last-run{font-size:8px;color:#8994a1}
+.cloud-status-list{padding:0 20px 12px;display:flex;flex-direction:column;gap:6px}
+.cloud-status-row{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:9px}
+.cloud-status-row.state-done{border-color:#bbf7d0;background:#f0fdf4}
+.cloud-status-row.state-error{border-color:#fecaca;background:#fef2f2}
+.cloud-status-label{font-weight:600;color:#334155;min-width:150px}
+.cloud-status-detail{color:#8994a1;margin-left:auto;text-align:right}
+.mig-ok{color:#15803d}.mig-err{color:#dc2626}.mig-pending{color:#94a3b8}
+.mig-spin{color:#2563eb;animation:mig-spin-anim 1s linear infinite}
+@keyframes mig-spin-anim{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
+.cloud-verify-list{padding:0 20px 16px}
+.cloud-verify-list h3{font-size:10px;margin:0 0 8px}
+.cloud-verify-row{display:flex;align-items:center;gap:9px;font-size:8px;color:#697686;padding:7px 0;border-bottom:1px solid #f0f2f5}
+.cloud-verify-row span:first-child{font-weight:600;color:#334155;min-width:150px}
+.cloud-verify-row.ok svg{color:#15803d}
+.cloud-verify-row.mismatch svg{color:#dc2626}
+.cloud-migration-panel .guide-note{margin:0 20px 18px}
 @media(max-width:620px){.import-format-help{grid-template-columns:1fr}.import-mapping-row{flex-direction:column;align-items:stretch;gap:8px}.import-mapping-row select{min-width:0;width:100%}}
 @media(max-width:1000px){.dataset-cards{grid-template-columns:repeat(2,1fr)}.task-grid{grid-template-columns:repeat(3,1fr)}.dataset-info{align-items:flex-start;gap:12px}.dataset-info-actions{flex-direction:column}.dataset-description-input{width:280px}}
 @media(max-width:700px){.dataset-head-actions{width:100%}.dataset-head-actions button{flex:1}.dataset-info{flex-direction:column}.dataset-info-actions{flex-direction:row;width:100%}.dataset-info-actions button{flex:1}.task-filters{flex-wrap:wrap}.result-count{width:100%;margin-left:0}.task-grid{grid-template-columns:repeat(2,1fr)}}
