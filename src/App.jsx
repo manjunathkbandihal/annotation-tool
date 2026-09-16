@@ -8,6 +8,7 @@ import {
   TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap, Palette, SlidersHorizontal, Layers, Workflow, CheckSquare
 } from "lucide-react";
 import "./App.css";
+import { supabase } from "./supabaseClient.js";
 
 const PROJECTS_KEY = "annotatepro_projects_v2";
 const TASKS_KEY = "annotatepro_tasks_v1";
@@ -122,6 +123,161 @@ function App() {
   }));
   const [settingsTab, setSettingsTab] = useState("Workspace");
   const [settingsMessage, setSettingsMessage] = useState("");
+
+  const [migrationStatus, setMigrationStatus] = useState({});
+  const [migrationRunning, setMigrationRunning] = useState(false);
+  const [verifyStatus, setVerifyStatus] = useState({});
+  const [verifying, setVerifying] = useState(false);
+  const [lastMigratedAt, setLastMigratedAt] = useState(() => localStorage.getItem("annotatepro_last_migration_v1"));
+
+  function migrationDomains() {
+    return [
+      { key: "groups", label: "Projects (groups)", table: "project_groups", rows: () => projectGroups.map(g => ({
+          id: g.id, name: g.name, description: g.description || "", icon: g.icon || "FolderKanban",
+          color: g.color || "#2563eb", status: g.status || "Active", owner_id: g.ownerId || null, team_ids: g.teamIds || []
+        })) },
+      { key: "projects", label: "Tasks", table: "projects", rows: () => projects.map(p => ({
+          id: p.id, group_id: p.groupId || null, name: p.name, client: p.client || "",
+          annotation_type: p.annotationType || "Bounding Box", total_images: Number(p.totalImages) || 0,
+          completed_images: Number(p.completedImages) || 0, team: p.team || "", status: p.status || "Pending",
+          start_date: p.startDate || null, due_date: p.dueDate || null, description: p.description || ""
+        })) },
+      { key: "datasets", label: "Datasets", table: "datasets", rows: () => datasets.map(d => ({
+          id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "",
+          version: d.version || 1, status: d.status || "Active", created_at: d.createdAt || new Date().toISOString()
+        })) },
+      { key: "tasks", label: "Images", table: "tasks", rows: () => tasks.map(t => ({
+          id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name,
+          status: t.status || "Pending", image: t.image || null, size: t.size || null,
+          source: t.source || "Sample", created_at: t.createdAt || new Date().toISOString()
+        })) },
+      { key: "annotations", label: "Annotations", table: "annotations", rows: () => {
+          const rows = [];
+          Object.entries(annotationsByTask).forEach(([taskId, list]) => {
+            (list || []).forEach(a => rows.push({
+              id: a.id, task_id: taskId, label_id: a.labelId || null, type: a.type,
+              color: a.color || null, locked: !!a.locked, hidden: !!a.hidden,
+              geometry: { x: a.x, y: a.y, w: a.w, h: a.h, rotation: a.rotation, points: a.points }
+            }));
+          });
+          return rows;
+        } },
+      { key: "team", label: "Team members", table: "team_members", rows: () => teamMembers.map(m => ({
+          id: m.id, name: m.name, email: m.email || null, role: m.role || "Annotator",
+          status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qa_score: m.qaScore ?? 100
+        })) },
+      { key: "configs", label: "Project configuration", table: "project_configs", rows: () => Object.entries(projectConfigs).map(([groupId, c]) => ({
+          group_id: groupId, labels: c.labels || [], require_qa: !!c.requireQa,
+          allow_annotator_submit: !!c.allowAnnotatorSubmit, auto_save: !!c.autoSave,
+          default_reviewer: c.defaultReviewer || "", max_tasks_per_annotator: c.maxTasksPerAnnotator || 10,
+          instructions: c.instructions || "", color: c.color || "", workspace: c.workspace || "",
+          task_sampling: c.taskSampling || "Sequential", show_instructions_before_labeling: !!c.showInstructionsBeforeLabeling,
+          use_predictions: !!c.usePredictions, prediction_source: c.predictionSource || ""
+        })) },
+      { key: "qa", label: "QA reviews", table: "qa_reviews", rows: () => Object.entries(qaReviews).map(([taskId, r]) => ({
+          task_id: taskId, decision: r.decision || null, score: r.score ?? null, reviewer: r.reviewer || null,
+          comment: r.comment || "", reason: r.reason || "", annotation_count: r.annotationCount || 0,
+          history: r.history || [], reviewed_at: r.reviewedAt || new Date().toISOString()
+        })) },
+      { key: "notifications", label: "Notifications", table: "notifications", rows: () => notifications.map(n => ({
+          id: n.id, type: n.type || null, title: n.title || "", message: n.message || "",
+          read: !!n.read, project_id: n.projectId || null, task_id: n.taskId || null,
+          created_at: n.createdAt || new Date().toISOString()
+        })) },
+      { key: "audit", label: "Audit events", table: "audit_events", rows: () => auditEvents.map(e => ({
+          id: e.id, action: e.action, actor: e.actor || null, actor_role: e.actorRole || null,
+          project_id: e.projectId || null, task_id: e.taskId || null, details: e.details || "",
+          timestamp: e.timestamp || new Date().toISOString()
+        })) },
+      { key: "importHistory", label: "Import history", table: "import_history", rows: () => importHistory.map(h => ({
+          id: h.id, file_name: h.fileName || null, dataset_id: h.datasetId || null, dataset_name: h.datasetName || null,
+          imported: h.imported || 0, skipped: h.skipped || 0, at: h.at || new Date().toISOString()
+        })) },
+      { key: "exportHistory", label: "Export history", table: "export_history", rows: () => exportHistory.map(h => ({
+          id: String(h.id), scope: h.scope || null, format: h.format || null,
+          task_count: h.tasks ?? null, annotation_count: h.annotations ?? null, created_at: h.at || new Date().toISOString()
+        })) },
+      { key: "planner", label: "Planner targets", table: "planner_targets", conflictKeys: "member_id,role", rows: () => {
+          const rows = [];
+          Object.entries(plannerTargets.annotators || {}).forEach(([memberId, target]) => rows.push({ member_id: memberId, role: "annotator", daily_target: Number(target) || 0 }));
+          Object.entries(plannerTargets.reviewers || {}).forEach(([memberId, target]) => rows.push({ member_id: memberId, role: "reviewer", daily_target: Number(target) || 0 }));
+          return rows;
+        } },
+      { key: "operations", label: "Operation read states", table: "operation_reads", rows: () => Object.entries(operationRead).map(([id, read]) => ({ operation_id: id, read: !!read })) }
+    ];
+  }
+
+  function migrationSingletons() {
+    return [
+      { key: "workload", label: "Workload settings", table: "workload_settings", row: () => ({
+          id: 1, default_daily_capacity: workloadSettings.defaultDailyCapacity ?? 8, default_weekly_capacity: workloadSettings.defaultWeeklyCapacity ?? 40
+        }) },
+      { key: "appSettings", label: "App settings", table: "app_settings", row: () => ({
+          id: 1, workspace_name: appSettings.workspaceName, timezone: appSettings.timezone, theme: appSettings.theme,
+          autosave: appSettings.autosave, autosave_interval: appSettings.autosaveInterval, confirm_submit: appSettings.confirmSubmit,
+          show_object_ids: appSettings.showObjectIds, keyboard_shortcuts: appSettings.keyboardShortcuts, compact_mode: appSettings.compactMode,
+          email_assignments: appSettings.emailAssignments, email_qa: appSettings.emailQa, email_rework: appSettings.emailRework,
+          default_page: appSettings.defaultPage
+        }) }
+    ];
+  }
+
+  async function runMigration() {
+    if (migrationRunning) return;
+    setMigrationRunning(true);
+    setVerifyStatus({});
+    const domains = migrationDomains();
+    const singletons = migrationSingletons();
+    const initial = {};
+    [...domains, ...singletons].forEach(d => { initial[d.key] = { state: "pending", count: 0 }; });
+    setMigrationStatus(initial);
+
+    for (const d of domains) {
+      setMigrationStatus(prev => ({ ...prev, [d.key]: { state: "running", count: 0 } }));
+      try {
+        const rows = d.rows();
+        if (rows.length) {
+          const { error } = d.conflictKeys ? await supabase.from(d.table).upsert(rows, { onConflict: d.conflictKeys }) : await supabase.from(d.table).upsert(rows);
+          if (error) throw error;
+        }
+        setMigrationStatus(prev => ({ ...prev, [d.key]: { state: "done", count: rows.length } }));
+      } catch (err) {
+        setMigrationStatus(prev => ({ ...prev, [d.key]: { state: "error", count: 0, error: err.message } }));
+      }
+    }
+    for (const s of singletons) {
+      setMigrationStatus(prev => ({ ...prev, [s.key]: { state: "running", count: 0 } }));
+      try {
+        const { error } = await supabase.from(s.table).upsert(s.row());
+        if (error) throw error;
+        setMigrationStatus(prev => ({ ...prev, [s.key]: { state: "done", count: 1 } }));
+      } catch (err) {
+        setMigrationStatus(prev => ({ ...prev, [s.key]: { state: "error", count: 0, error: err.message } }));
+      }
+    }
+    setMigrationRunning(false);
+    const now = new Date().toISOString();
+    setLastMigratedAt(now);
+    localStorage.setItem("annotatepro_last_migration_v1", now);
+  }
+
+  async function verifyMigrationCounts() {
+    setVerifying(true);
+    const domains = migrationDomains();
+    const results = {};
+    for (const d of domains) {
+      const localCount = d.rows().length;
+      try {
+        const { count, error } = await supabase.from(d.table).select("*", { count: "exact", head: true });
+        if (error) throw error;
+        results[d.key] = { local: localCount, cloud: count ?? 0, match: (count ?? 0) >= localCount };
+      } catch (err) {
+        results[d.key] = { local: localCount, cloud: null, match: false, error: err.message };
+      }
+    }
+    setVerifyStatus(results);
+    setVerifying(false);
+  }
 
   const [projects, setProjects] = useState(() => readStorage(PROJECTS_KEY, sampleProjects));
   const [projectSearch, setProjectSearch] = useState("");
@@ -1656,7 +1812,10 @@ function App() {
         {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
         {activePage === "Import Data" && <ImportPage projects={projects} tasks={tasks} datasets={datasets} importHistory={importHistory} onClearHistory={() => setImportHistory([])} importTaskId={importTaskId} setImportTaskId={setImportTaskId} activeDatasetId={activeDatasetId} setActiveDatasetId={setActiveDatasetId} listSearch={datasetListSearch} setListSearch={setDatasetListSearch} listStatus={datasetListStatus} setListStatus={setDatasetListStatus} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={(datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} onCreateDataset={openCreateDataset} onEditDataset={openEditDataset} onArchiveDataset={archiveDataset} onRestoreDataset={restoreDataset} onDeleteDataset={deleteDataset} />}
         {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
-        {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage} />}
+        {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage}
+          migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={runMigration}
+          verifyStatus={verifyStatus} verifying={verifying} onVerify={verifyMigrationCounts} lastMigratedAt={lastMigratedAt}
+          migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} />}
 
         <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
         {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
@@ -2675,12 +2834,13 @@ function Quick({icon:Icon,title,onClick}){return <button className="quick-action
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
 
 
-function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message }) {
+function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons }) {
   const tabs = [
     ["Workspace", SlidersHorizontal, "Workspace"],
     ["Annotation", Grid3X3, "Annotation"],
     ["Notifications", Bell, "Notifications"],
-    ["Preferences", Settings, "Preferences"]
+    ["Preferences", Settings, "Preferences"],
+    ["Cloud Migration", Database, "Cloud"]
   ];
   const Toggle = ({ label, description, value, onChange }) => (
     <label className="settings-toggle-row">
@@ -2731,10 +2891,62 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message }) {
             <div className="settings-shortcuts"><h3>Workspace shortcuts</h3><div><kbd>V</kbd><span>Select</span><kbd>B</kbd><span>Bounding Box</span><kbd>P</kbd><span>Polygon</span><kbd>Space</kbd><span>Pan canvas</span><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div></div>
             <div className="settings-danger"><div><h3>Restore default settings</h3><p>Reset only AnnotatePro settings. Projects, tasks, annotations, team and audit data are not deleted.</p></div><button className="btn secondary" onClick={onReset}><RotateCcw size={15}/> Restore defaults</button></div>
           </div>}
+          {tab === "Cloud" && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} />}
         </section>
       </div>
     </div>
   );
+}
+
+function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,verifyStatus,verifying,onVerify,lastMigratedAt,migrationDomains,migrationSingletons}) {
+  const domains = migrationDomains();
+  const singletons = migrationSingletons();
+  const all = [...domains, ...singletons];
+  const localCounts = Object.fromEntries(domains.map(d => [d.key, d.rows().length]));
+  const hasRun = Object.keys(migrationStatus).length > 0;
+  const stateIcon = (state) => state === "done" ? <CheckCircle2 size={15} className="mig-ok"/> : state === "error" ? <AlertCircle size={15} className="mig-err"/> : state === "running" ? <RefreshCw size={15} className="mig-spin"/> : <Clock3 size={15} className="mig-pending"/>;
+  return <div className="settings-card panel cloud-migration-panel">
+    <div className="settings-card-title"><div><h2>Cloud Migration</h2><p>Copy your browser data into Supabase. Your local data is never deleted by this — it stays as an automatic backup.</p></div><Database size={20}/></div>
+
+    <div className="cloud-detected-grid">
+      {domains.map(d => <div key={d.key} className="cloud-detected-card"><b>{localCounts[d.key]}</b><span>{d.label}</span></div>)}
+    </div>
+
+    <div className="cloud-migration-actions">
+      <button className="primary-btn" disabled={migrationRunning} onClick={onRunMigration}>
+        {migrationRunning ? <RefreshCw size={16} className="mig-spin"/> : <Upload size={16}/>}
+        {migrationRunning ? "Migrating..." : "Migrate to Cloud"}
+      </button>
+      <button className="secondary-btn" disabled={verifying || !hasRun} onClick={onVerify}><ShieldCheck size={15}/> {verifying ? "Verifying..." : "Verify migration"}</button>
+      {lastMigratedAt && <span className="cloud-last-run">Last migrated {new Date(lastMigratedAt).toLocaleString()}</span>}
+    </div>
+
+    {hasRun && <div className="cloud-status-list">
+      {all.map(d => {
+        const s = migrationStatus[d.key] || { state: "pending" };
+        return <div key={d.key} className={`cloud-status-row state-${s.state}`}>
+          {stateIcon(s.state)}
+          <span className="cloud-status-label">{d.label}</span>
+          <span className="cloud-status-detail">{s.state === "done" ? `${s.count} row${s.count===1?"":"s"} synced` : s.state === "error" ? s.error : s.state === "running" ? "Syncing..." : "Waiting"}</span>
+        </div>;
+      })}
+    </div>}
+
+    {Object.keys(verifyStatus).length > 0 && <div className="cloud-verify-list">
+      <h3>Verification</h3>
+      {domains.map(d => {
+        const v = verifyStatus[d.key];
+        if (!v) return null;
+        return <div key={d.key} className={`cloud-verify-row ${v.match ? "ok" : "mismatch"}`}>
+          <span>{d.label}</span>
+          <span>{v.error ? v.error : `Local ${v.local} · Cloud ${v.cloud}`}</span>
+          {v.match ? <CheckCircle2 size={14}/> : <AlertCircle size={14}/>}
+        </div>;
+      })}
+    </div>}
+
+    <div className="guide-note"><ShieldCheck size={14}/><span>This uses upsert, so re-running the migration is always safe — existing cloud rows just get refreshed with your latest local data instead of duplicated.</span></div>
+  </div>;
 }
 
 export default App;
