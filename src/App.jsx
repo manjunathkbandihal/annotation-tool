@@ -771,6 +771,55 @@ function App() {
   const [operationsShowUnread, setOperationsShowUnread] = useState(false);
   const AUDIT_KEY = "annotatepro_audit_trail_v1";
   const [auditEvents, setAuditEvents] = useState(() => readStorage(AUDIT_KEY, []));
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const presenceChannelRef = useRef(null);
+
+  useEffect(() => {
+    if (!session?.user) { setOnlineUsers([]); return; }
+
+    const dataChannel = supabase
+      .channel("live-data-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, (payload) => {
+        if (payload.eventType === "DELETE") { setTasks(prev => prev.filter(t => t.id !== payload.old.id)); return; }
+        const row = payload.new;
+        const mapped = { id: row.id, projectId: row.project_id, datasetId: row.dataset_id, name: row.name, status: row.status, image: row.image, size: row.size, source: row.source, createdAt: row.created_at };
+        setTasks(prev => prev.some(t => t.id === mapped.id) ? prev.map(t => t.id === mapped.id ? { ...t, ...mapped } : t) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "qa_reviews" }, (payload) => {
+        if (payload.eventType === "DELETE") return;
+        const row = payload.new;
+        setQaReviews(prev => ({ ...prev, [row.task_id]: { decision: row.decision, score: row.score, reviewer: row.reviewer, comment: row.comment, reason: row.reason, annotationCount: row.annotation_count, history: row.history, reviewedAt: row.reviewed_at } }));
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, (payload) => {
+        const row = payload.new;
+        setNotifications(prev => prev.some(n => n.id === row.id) ? prev : [{ id: row.id, type: row.type, title: row.title, message: row.message, read: row.read, projectId: row.project_id, taskId: row.task_id, createdAt: row.created_at }, ...prev]);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "audit_events" }, (payload) => {
+        const row = payload.new;
+        setAuditEvents(prev => prev.some(e => e.id === row.id) ? prev : [{ id: row.id, action: row.action, actor: row.actor, actorRole: row.actor_role, projectId: row.project_id, taskId: row.task_id, details: row.details, timestamp: row.timestamp }, ...prev].slice(0, 2000));
+      })
+      .subscribe();
+
+    const presenceChannel = supabase.channel("workspace-presence", { config: { presence: { key: session.user.id } } });
+    presenceChannelRef.current = presenceChannel;
+    presenceChannel
+      .on("presence", { event: "sync" }, () => {
+        const state = presenceChannel.presenceState();
+        setOnlineUsers(Object.values(state).map(entries => entries[0]).filter(Boolean));
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await presenceChannel.track({ user_id: session.user.id, name: currentUserName, online_at: new Date().toISOString(), current_task_id: null });
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(dataChannel);
+      supabase.removeChannel(presenceChannel);
+      presenceChannelRef.current = null;
+    };
+  }, [session?.user?.id]);
+
   const [auditSearch, setAuditSearch] = useState("");
   const [auditFilter, setAuditFilter] = useState("All Actions");
   const [auditProject, setAuditProject] = useState("All Projects");
@@ -856,6 +905,13 @@ function App() {
   const currentTask = tasks[selectedTaskIndex] || tasks[0];
   const currentAnnotations = annotationsByTask[currentTask?.id] || [];
   const currentLabel = labels.find((l) => l.id === selectedLabel) || labels[0];
+
+  useEffect(() => {
+    if (!session?.user || !presenceChannelRef.current) return;
+    presenceChannelRef.current.track({ user_id: session.user.id, name: currentUserName, online_at: new Date().toISOString(), current_task_id: activePage === "Annotation Workspace" ? (currentTask?.id || null) : null });
+  }, [currentTask?.id, activePage, session?.user?.id]);
+
+  const coEditors = onlineUsers.filter(u => u.user_id !== session?.user?.id && u.current_task_id && u.current_task_id === currentTask?.id);
 
   const dashboardStats = useMemo(() => {
     const active = projects.filter(p => p.status !== "Completed").length;
@@ -1338,6 +1394,23 @@ function App() {
   function logAudit(action, taskId=null, projectId=null, details="", actor=currentUserName, actorRole="Team Lead") {
     const event = { id:`audit-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, action, actor, actorRole, projectId:projectId || tasks.find(t=>t.id===taskId)?.projectId || workspaceProject, taskId, details, timestamp:new Date().toISOString() };
     setAuditEvents(prev => [event, ...prev].slice(0, 2000));
+    if (session) {
+      supabase.from("audit_events").insert({
+        id: event.id, action: event.action, actor: event.actor, actor_role: event.actorRole,
+        project_id: event.projectId, task_id: event.taskId, details: event.details, timestamp: event.timestamp
+      }).then(({ error }) => { if (error) console.warn("[Realtime] audit sync failed:", error.message); });
+    }
+  }
+
+  function pushNotification(type, title, message, projectId=null, taskId=null) {
+    const note = { id:`notif-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, type, title, message, read:false, projectId, taskId, createdAt:new Date().toISOString() };
+    setNotifications(prev => [note, ...prev]);
+    if (session) {
+      supabase.from("notifications").insert({
+        id: note.id, type: note.type, title: note.title, message: note.message, read: false,
+        project_id: note.projectId, task_id: note.taskId, created_at: note.createdAt
+      }).then(({ error }) => { if (error) console.warn("[Realtime] notification sync failed:", error.message); });
+    }
   }
 
   function saveTask() {
@@ -1430,6 +1503,11 @@ function App() {
 
   function updateTaskStatus(id, status) {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
+    if (session) {
+      supabase.from("tasks").update({ status }).eq("id", id).then(({ error }) => {
+        if (error) console.warn("[Realtime] task status sync failed:", error.message);
+      });
+    }
   }
 
   function exportTasksCsv() {
@@ -1621,6 +1699,16 @@ function App() {
     const nextStatus = decision === "Approved" ? "Approved" : decision === "Rejected" ? "Rejected" : "QA Review";
     setTasks(prev => prev.map(t => t.id === qaSelectedTask.id ? { ...t, status: nextStatus } : t));
     logAudit(`QA ${decision}`, qaSelectedTask.id, qaSelectedTask.projectId, `QA score ${qaScore}${qaComment.trim() ? ` · ${qaComment.trim()}` : ""}`, currentUserName, "Reviewer");
+    if (session) {
+      supabase.from("qa_reviews").upsert({
+        task_id: qaSelectedTask.id, decision: review.decision, score: review.score, reviewer: review.reviewer,
+        comment: review.comment, reason: review.reason, annotation_count: review.annotationCount,
+        history: review.history, reviewed_at: review.reviewedAt
+      }).then(({ error }) => { if (error) console.warn("[Realtime] QA review sync failed:", error.message); });
+    }
+    if (decision === "Changes Requested" || decision === "Rejected") {
+      pushNotification("qa", `QA ${decision}`, `${qaSelectedTask.name} was ${decision.toLowerCase()} by ${currentUserName}${review.reason ? ` — ${review.reason}` : ""}`, qaSelectedTask.projectId, qaSelectedTask.id);
+    }
     setQaMessage(`${qaSelectedTask.name} marked ${decision.toLowerCase()}`);
     setTimeout(() => setQaMessage(""), 2200);
   }
@@ -1883,6 +1971,11 @@ function App() {
           <div className="breadcrumb"><span>AnnotatePro</span><b>/</b><strong>{activePage}</strong></div>
           <div className="top-actions">
             <div className="global-search"><Search size={17} /><input placeholder="Search..." /></div>
+            {onlineUsers.length > 0 && <div className="presence-stack" title={onlineUsers.map(u=>u.name).join(", ")}>
+              {onlineUsers.slice(0,4).map(u => <div key={u.user_id} className="member-avatar small presence-avatar">{initials(u.name)}</div>)}
+              {onlineUsers.length > 4 && <div className="member-avatar small presence-avatar">+{onlineUsers.length-4}</div>}
+              <span className="presence-count">{onlineUsers.length} online</span>
+            </div>}
             <button className="icon-btn notification-trigger" onClick={() => navigate("Notifications")}><Bell size={19} />{notifications.filter(n=>!n.read).length > 0 && <i>{notifications.filter(n=>!n.read).length > 9 ? "9+" : notifications.filter(n=>!n.read).length}</i>}</button>
             <div className="profile-wrap">
               <button className="profile-button" onClick={() => setProfileOpen(v => !v)}><div className="tiny-avatar">{currentUserInitial}</div><span>{currentUserName}</span><ChevronDown size={15} /></button>
@@ -1932,6 +2025,7 @@ function App() {
             imageInputRef={imageInputRef} importImages={importImages}
             insertVertex={insertVertex} deleteVertex={deleteVertex} selectedIds={selectedIds} marquee={marquee}
             onToggleVisible={toggleAnnotationVisible} onToggleLock={toggleAnnotationLock} onReorder={moveAnnotationOrder}
+            coEditors={coEditors}
           />
         )}
         {activePage === "Team" && <TeamPage
@@ -2007,7 +2101,7 @@ function Workspace({
   canvasRef, imageRef, onCanvasPointerDown, onCanvasPointerMove, onCanvasPointerUp, onCanvasDoubleClick, handleImageError,
   onDelete, onDuplicate, onUndo, onRedo, onReset, onPrevious, onNext, onSave, onSubmit, message,
   updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport,
-  insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee
+  insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee, coEditors
 }) {
   const [taskSearch, setTaskSearch] = useState("");
   const [rightTab, setRightTab] = useState("Labels");
@@ -2038,6 +2132,7 @@ function Workspace({
         <div className="workspace-top-meta"><span className="workspace-live-dot"></span><span>{currentAnnotations.length} objects</span><span>{selectedLabelObject?.name || "No label selected"}</span></div>
         <div className="workspace-actions"><button className="secondary-btn" onClick={onSave}><Save size={16}/> Save</button><button className="primary-btn" onClick={onSubmit}><CheckCircle2 size={16}/> Submit</button></div>
       </div>
+      {coEditors?.length > 0 && <div className="co-edit-banner"><Users size={14}/><span>{coEditors.map(u=>u.name).join(", ")} {coEditors.length===1?"is":"are"} also viewing this task right now — coordinate before submitting to avoid overwriting each other's work.</span></div>}
 
       <div className="annotation-shell build8-shell">
         <aside className="task-queue-panel">
