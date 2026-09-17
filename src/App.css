@@ -211,6 +211,20 @@ body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);backgroun
 .auth-links{display:flex;flex-direction:column;gap:9px;align-items:center;margin-top:16px}
 .auth-links button{border:0;background:transparent;color:#2563eb;font-size:9px;font-weight:600}
 .auth-links button:hover{text-decoration:underline}
+.auth-footnote{font-size:8px;color:#8994a1;text-align:center;margin:16px 0 0;line-height:1.5}
+.account-access-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:2px 0 8px}
+.account-access-row>span{font-size:9px;color:#475569;font-weight:600}
+.account-access-actions{display:flex;gap:8px;flex-wrap:wrap}
+.account-access-note{display:flex;align-items:center;gap:7px;font-size:8px;padding:8px 10px;border-radius:7px;margin-bottom:8px}
+.account-access-note.ok{background:#ecfdf3;color:#15803d;border:1px solid #bbf7d0}
+.account-access-note.error{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
+.account-access-hint{font-size:7px;color:#a1acb8;margin:0}
+.roles-list{padding:0 20px 12px;display:flex;flex-direction:column;gap:8px}
+.roles-row{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.roles-row-main{flex:1;min-width:0}
+.roles-row-main b{display:block;font-size:9px;color:#1e293b}
+.roles-row-main span{display:block;font-size:8px;color:#8994a1;margin-top:2px}
+.roles-row select{border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:9px;background:#fff;color:#334155;font-weight:600}
 .cloud-storage-section{margin:0 20px 16px;padding-top:16px;border-top:1px solid var(--line)}
 .cloud-storage-section h3{font-size:10px;margin:0 0 4px}
 .cloud-storage-section>p{font-size:8px;color:#8994a1;margin:0 0 12px;max-width:520px}
