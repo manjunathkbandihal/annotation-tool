@@ -2,12 +2,12 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.jsx'
-import { testConnection } from './supabaseClient.js'
 
-// Build 21 connection check — logs to the browser console only, doesn't
-// affect the UI or app state. Safe to remove once you've confirmed it
-// once; Build 22 will replace this with real data loading.
-testConnection();
+// The Build 21 anon connection check that used to run here was removed in
+// Build 25: once real RLS policies require `to authenticated`, an anon
+// (signed-out) query is SUPPOSED to fail, so the old console check would
+// permanently report a false alarm. Auth state is now verified inside
+// App() itself (see the session/authLoading logic there) instead.
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>
