@@ -109,11 +109,12 @@ function App() {
 
   const [session, setSession] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [authView, setAuthView] = useState("login"); // login | signup | forgot | reset
   const [authProfile, setAuthProfile] = useState(null);
   const [passwordRecovery, setPasswordRecovery] = useState(false);
 
   useEffect(() => {
+    const hash = window.location.hash || "";
+    if (hash.includes("type=recovery") || hash.includes("type=invite")) setPasswordRecovery(true);
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
       setAuthLoading(false);
@@ -136,10 +137,58 @@ function App() {
   const currentUserName = authProfile?.full_name || session?.user?.email?.split("@")[0] || "there";
   const currentUserEmail = session?.user?.email || "";
   const currentUserInitial = initials(currentUserName);
+  const currentUserRole = authProfile?.role || "Annotator";
+  const isAdmin = currentUserRole === "Admin";
+  const canManage = isAdmin || currentUserRole === "Team Lead";
+  const canReview = canManage || currentUserRole === "Reviewer";
 
   async function signOut() {
     await supabase.auth.signOut();
     setProfileOpen(false);
+  }
+
+  const [accountActionStatus, setAccountActionStatus] = useState({ loading: false, forEmail: null, message: "", error: false });
+
+  const [roleProfiles, setRoleProfiles] = useState([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+
+  async function loadRoleProfiles() {
+    setRolesLoading(true);
+    const { data, error } = await supabase.from("profiles").select("*").order("created_at");
+    if (!error) setRoleProfiles(data || []);
+    setRolesLoading(false);
+  }
+
+  async function updateProfileRole(id, role) {
+    setRoleProfiles(prev => prev.map(p => p.id === id ? { ...p, role } : p));
+    const { error } = await supabase.from("profiles").update({ role }).eq("id", id);
+    if (error) {
+      setDatasetToast(`Couldn't update role: ${error.message}`);
+      setTimeout(() => setDatasetToast(""), 2600);
+      loadRoleProfiles();
+    }
+  }
+
+  async function inviteTeamMember(email, fullName) {
+    if (!email) return;
+    setAccountActionStatus({ loading: true, forEmail: email, message: "Sending invite...", error: false });
+    const { data, error } = await supabase.functions.invoke("admin-invite-user", { body: { email, full_name: fullName } });
+    if (error || data?.error) {
+      setAccountActionStatus({ loading: false, forEmail: email, message: (data?.error || error.message || "Invite failed — is the admin-invite-user function deployed?"), error: true });
+      return;
+    }
+    setAccountActionStatus({ loading: false, forEmail: email, message: "Invite sent — they'll get an email to set their password.", error: false });
+  }
+
+  async function sendPasswordReset(email) {
+    if (!email) return;
+    setAccountActionStatus({ loading: true, forEmail: email, message: "Sending reset email...", error: false });
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    if (error) {
+      setAccountActionStatus({ loading: false, forEmail: email, message: error.message, error: true });
+      return;
+    }
+    setAccountActionStatus({ loading: false, forEmail: email, message: "Password reset email sent.", error: false });
   }
 
   const [appSettings, setAppSettings] = useState(() => readStorage(SETTINGS_KEY, {
@@ -1789,7 +1838,7 @@ function App() {
     return <div className="auth-loading-screen"><div className="brand-mark"><Grid3X3 size={22}/></div><RefreshCw size={20} className="mig-spin"/><span>Loading AnnotatePro...</span></div>;
   }
   if (!session) {
-    return <AuthScreen view={authView} setView={setAuthView}/>;
+    return <AuthScreen/>;
   }
   if (passwordRecovery) {
     return <UpdatePasswordScreen onDone={() => setPasswordRecovery(false)}/>;
@@ -1843,7 +1892,7 @@ function App() {
         </header>
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} userName={currentUserName} />}
-        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} />}
+        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
@@ -1893,8 +1942,9 @@ function App() {
           onCreate={openCreateMember} onEdit={openEditMember} onToggleStatus={toggleMemberStatus} onDelete={deleteMember}
           onAssign={assignTask} message={teamMessage} modalOpen={teamModalOpen} setModalOpen={setTeamModalOpen}
           editing={!!editingMemberId} form={teamForm} setForm={setTeamForm} onSave={saveMember}
+          onInvite={inviteTeamMember} onSendReset={sendPasswordReset} accountActionStatus={accountActionStatus} isAdmin={isAdmin}
         />}
-        {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} /> }
+        {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} canReview={canReview} /> }
         {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
         {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
@@ -1907,7 +1957,8 @@ function App() {
           migrationDomains={migrationDomains} migrationSingletons={migrationSingletons}
           imageMigration={imageMigration} onMigrateImages={migrateImagesToStorage}
           base64ImageCount={tasks.filter(t => t.image && t.image.startsWith("data:")).length}
-          userName={currentUserName} userEmail={currentUserEmail} userInitial={currentUserInitial} onSignOut={signOut} />}
+          userName={currentUserName} userEmail={currentUserEmail} userInitial={currentUserInitial} onSignOut={signOut}
+          isAdmin={isAdmin} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole} />}
 
         <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
         {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
@@ -2355,7 +2406,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
 function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
 function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
-function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage}) {
+function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage}) {
   const [activeCategory, setActiveCategory] = useState(null);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupStatusFilter, setGroupStatusFilter] = useState("Active");
@@ -2379,10 +2430,10 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
           <div className="category-drill-title"><span className="category-dot" style={{background:activeGroup.color}}/><h1>{activeGroup.name}</h1><span className="category-count-pill">{categoryProjects.length} task{categoryProjects.length===1?"":"s"}</span>{activeGroup.status==="Archived" && <span className="category-count-pill archived-pill">Archived</span>}</div>
           {activeGroup.description && <p className="category-drill-desc">{activeGroup.description}</p>}
         </div>
-        <div className="category-drill-actions">
+        {canManage && <div className="category-drill-actions">
           <button className="secondary-btn" onClick={()=>onOpenConfig(activeGroup.id)}><Settings size={16}/> Configuration</button>
           <button className="primary-btn" onClick={()=>onCreate(activeGroup.id)}><Plus size={17}/> Create Task</button>
-        </div>
+        </div>}
       </div>
       <div className="project-summary"><MiniStat label="Total Tasks" value={categoryProjects.length}/><MiniStat label="In Progress" value={categoryProjects.filter(p=>p.status==="In Progress").length}/><MiniStat label="Completed" value={categoryProjects.filter(p=>p.status==="Completed").length}/><MiniStat label="Pending" value={categoryProjects.filter(p=>p.status==="Pending").length}/></div>
 
@@ -2413,7 +2464,7 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
 
       <section className="panel">
         <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
-        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)}/>)}</div>
+        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)} canManage={canManage}/>)}</div>
         {!categoryProjects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No tasks in {activeGroup.name} yet</h3><p>Create one to get started.</p></div>}
       </section>
     </div>;
@@ -2428,7 +2479,7 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
       return a.name.localeCompare(b.name);
     });
 
-  return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div><button className="primary-btn" onClick={onCreateGroup}><Plus size={17}/> Create Project</button></div>
+  return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div>{canManage && <button className="primary-btn" onClick={onCreateGroup}><Plus size={17}/> Create Project</button>}</div>
     {groupMessage && <div className="workspace-toast"><AlertCircle size={17}/>{groupMessage}</div>}
     <div className="project-filters standalone">
       <div className="filter-search"><Search size={17}/><input value={groupSearch} onChange={e=>setGroupSearch(e.target.value)} placeholder="Search projects..."/></div>
@@ -2450,14 +2501,14 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
             <span className="category-tile-count">{count} task{count===1?"":"s"}{owner?` · Owner: ${owner.name}`:""}</span>
             {team.length > 0 && <div className="overview-avatar-stack tile-avatars">{team.slice(0,4).map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div>}
           </button>
-          <div className="category-tile-actions">
+          {canManage && <div className="category-tile-actions">
             <button title="Duplicate project" onClick={()=>onDuplicateGroup(group.id)}><Copy size={14}/></button>
             <button title="Edit project" onClick={()=>onEditGroup(group)}><Edit3 size={14}/></button>
             {archived
               ? <button title="Restore project" onClick={()=>onRestoreGroup(group.id)}><RotateCcw size={14}/></button>
               : <button title="Archive project" onClick={()=>onArchiveGroup(group.id)}><Archive size={14}/></button>}
             <button title="Delete project" className="danger-icon" onClick={()=>onDeleteGroup(group.id)}><Trash2 size={14}/></button>
-          </div>
+          </div>}
         </div>;
       })}
     </div>
@@ -2465,8 +2516,8 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
   </div>;
 }
 
-function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onPlanner}) {
-  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div><button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button></div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button></div></div></article>;
+function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onPlanner,canManage}) {
+  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div></article>;
 }
 
 function ProjectModal({form,setForm,editing,onClose,onSave}) {
@@ -2646,76 +2697,33 @@ function ImportModal({onClose,onImport,step,setStep,fileName,columns,rows,mappin
   </div></div>;
 }
 
-function AuthScreen({ view, setView }) {
+function AuthScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  const switchView = (v) => { setView(v); setError(""); setMessage(""); };
 
   async function handleLogin(e) {
     e.preventDefault();
-    setLoading(true); setError(""); setMessage("");
+    setLoading(true); setError("");
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     setLoading(false);
     if (error) setError(error.message);
-  }
-
-  async function handleSignup(e) {
-    e.preventDefault();
-    setLoading(true); setError(""); setMessage("");
-    const { error } = await supabase.auth.signUp({ email, password, options: { data: { full_name: fullName } } });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    setMessage("Account created. Check your email to confirm it, then sign in.");
-    setView("login");
-  }
-
-  async function handleForgot(e) {
-    e.preventDefault();
-    setLoading(true); setError(""); setMessage("");
-    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
-    setLoading(false);
-    if (error) { setError(error.message); return; }
-    setMessage("Password reset email sent — check your inbox.");
   }
 
   return (
     <div className="auth-screen">
       <div className="auth-card">
         <div className="auth-brand"><div className="brand-mark"><Grid3X3 size={22}/></div><div><strong>AnnotatePro</strong><span>Annotation Platform</span></div></div>
-
-        {view === "login" && <form onSubmit={handleLogin} className="auth-form">
+        <form onSubmit={handleLogin} className="auth-form">
           <h1>Welcome back</h1><p>Sign in to your workspace.</p>
           <label>Email<input type="email" required autoFocus value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
           <label>Password<div className="auth-password-field"><input type={showPassword?"text":"password"} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div></label>
           {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
-          {message && <div className="auth-message"><CheckCircle2 size={14}/>{message}</div>}
           <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Signing in..." : "Sign in"}</button>
-          <div className="auth-links"><button type="button" onClick={()=>switchView("forgot")}>Forgot password?</button><button type="button" onClick={()=>switchView("signup")}>Create an account</button></div>
-        </form>}
-
-        {view === "signup" && <form onSubmit={handleSignup} className="auth-form">
-          <h1>Create your account</h1><p>Join your team's AnnotatePro workspace.</p>
-          <label>Full name<input required autoFocus value={fullName} onChange={e=>setFullName(e.target.value)} placeholder="Your name"/></label>
-          <label>Email<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
-          <label>Password<div className="auth-password-field"><input type={showPassword?"text":"password"} required minLength={6} value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div></label>
-          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
-          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Creating account..." : "Create account"}</button>
-          <div className="auth-links"><button type="button" onClick={()=>switchView("login")}>Already have an account? Sign in</button></div>
-        </form>}
-
-        {view === "forgot" && <form onSubmit={handleForgot} className="auth-form">
-          <h1>Reset your password</h1><p>We'll email you a link to set a new one.</p>
-          <label>Email<input type="email" required autoFocus value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
-          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
-          {message && <div className="auth-message"><CheckCircle2 size={14}/>{message}</div>}
-          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Sending..." : "Send reset link"}</button>
-          <div className="auth-links"><button type="button" onClick={()=>switchView("login")}>Back to sign in</button></div>
-        </form>}
+          <p className="auth-footnote">Don't have an account? Ask your admin to invite you — accounts are created from inside the app, not from this screen.</p>
+        </form>
       </div>
     </div>
   );
@@ -2756,7 +2764,7 @@ function Shortcuts({onClose}) {
 }
 
 
-function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, selectedReview, search, setSearch, filter, setFilter, score, setScore, reason, setReason, comment, setComment, onSelect, onReview, message, reviews }) {
+function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, selectedReview, search, setSearch, filter, setFilter, score, setScore, reason, setReason, comment, setComment, onSelect, onReview, message, reviews, canReview }) {
   const [activeTab, setActiveTab] = useState("queue");
   const reasons = ["Incorrect label", "Missing annotation", "Wrong geometry", "Low quality / unclear", "Duplicate annotation", "Other"];
   return (
@@ -2809,7 +2817,7 @@ function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, sel
             </div>
             <div className="qa-review-meta"><div><span>ANNOTATIONS</span><b>{selectedAnnotations.length}</b></div><div><span>STATUS</span><b>{selectedReview?.decision || "Pending Review"}</b></div><div><span>REVIEWER</span><b>{selectedReview?.reviewer || "Unassigned"}</b></div></div>
             <div className="qa-section"><div className="qa-section-head"><div><h3>Quality score</h3><p>Rate the overall annotation quality.</p></div><strong>{score}%</strong></div><input className="qa-score-range" type="range" min="0" max="100" value={score} onChange={e=>setScore(Number(e.target.value))}/><div className="score-scale"><span>0 Poor</span><span>50 Average</span><span>100 Excellent</span></div></div>
-            <div className="qa-section"><h3>Review decision</h3><div className="decision-grid"><button className="decision approve" onClick={()=>onReview("Approved")}><CheckCircle2 size={17}/><span><b>Approve</b><small>Annotation is ready</small></span></button><button className="decision changes" onClick={()=>onReview("Changes Requested")}><Edit3 size={17}/><span><b>Request Changes</b><small>Send back to annotator</small></span></button><button className="decision reject" onClick={()=>onReview("Rejected")}><AlertCircle size={17}/><span><b>Reject</b><small>Fails quality criteria</small></span></button></div></div>
+            <div className="qa-section"><h3>Review decision</h3>{canReview ? <div className="decision-grid"><button className="decision approve" onClick={()=>onReview("Approved")}><CheckCircle2 size={17}/><span><b>Approve</b><small>Annotation is ready</small></span></button><button className="decision changes" onClick={()=>onReview("Changes Requested")}><Edit3 size={17}/><span><b>Request Changes</b><small>Send back to annotator</small></span></button><button className="decision reject" onClick={()=>onReview("Rejected")}><AlertCircle size={17}/><span><b>Reject</b><small>Fails quality criteria</small></span></button></div> : <p className="no-access">Only Reviewers, Team Leads and Admins can submit QA decisions.</p>}</div>
             <div className="qa-section"><h3>Feedback</h3><select className="qa-select" value={reason} onChange={e=>setReason(e.target.value)}>{reasons.map(r=><option key={r}>{r}</option>)}</select><textarea className="qa-comment" value={comment} onChange={e=>setComment(e.target.value)} placeholder="Add reviewer comments or correction instructions..." /></div>
             {selectedReview?.history?.length ? <div className="qa-history-mini"><h3>Latest review activity</h3><div><span>{new Date(selectedReview.reviewedAt).toLocaleString()}</span><b>{selectedReview.reviewer}</b><strong>{selectedReview.decision}</strong></div></div> : null}
           </> : <div className="qa-empty full"><ClipboardCheck size={40}/><h3>Select a task to review</h3><p>Choose a task from the review queue.</p></div>}
@@ -2895,7 +2903,7 @@ function AnalyticsPage({ projects, tasks, annotations, qaReviews, range, setRang
   </div>;
 }
 
-function TeamPage({members, allMembers, projects, tasks, stats, search, setSearch, roleFilter, setRoleFilter, statusFilter, setStatusFilter, onCreate, onEdit, onToggleStatus, onDelete, onAssign, message, modalOpen, setModalOpen, editing, form, setForm, onSave}) {
+function TeamPage({members, allMembers, projects, tasks, stats, search, setSearch, roleFilter, setRoleFilter, statusFilter, setStatusFilter, onCreate, onEdit, onToggleStatus, onDelete, onAssign, message, modalOpen, setModalOpen, editing, form, setForm, onSave, onInvite, onSendReset, accountActionStatus, isAdmin}) {
   const [selectedMemberId, setSelectedMemberId] = useState(members[0]?.id || null);
   const selectedMember = allMembers.find(m => m.id === selectedMemberId) || members[0] || allMembers[0];
   const assignedTasks = selectedMember ? tasks.filter(t => t.assigneeId === selectedMember.id) : [];
@@ -2946,6 +2954,17 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
           <div className="detail-metrics"><div><span>Assigned</span><b>{assignedTasks.length}</b></div><div><span>Capacity</span><b>{selectedMember.capacity || 0}</b></div><div><span>Workload</span><b>{workload}%</b></div><div><span>QA Score</span><b>{selectedMember.qaScore ? `${selectedMember.qaScore}%` : "—"}</b></div></div>
           <div className="team-detail-section"><div className="section-title"><div><h3>Project Access</h3><p>Projects this member can work on</p></div><ShieldCheck size={16}/></div><div className="project-access-list">{(selectedMember.projects || []).length ? selectedMember.projects.map(id=><div key={id}><FolderKanban size={14}/><span>{projectName(id)}</span><Check size={14}/></div>) : <div className="no-access">No projects assigned.</div>}</div></div>
           <div className="team-detail-section"><div className="section-title"><div><h3>Current Assignments</h3><p>Tasks currently allocated to this member</p></div><span>{assignedTasks.length}</span></div>{assignedTasks.length ? <div className="assignment-list">{assignedTasks.map(task=><div className="assignment-row" key={task.id}><div className="assignment-thumb">{task.image ? <img src={task.image} alt=""/> : <ImageIcon size={15}/>}</div><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><StatusBadge status={task.status}/><button className="icon-btn" onClick={()=>onAssign(task.id, "")} title="Unassign"><X size={14}/></button></div>)}</div> : <div className="team-empty compact"><ClipboardCheck size={25}/><p>No tasks assigned yet.</p></div>}</div>
+          {isAdmin ? <div className="team-detail-section"><div className="section-title"><div><h3>Account Access</h3><p>Login account for this member (separate from their roster entry above)</p></div><LogOut size={16} style={{transform:"scaleX(-1)"}}/></div>
+            <div className="account-access-row">
+              <span>{selectedMember.email || "No email on file"}</span>
+              <div className="account-access-actions">
+                <button className="secondary-btn" disabled={!selectedMember.email || accountActionStatus.loading} onClick={()=>onInvite(selectedMember.email, selectedMember.name)}><UserPlus size={14}/> Invite to sign in</button>
+                <button className="secondary-btn" disabled={!selectedMember.email || accountActionStatus.loading} onClick={()=>onSendReset(selectedMember.email)}><RotateCcw size={14}/> Send password reset</button>
+              </div>
+            </div>
+            {accountActionStatus.forEmail === selectedMember.email && accountActionStatus.message && <div className={`account-access-note ${accountActionStatus.error ? "error" : "ok"}`}>{accountActionStatus.error ? <AlertCircle size={13}/> : <CheckCircle2 size={13}/>}{accountActionStatus.message}</div>}
+            <p className="account-access-hint">Admin-only action. Manage roles from Settings → Roles & Access.</p>
+          </div> : null}
           <div className="team-detail-section"><div className="section-title"><div><h3>Assign Unallocated Work</h3><p>Open tasks from the member's project access</p></div><Target size={16}/></div>{availableTasks.length ? <div className="assignable-list">{availableTasks.map(task=><div className="assignable-row" key={task.id}><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><button className="secondary-btn" onClick={()=>onAssign(task.id, selectedMember.id)}><Plus size={13}/> Assign</button></div>)}</div> : <div className="no-access">No unallocated tasks available for this member.</div>}</div>
         </> : <div className="team-empty"><Users size={40}/><h3>Select a team member</h3><p>Choose a member to view workload and assignments.</p></div>}
       </section>
@@ -3030,13 +3049,13 @@ function Quick({icon:Icon,title,onClick}){return <button className="quick-action
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
 
 
-function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut }) {
+function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole }) {
   const tabs = [
     ["Workspace", SlidersHorizontal, "Workspace"],
     ["Annotation", Grid3X3, "Annotation"],
     ["Notifications", Bell, "Notifications"],
     ["Preferences", Settings, "Preferences"],
-    ["Cloud Migration", Database, "Cloud"]
+    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Cloud Migration", Database, "Cloud"]] : [])
   ];
   const Toggle = ({ label, description, value, onChange }) => (
     <label className="settings-toggle-row">
@@ -3087,11 +3106,33 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
             <div className="settings-shortcuts"><h3>Workspace shortcuts</h3><div><kbd>V</kbd><span>Select</span><kbd>B</kbd><span>Bounding Box</span><kbd>P</kbd><span>Polygon</span><kbd>Space</kbd><span>Pan canvas</span><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div></div>
             <div className="settings-danger"><div><h3>Restore default settings</h3><p>Reset only AnnotatePro settings. Projects, tasks, annotations, team and audit data are not deleted.</p></div><button className="btn secondary" onClick={onReset}><RotateCcw size={15}/> Restore defaults</button></div>
           </div>}
-          {tab === "Cloud" && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
+          {tab === "Roles" && isAdmin && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
+          {tab === "Cloud" && isAdmin && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
         </section>
       </div>
     </div>
   );
+}
+
+function RolesAccessPanel({profiles, loading, onLoad, onUpdateRole, currentUserEmail}) {
+  useEffect(() => { onLoad(); }, []);
+  const roleOptions = ["Admin", "Team Lead", "Reviewer", "Annotator"];
+  return <div className="settings-card panel roles-access-panel">
+    <div className="settings-card-title"><div><h2>Roles & Access</h2><p>Who can sign in, and what they're allowed to do. Only Admins can see this page.</p></div><Users size={20}/></div>
+    {loading ? <div className="dataset-empty"><RefreshCw size={28} className="mig-spin"/><h3>Loading accounts...</h3></div> :
+      <div className="roles-list">
+        {profiles.map(p => <div className="roles-row" key={p.id}>
+          <div className="member-avatar small">{initials(p.full_name || p.id)}</div>
+          <div className="roles-row-main"><b>{p.full_name || "Unnamed"}</b><span>{p.email || p.id}{p.email === currentUserEmail ? " (you)" : ""}</span></div>
+          <select value={p.role} onChange={e=>onUpdateRole(p.id, e.target.value)}>
+            {roleOptions.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>)}
+        {!profiles.length && <div className="no-access">No accounts yet — invite your first user from the Team page.</div>}
+      </div>
+    }
+    <div className="guide-note"><ShieldCheck size={14}/><span>Admin can do everything. Team Lead can manage projects, datasets, team and configuration. Reviewer can approve/reject QA. Annotator can work on tasks and annotations only.</span></div>
+  </div>;
 }
 
 function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,verifyStatus,verifying,onVerify,lastMigratedAt,migrationDomains,migrationSingletons,imageMigration,onMigrateImages,base64ImageCount}) {
