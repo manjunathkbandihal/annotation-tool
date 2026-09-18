@@ -23,10 +23,12 @@ const labelPalette = [
 const GROUP_ICONS = { Brush, Square, Layers, FolderKanban, Target, ShieldCheck };
 
 const defaultProjectGroups = [
-  { id: "grp-segmentation", name: "Segmentation", description: "Pixel-level segmentation work — masks, polygons and brush labels.", icon: "Brush", color: "#1D9E75", status: "Active", ownerId: "m1", teamIds: ["m1","m4"] },
-  { id: "grp-detection", name: "Detection", description: "Bounding-box object detection work.", icon: "Square", color: "#378ADD", status: "Active", ownerId: "m1", teamIds: ["m1","m3","m7"] },
-  { id: "grp-combined", name: "Combined", description: "Projects mixing multiple annotation types.", icon: "Layers", color: "#8B5CF6", status: "Active", ownerId: "", teamIds: [] }
+  { id: "grp-segmentation", name: "Segmentation", description: "Pixel-level segmentation work — masks, polygons and brush labels.", icon: "Brush", color: "#1D9E75", status: "Active", stage: "Active", ownerId: "m1", teamIds: ["m1","m4"] },
+  { id: "grp-detection", name: "Detection", description: "Bounding-box object detection work.", icon: "Square", color: "#378ADD", status: "Active", stage: "Active", ownerId: "m1", teamIds: ["m1","m3","m7"] },
+  { id: "grp-combined", name: "Combined", description: "Projects mixing multiple annotation types.", icon: "Layers", color: "#8B5CF6", status: "Active", stage: "Planning", ownerId: "", teamIds: [] }
 ];
+
+const PROJECT_STAGES = ["Planning", "Active", "In Review", "Completed"];
 
 const sampleProjects = [
   {
@@ -64,8 +66,10 @@ const sampleTasks = [
   { id: "task-006", projectId: "p4", datasetId: "ds-p4-default", name: "traffic_scene_006.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1600&q=85" }
 ];
 
+const DATASET_STAGES = ["Draft", "Collecting", "Ready", "In Use", "Retired"];
+
 function defaultDatasetFor(project) {
-  return { id: `ds-${project.id}-default`, projectId: project.id, name: "Default Dataset", description: "Initial imported dataset.", version: 1, status: "Active", createdAt: new Date().toISOString() };
+  return { id: `ds-${project.id}-default`, projectId: project.id, name: "Default Dataset", description: "Initial imported dataset.", version: 1, stage: "Ready", status: "Active", versionHistory: [], createdAt: new Date().toISOString() };
 }
 const defaultDatasets = sampleProjects.map(defaultDatasetFor);
 
@@ -91,6 +95,30 @@ function progressOf(p) {
 
 function initials(name = "?") {
   return name.split(" ").map(x => x[0]).join("").slice(0, 2).toUpperCase();
+}
+
+function validateDataset(dsTasks, config) {
+  const issues = [];
+  if (!dsTasks.length) issues.push("No images in this dataset yet");
+  const invalid = dsTasks.filter(t => !t.image).length;
+  if (invalid) issues.push(`${invalid} invalid file${invalid > 1 ? "s" : ""} (missing image data)`);
+  const duplicateNames = dsTasks.map(t => t.name).filter((n, i, arr) => arr.indexOf(n) !== i);
+  if (duplicateNames.length) issues.push(`${new Set(duplicateNames).size} duplicate filename${new Set(duplicateNames).size > 1 ? "s" : ""}`);
+  if (!config?.labels?.length) issues.push("Project has no labels configured yet");
+  return { valid: issues.length === 0, issues };
+}
+
+function projectHealth(groupTasks, recentActivity) {
+  if (!groupTasks.length) return { level: "No data", overdue: 0 };
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = groupTasks.filter(p => p.dueDate && p.dueDate < today && p.status !== "Completed").length;
+  const overdueRatio = overdue / groupTasks.length;
+  const lastActivityAt = recentActivity[0]?.timestamp;
+  const daysSinceActivity = lastActivityAt ? (Date.now() - new Date(lastActivityAt).getTime()) / 86400000 : Infinity;
+  let level = "Healthy";
+  if (overdueRatio > 0.3 || daysSinceActivity > 14) level = "Critical";
+  else if (overdueRatio > 0 || daysSinceActivity > 7) level = "At Risk";
+  return { level, overdue };
 }
 
 function readStorage(key, fallback) {
@@ -253,7 +281,8 @@ function App() {
         })) },
       { key: "datasets", label: "Datasets", table: "datasets", rows: () => datasets.map(d => ({
           id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "",
-          version: d.version || 1, status: d.status || "Active", created_at: d.createdAt || new Date().toISOString()
+          version: d.version || 1, stage: d.stage || "Draft", version_history: d.versionHistory || [],
+          status: d.status || "Active", created_at: d.createdAt || new Date().toISOString()
         })) },
       { key: "tasks", label: "Images", table: "tasks", rows: () => tasks.map(t => ({
           id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name,
@@ -397,7 +426,7 @@ function App() {
   const [projectDetails, setProjectDetails] = useState(null);
 
   const PROJECT_GROUPS_KEY = "annotatepro_project_groups_v1";
-  const emptyGroupForm = { name: "", description: "", icon: "FolderKanban", color: labelPalette[0], status: "Active", ownerId: "", teamIds: [] };
+  const emptyGroupForm = { name: "", description: "", icon: "FolderKanban", color: labelPalette[0], status: "Active", stage: "Planning", ownerId: "", teamIds: [] };
   const [projectGroups, setProjectGroups] = useState(() => readStorage(PROJECT_GROUPS_KEY, defaultProjectGroups));
   const [groupModalOpen, setGroupModalOpen] = useState(false);
   const [editingGroupId, setEditingGroupId] = useState(null);
@@ -406,7 +435,7 @@ function App() {
   useEffect(() => { localStorage.setItem(PROJECT_GROUPS_KEY, JSON.stringify(projectGroups)); }, [projectGroups]);
 
   function openCreateGroup() { setEditingGroupId(null); setGroupForm(emptyGroupForm); setGroupModalOpen(true); }
-  function openEditGroup(group) { setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description || "", icon: group.icon || "FolderKanban", color: group.color || labelPalette[0], status: group.status || "Active", ownerId: group.ownerId || "", teamIds: group.teamIds || [] }); setGroupModalOpen(true); }
+  function openEditGroup(group) { setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description || "", icon: group.icon || "FolderKanban", color: group.color || labelPalette[0], status: group.status || "Active", stage: group.stage || "Planning", ownerId: group.ownerId || "", teamIds: group.teamIds || [] }); setGroupModalOpen(true); }
   function saveGroup(e) {
     e.preventDefault();
     if (!groupForm.name.trim()) return;
@@ -452,7 +481,7 @@ function App() {
     });
   }, [projects]);
 
-  const emptyDatasetForm = { name: "", description: "", version: 1 };
+  const emptyDatasetForm = { name: "", description: "", version: 1, stage: "Draft" };
   const [datasetModalOpen, setDatasetModalOpen] = useState(false);
   const [editingDatasetId, setEditingDatasetId] = useState(null);
   const [datasetForm, setDatasetForm] = useState(emptyDatasetForm);
@@ -461,18 +490,29 @@ function App() {
   const [datasetListSearch, setDatasetListSearch] = useState("");
   const [datasetListStatus, setDatasetListStatus] = useState("Active");
   const [importTargetDataset, setImportTargetDataset] = useState(null);
+  const [compareVersion, setCompareVersion] = useState(null);
 
   function openCreateDataset(projectId) { setEditingDatasetId(null); setDatasetForm({ ...emptyDatasetForm, projectId }); setDatasetModalOpen(true); }
-  function openEditDataset(ds) { setEditingDatasetId(ds.id); setDatasetForm({ name: ds.name, description: ds.description || "", version: ds.version || 1, projectId: ds.projectId }); setDatasetModalOpen(true); }
+  function openEditDataset(ds) { setEditingDatasetId(ds.id); setDatasetForm({ name: ds.name, description: ds.description || "", version: ds.version || 1, stage: ds.stage || "Draft", projectId: ds.projectId }); setDatasetModalOpen(true); }
   function saveDataset(e) {
     e.preventDefault();
     if (!datasetForm.name.trim()) return;
     if (editingDatasetId) {
       setDatasets(prev => prev.map(d => d.id === editingDatasetId ? { ...d, ...datasetForm } : d));
     } else {
-      setDatasets(prev => [...prev, { ...datasetForm, id: `ds-${Date.now()}`, status: "Active", createdAt: new Date().toISOString() }]);
+      setDatasets(prev => [...prev, { ...datasetForm, id: `ds-${Date.now()}`, status: "Active", versionHistory: [], createdAt: new Date().toISOString() }]);
     }
     setDatasetModalOpen(false);
+  }
+  function snapshotDatasetVersion(id) {
+    const ds = datasets.find(d => d.id === id);
+    if (!ds) return;
+    const dsTasks = tasks.filter(t => t.datasetId === id);
+    const nextVersion = (ds.version || 1) + 1;
+    const snapshot = { version: ds.version || 1, savedAt: new Date().toISOString(), imageIds: dsTasks.map(t => t.name) };
+    setDatasets(prev => prev.map(d => d.id === id ? { ...d, version: nextVersion, versionHistory: [...(d.versionHistory || []), snapshot] } : d));
+    setDatasetToast(`Saved as v${ds.version || 1} — now editing v${nextVersion}`);
+    setTimeout(() => setDatasetToast(""), 2400);
   }
   function archiveDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Archived" } : d)); }
   function restoreDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Active" } : d)); }
@@ -538,6 +578,8 @@ function App() {
     { id: "m7", name: "Vikram Singh", email: "vikram@annotatepro.local", role: "Annotator", status: "Active", projects: ["p1", "p3"], capacity: 7, completed: 48, qaScore: 94 },
     { id: "m8", name: "Ananya Das", email: "ananya@annotatepro.local", role: "Annotator", status: "Inactive", projects: [], capacity: 0, completed: 27, qaScore: 93 }
   ]));
+  const myTeamMemberId = teamMembers.find(m => m.email && currentUserEmail && m.email.toLowerCase() === currentUserEmail.toLowerCase())?.id || null;
+  const canEditProject = (group) => canManage || (group?.teamIds || []).includes(myTeamMemberId);
   const [teamSearch, setTeamSearch] = useState("");
   const [teamRoleFilter, setTeamRoleFilter] = useState("All Roles");
   const [teamStatusFilter, setTeamStatusFilter] = useState("All Status");
@@ -1985,7 +2027,7 @@ function App() {
         </header>
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} userName={currentUserName} />}
-        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} />}
+        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
@@ -2043,7 +2085,7 @@ function App() {
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
         {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
         {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
-        {activePage === "Import Data" && <ImportPage projects={projects} tasks={tasks} datasets={datasets} importHistory={importHistory} onClearHistory={() => setImportHistory([])} importTaskId={importTaskId} setImportTaskId={setImportTaskId} activeDatasetId={activeDatasetId} setActiveDatasetId={setActiveDatasetId} listSearch={datasetListSearch} setListSearch={setDatasetListSearch} listStatus={datasetListStatus} setListStatus={setDatasetListStatus} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={(datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} onCreateDataset={openCreateDataset} onEditDataset={openEditDataset} onArchiveDataset={archiveDataset} onRestoreDataset={restoreDataset} onDeleteDataset={deleteDataset} />}
+        {activePage === "Import Data" && <ImportPage projects={projects} tasks={tasks} datasets={datasets} projectConfigs={projectConfigs} importHistory={importHistory} onClearHistory={() => setImportHistory([])} importTaskId={importTaskId} setImportTaskId={setImportTaskId} activeDatasetId={activeDatasetId} setActiveDatasetId={setActiveDatasetId} listSearch={datasetListSearch} setListSearch={setDatasetListSearch} listStatus={datasetListStatus} setListStatus={setDatasetListStatus} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={(datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} onCreateDataset={openCreateDataset} onEditDataset={openEditDataset} onArchiveDataset={archiveDataset} onRestoreDataset={restoreDataset} onDeleteDataset={deleteDataset} onSnapshotVersion={snapshotDatasetVersion} compareVersion={compareVersion} setCompareVersion={setCompareVersion} />}
         {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
         {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage}
           migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={runMigration}
@@ -2501,7 +2543,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
 function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
 function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
-function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage}) {
+function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
   const [activeCategory, setActiveCategory] = useState(null);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupStatusFilter, setGroupStatusFilter] = useState("Active");
@@ -2518,19 +2560,20 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
     const owner = memberById(activeGroup.ownerId);
     const team = (activeGroup.teamIds || []).map(memberById).filter(Boolean);
     const recentActivity = auditEvents.filter(e => groupTaskIds.includes(e.projectId)).slice(0, 5);
+    const health = projectHealth(categoryProjects, recentActivity);
     return <div className="page">
       <div className="page-head category-drill-head">
         <div>
           <button className="category-back-btn" onClick={()=>setActiveCategory(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Projects</button>
-          <div className="category-drill-title"><span className="category-dot" style={{background:activeGroup.color}}/><h1>{activeGroup.name}</h1><span className="category-count-pill">{categoryProjects.length} task{categoryProjects.length===1?"":"s"}</span>{activeGroup.status==="Archived" && <span className="category-count-pill archived-pill">Archived</span>}</div>
+          <div className="category-drill-title"><span className="category-dot" style={{background:activeGroup.color}}/><h1>{activeGroup.name}</h1><span className="category-count-pill">{categoryProjects.length} task{categoryProjects.length===1?"":"s"}</span><span className="category-count-pill stage-pill">{activeGroup.stage || "Planning"}</span><span className={`category-count-pill health-pill health-${health.level.replace(" ","-").toLowerCase()}`}>{health.level}</span>{activeGroup.status==="Archived" && <span className="category-count-pill archived-pill">Archived</span>}</div>
           {activeGroup.description && <p className="category-drill-desc">{activeGroup.description}</p>}
         </div>
-        {canManage && <div className="category-drill-actions">
+        {canEditProject(activeGroup) && <div className="category-drill-actions">
           <button className="secondary-btn" onClick={()=>onOpenConfig(activeGroup.id)}><Settings size={16}/> Configuration</button>
           <button className="primary-btn" onClick={()=>onCreate(activeGroup.id)}><Plus size={17}/> Create Task</button>
         </div>}
       </div>
-      <div className="project-summary"><MiniStat label="Total Tasks" value={categoryProjects.length}/><MiniStat label="In Progress" value={categoryProjects.filter(p=>p.status==="In Progress").length}/><MiniStat label="Completed" value={categoryProjects.filter(p=>p.status==="Completed").length}/><MiniStat label="Pending" value={categoryProjects.filter(p=>p.status==="Pending").length}/></div>
+      <div className="project-summary"><MiniStat label="Total Tasks" value={categoryProjects.length}/><MiniStat label="In Progress" value={categoryProjects.filter(p=>p.status==="In Progress").length}/><MiniStat label="Completed" value={categoryProjects.filter(p=>p.status==="Completed").length}/><MiniStat label="Overdue" value={health.overdue}/></div>
 
       <div className="project-overview-grid">
         <section className="panel overview-card">
@@ -2559,7 +2602,7 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
 
       <section className="panel">
         <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
-        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)} canManage={canManage}/>)}</div>
+        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)} canManage={canEditProject(activeGroup)}/>)}</div>
         {!categoryProjects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No tasks in {activeGroup.name} yet</h3><p>Create one to get started.</p></div>}
       </section>
     </div>;
@@ -2583,16 +2626,19 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
     </div>
     <div className="category-tile-grid">
       {visibleGroups.map(group => {
-        const count = projects.filter(p => groupOf(p) === group.id).length;
+        const groupProjects = projects.filter(p => groupOf(p) === group.id);
+        const count = groupProjects.length;
         const Icon = GROUP_ICONS[group.icon] || Layers;
         const owner = memberById(group.ownerId);
         const team = (group.teamIds || []).map(memberById).filter(Boolean);
         const archived = group.status === "Archived";
+        const groupTaskIds = groupProjects.map(p => p.id);
+        const health = projectHealth(groupProjects, auditEvents.filter(e => groupTaskIds.includes(e.projectId)));
         return <div key={group.id} className={`category-tile-wrap ${archived?"archived":""}`}>
           {archived && <span className="archived-badge">Archived</span>}
           <button className="category-tile" onClick={()=>setActiveCategory(group.id)}>
             <span className="category-tile-icon" style={{background:`${group.color}22`,color:group.color}}><Icon size={20}/></span>
-            <b>{group.name}</b>
+            <div className="category-tile-title-row"><b>{group.name}</b>{count > 0 && <span className={`health-dot health-${health.level.replace(" ","-").toLowerCase()}`} title={`${health.level}${health.overdue?` · ${health.overdue} overdue`:""}`}/>}</div>
             <span className="category-tile-count">{count} task{count===1?"":"s"}{owner?` · Owner: ${owner.name}`:""}</span>
             {team.length > 0 && <div className="overview-avatar-stack tile-avatars">{team.slice(0,4).map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div>}
           </button>
@@ -2624,7 +2670,7 @@ function GroupModal({form,setForm,editing,onClose,onSave,teamMembers}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
   const iconChoices = Object.keys(GROUP_ICONS);
   const toggleTeam = (id) => setForm(prev => ({ ...prev, teamIds: prev.teamIds.includes(id) ? prev.teamIds.filter(x=>x!==id) : [...prev.teamIds, id] }));
-  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label>Owner<select value={form.ownerId} onChange={e=>set("ownerId",e.target.value)}><option value="">No owner</option>{teamMembers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div>
+  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label>Owner<select value={form.ownerId} onChange={e=>set("ownerId",e.target.value)}><option value="">No owner</option>{teamMembers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Lifecycle stage<select value={form.stage||"Planning"} onChange={e=>set("stage",e.target.value)}>{PROJECT_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div>
   <div className="team-project-form"><span>ASSIGNED TEAM</span><div>{teamMembers.map(m=>{const active=form.teamIds.includes(m.id);return <button type="button" key={m.id} className={`project-check ${active?"active":""}`} onClick={()=>toggleTeam(m.id)}><span>{active?<CheckCircle2 size={13}/>:<Users size={13}/>}</span><div><b>{m.name}</b><small>{m.role}</small></div></button>;})}</div></div>
   <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
 }
@@ -2633,7 +2679,7 @@ function ProjectDetails({project,onClose,onEdit}) {
   return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Task</button></div></div></div>;
 }
 
-function ImportPage({projects,tasks,datasets,importHistory,onClearHistory,importTaskId,setImportTaskId,activeDatasetId,setActiveDatasetId,listSearch,setListSearch,listStatus,setListStatus,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport,onCreateDataset,onEditDataset,onArchiveDataset,onRestoreDataset,onDeleteDataset}) {
+function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClearHistory,importTaskId,setImportTaskId,activeDatasetId,setActiveDatasetId,listSearch,setListSearch,listStatus,setListStatus,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport,onCreateDataset,onEditDataset,onArchiveDataset,onRestoreDataset,onDeleteDataset,onSnapshotVersion,compareVersion,setCompareVersion}) {
   const taskProjects = projects.length ? projects : [];
   const currentTask = taskProjects.find(p => p.id === importTaskId) || taskProjects[0];
   const taskDatasets = datasets.filter(d => d.projectId === currentTask?.id);
@@ -2645,10 +2691,22 @@ function ImportPage({projects,tasks,datasets,importHistory,onClearHistory,import
     const invalid = dsTasks.filter(t => !t.image).length;
     const pending=dsTasks.filter(t=>t.status==="Pending").length;
     const progress=dsTasks.filter(t=>t.status==="In Progress").length;
+    const validation = validateDataset(dsTasks, projectConfigs?.[currentTask?.groupId]);
+    const history = activeDataset.versionHistory || [];
+    const compareSnapshot = history.find(h => h.version === compareVersion);
+    const currentNames = new Set(dsTasks.map(t => t.name));
+    const compareNames = new Set(compareSnapshot?.imageIds || []);
+    const added = compareSnapshot ? [...currentNames].filter(n => !compareNames.has(n)) : [];
+    const removed = compareSnapshot ? [...compareNames].filter(n => !currentNames.has(n)) : [];
     return <div className="page dataset-page">
-      <div className="page-head category-drill-head"><div><button className="category-back-btn" onClick={()=>setActiveDatasetId(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {currentTask?.name} Datasets</button><span className="eyebrow">DATASET</span><h1>{activeDataset.name}</h1><p>Version {activeDataset.version || 1} · {dsTasks.length} images{invalid?` · ${invalid} invalid`:""}</p></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={16}/> Add Images</button></div></div>
+      <div className="page-head category-drill-head"><div><button className="category-back-btn" onClick={()=>setActiveDatasetId(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {currentTask?.name} Datasets</button><span className="eyebrow">DATASET</span><h1>{activeDataset.name}</h1><p>Version {activeDataset.version || 1} · {dsTasks.length} images{invalid?` · ${invalid} invalid`:""}</p><div className="category-drill-title" style={{marginTop:"8px"}}><span className="category-count-pill stage-pill">{activeDataset.stage || "Draft"}</span><span className={`category-count-pill health-pill ${validation.valid ? "health-healthy" : "health-at-risk"}`}>{validation.valid ? "Validated" : "Needs Attention"}</span></div></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={()=>onSnapshotVersion(activeDataset.id)}><Copy size={15}/> Save as New Version</button><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={16}/> Add Images</button></div></div>
       <div className="dataset-cards"><MiniStat label="Total Images" value={dsTasks.length}/><MiniStat label="Annotated" value={annotated}/><MiniStat label="Unannotated" value={dsTasks.length-annotated}/><MiniStat label="Invalid Files" value={invalid}/></div>
+      {!validation.valid && <div className="validation-panel"><AlertCircle size={16}/><div><b>This dataset needs attention before it's production-ready</b><ul>{validation.issues.map((issue,i)=><li key={i}>{issue}</li>)}</ul></div></div>}
       <section className="dataset-info panel"><div className="dataset-info-main"><div className="dataset-logo"><Database size={22}/></div><div><b className="dataset-name-input" style={{display:"block"}}>{activeDataset.name}</b><span className="dataset-description-input" style={{display:"block",color:"var(--muted)"}}>{activeDataset.description||"No description"}</span><div className="dataset-meta-line"><span>Created {new Date(activeDataset.createdAt).toLocaleDateString()}</span><span>•</span><span>{currentTask?.name}</span><span>•</span><span>Autosaved</span></div></div></div><div className="dataset-info-actions"><button className="secondary-btn" onClick={()=>onEditDataset(activeDataset)}><Edit3 size={15}/> Edit</button>{activeDataset.status==="Archived" ? <button className="secondary-btn" onClick={()=>onRestoreDataset(activeDataset.id)}><RotateCcw size={15}/> Restore</button> : <button className="secondary-btn" onClick={()=>onArchiveDataset(activeDataset.id)}><Archive size={15}/> Archive</button>}<button className="danger-outline" onClick={()=>onClear(activeDataset.id)}><Trash2 size={15}/> Clear Images</button></div></section>
+      {history.length > 0 && <section className="panel version-history-panel"><div className="panel-head"><div><h2>Version History</h2><p>Compare the current image set against a saved version</p></div><Clock3 size={17}/></div>
+        <div className="version-history-list">{history.slice().reverse().map(h=><div key={h.version} className={`version-row ${compareVersion===h.version?"active":""}`} onClick={()=>setCompareVersion(compareVersion===h.version?null:h.version)}><b>v{h.version}</b><span>{h.imageIds.length} images · saved {new Date(h.savedAt).toLocaleDateString()}</span>{compareVersion===h.version && <span className="version-compare-tag">Comparing</span>}</div>)}</div>
+        {compareSnapshot && <div className="version-diff"><div><b>+{added.length}</b><span>added since v{compareVersion}</span>{added.length>0 && <ul>{added.slice(0,8).map(n=><li key={n}>{n}</li>)}</ul>}</div><div><b>-{removed.length}</b><span>removed since v{compareVersion}</span>{removed.length>0 && <ul>{removed.slice(0,8).map(n=><li key={n}>{n}</li>)}</ul>}</div></div>}
+      </section>}
       <section className="panel task-library"><div className="task-library-head"><div><h2>Dataset Images</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
         <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search image name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {dsTasks.length}</span></div>
         {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{filteredTasks.map((t)=>{const originalIndex=tasks.findIndex(x=>x.id===t.id);return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt=""/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{filteredTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name}/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
@@ -2671,12 +2729,13 @@ function ImportPage({projects,tasks,datasets,importHistory,onClearHistory,import
         const annotated = dsTasks.filter(t => t.status === "Completed").length;
         const preview = dsTasks.slice(0,4);
         const archived = ds.status === "Archived";
+        const dsValidation = validateDataset(dsTasks, projectConfigs?.[currentTask?.groupId]);
         return <article key={ds.id} className={`dataset-card ${archived?"archived":""}`}>
           {archived && <span className="archived-badge">Archived</span>}
           <button className="dataset-card-main" onClick={()=>setActiveDatasetId(ds.id)}>
             <div className="dataset-card-thumbs">{preview.length ? preview.map(t=><img key={t.id} src={t.image} alt=""/>) : <div className="dataset-card-thumb-empty"><ImageIcon size={18}/></div>}</div>
-            <b>{ds.name}</b>
-            <span className="dataset-card-meta">v{ds.version || 1} · {dsTasks.length} images · {annotated} annotated</span>
+            <div className="category-tile-title-row"><b>{ds.name}</b><span className={`health-dot ${dsValidation.valid?"health-healthy":"health-at-risk"}`} title={dsValidation.valid?"Validated":dsValidation.issues.join(", ")}/></div>
+            <span className="dataset-card-meta">v{ds.version || 1} · {ds.stage || "Draft"} · {dsTasks.length} images · {annotated} annotated</span>
           </button>
           <div className="category-tile-actions">
             <button title="Edit dataset" onClick={()=>onEditDataset(ds)}><Edit3 size={14}/></button>
@@ -2696,7 +2755,7 @@ function ImportPage({projects,tasks,datasets,importHistory,onClearHistory,import
 
 function DatasetModal({form,setForm,editing,onClose,onSave}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
-  return <div className="modal-backdrop"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
+  return <div className="modal-backdrop"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label><label>Lifecycle stage<select value={form.stage||"Draft"} onChange={e=>set("stage",e.target.value)}>{DATASET_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
 }
 
 function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message}) {
