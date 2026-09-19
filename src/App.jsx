@@ -3003,11 +3003,11 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
 function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onSettings,canManage}) {
   return <article className="project-card task-open-card">
     <div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div>
-    <button className="task-open-zone" onClick={onWorkspace} title="Open annotation workstation">
+    <div className="task-open-zone" role="button" tabIndex={0} onClick={onWorkspace} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onWorkspace(); } }} title="Open annotation workstation">
       <div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div>
       <div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div>
       <div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div>
-    </button>
+    </div>
     <div className="task-workflow-row"><button className="workflow-btn annotate" onClick={onWorkspace}><Play size={13}/> Annotation</button><button className="workflow-btn review" onClick={onReview}><ClipboardCheck size={13}/> Review</button></div>
     <div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div>
   </article>;
