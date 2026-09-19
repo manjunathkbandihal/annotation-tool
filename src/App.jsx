@@ -552,6 +552,7 @@ function App() {
   const [history, setHistory] = useState([]);
   const [future, setFuture] = useState([]);
   const [workspaceProject, setWorkspaceProject] = useState(projects[0]?.id || "p1");
+  const [workstationMode, setWorkstationMode] = useState("Annotation"); // "Annotation" | "Review"
   const [taskFilter, setTaskFilter] = useState("All");
   const [workspaceMessage, setWorkspaceMessage] = useState("");
   const [qaReviews, setQaReviews] = useState(() => readStorage("annotatepro_qa_reviews_v1", {}));
@@ -1733,6 +1734,62 @@ function App() {
     setTimeout(() => setWorkspaceMessage(""), 1800);
   }
 
+  function skipTask() {
+    if (!currentTask) return;
+    logAudit("Task Skipped", currentTask.id, currentTask.projectId, "Annotator skipped this task.");
+    setWorkspaceMessage("Task skipped");
+    setTimeout(() => setWorkspaceMessage(""), 1600);
+    changeTask(1);
+  }
+
+  function openWorkstation(projectId, mode = "Annotation") {
+    if (projectId) setWorkspaceProject(projectId);
+    const first = tasks.findIndex(t => !projectId || t.projectId === projectId);
+    if (first >= 0) setSelectedTaskIndex(first);
+    setWorkstationMode(mode);
+    setSelectedAnnotationId(null);
+    setDrawing(null);
+    resetView();
+    navigate("Annotation Workspace");
+  }
+
+  // Review decisions issued from inside the workstation (same layout as annotation).
+  function reviewCurrentTask(decision) {
+    if (!currentTask) return;
+    const now = new Date().toISOString();
+    const existing = qaReviews[currentTask.id];
+    const annotationCount = (annotationsByTask[currentTask.id] || []).length;
+    const review = {
+      decision,
+      score: Number(existing?.score ?? qaScore ?? 96),
+      reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "",
+      comment: (qaComment || "").trim(),
+      reviewer: currentUserName,
+      reviewedAt: now,
+      annotationCount,
+      history: [
+        ...(existing?.history || []),
+        { decision, score: Number(existing?.score ?? qaScore ?? 96), reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "", comment: (qaComment || "").trim(), reviewer: currentUserName, reviewedAt: now }
+      ]
+    };
+    setQaReviews(prev => ({ ...prev, [currentTask.id]: review }));
+    const nextStatus = decision === "Approved" ? "Approved" : "Rejected";
+    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: nextStatus } : t));
+    logAudit(`QA ${decision}`, currentTask.id, currentTask.projectId, `QA score ${review.score}${review.comment ? ` · ${review.comment}` : ""}`, currentUserName, "Reviewer");
+    if (session) {
+      supabase.from("qa_reviews").upsert({
+        task_id: currentTask.id, decision: review.decision, score: review.score, reviewer: review.reviewer,
+        comment: review.comment, reason: review.reason, annotation_count: review.annotationCount,
+        history: review.history, reviewed_at: review.reviewedAt
+      }).then(({ error }) => { if (error) console.warn("[Realtime] QA review sync failed:", error.message); });
+    }
+    if (decision === "Rejected") {
+      pushNotification("qa", "QA Rejected", `${currentTask.name} was rejected by ${currentUserName}${review.reason ? ` — ${review.reason}` : ""}`, currentTask.projectId, currentTask.id);
+    }
+    setWorkspaceMessage(`${currentTask.name} ${decision.toLowerCase()}`);
+    setTimeout(() => setWorkspaceMessage(""), 1800);
+  }
+
   async function importImages(files) {
     const selectedFiles = Array.from(files || []).filter(file => file.type.startsWith("image/"));
     if (!selectedFiles.length) return;
@@ -2059,7 +2116,7 @@ function App() {
   useEffect(() => {
     const handler = (e) => {
       const index = Number(e.detail);
-      if (Number.isFinite(index)) { setSelectedTaskIndex(index); setActivePage("Annotation Workspace"); }
+      if (Number.isFinite(index)) { setSelectedTaskIndex(index); setWorkstationMode("Annotation"); setActivePage("Annotation Workspace"); }
     };
     window.addEventListener("annotatepro-open-task", handler);
     return () => window.removeEventListener("annotatepro-open-task", handler);
@@ -2214,8 +2271,8 @@ function App() {
   };
 
   const navItems = [
-    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
-    ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
+    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers],
+    ["Team", Users], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
     ["Settings", Settings]
   ];
 
@@ -2254,7 +2311,6 @@ function App() {
           {navItems.map(([name, Icon]) => (
             <button key={name} className={`nav-item ${activePage === name ? "active" : ""}`} onClick={() => navigate(name)}>
               <Icon size={18} /><span>{name}</span>
-              {name === "QA & Reviews" && <em>7</em>}
             </button>
           ))}
         </nav>
@@ -2272,7 +2328,11 @@ function App() {
       <main className="main-area">
         <header className="topbar">
           <button className="mobile-menu" onClick={() => setSidebarOpen(v => !v)}><Menu size={21} /></button>
-          <div className="breadcrumb"><span>AnnotatePro</span><b>/</b><strong>{activePage}</strong></div>
+          <div className="breadcrumb">
+            {activePage === "Annotation Workspace"
+              ? <><button className="crumb-link" onClick={() => navigate("Projects")}>Projects</button><b>/</b><span>{projects.find(p => p.id === workspaceProject)?.name || "Tasks"}</span><b>/</b><strong>{workstationMode}</strong></>
+              : <><span>AnnotatePro</span><b>/</b><strong>{activePage}</strong></>}
+          </div>
           <div className="top-actions">
             <div className="global-search"><Search size={17} /><input placeholder="Search..." /></div>
             {onlineUsers.length > 0 && <div className="presence-stack" title={onlineUsers.map(u=>u.name).join(", ")}>
@@ -2288,8 +2348,8 @@ function App() {
           </div>
         </header>
 
-        {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} userName={currentUserName} />}
-        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onTaskSettings={(id) => { setTaskSettingsId(id); setImportTaskId(id); setExportProject(id); setTaskSettingsTab("General"); navigate("Task Settings"); }} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
+        {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} onOpenWorkstation={openWorkstation} userName={currentUserName} />}
+        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => openWorkstation(id, "Annotation")} onReview={(id) => openWorkstation(id, "Review")} onPlanner={openTaskPlanner} onTaskSettings={(id) => { setTaskSettingsId(id); setImportTaskId(id); setExportProject(id); setTaskSettingsTab("General"); navigate("Task Settings"); }} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
@@ -2297,7 +2357,7 @@ function App() {
           queue={plannerQueue} setQueue={setPlannerQueue} date={plannerDate} setDate={setPlannerDate}
           targets={plannerTargets} setTarget={setPlannerTarget} reworkFilter={plannerReworkFilter} setReworkFilter={setPlannerReworkFilter}
           selection={plannerReworkSelection} setSelection={setPlannerReworkSelection} onRework={applyPlannerRework} onRefresh={()=>flashPlanner("Task Planner refreshed")}
-          onBack={()=>setPlannerProjectId(null)} onOpenWorkspace={(id)=>{ setWorkspaceProject(id); navigate("Annotation Workspace"); }}
+          onBack={()=>setPlannerProjectId(null)} onOpenWorkspace={(id)=>openWorkstation(id, "Annotation")} onOpenReview={(id)=>openWorkstation(id, "Review")}
           onAssign={openPlannerAssignment} onCloseAssignment={()=>setPlannerAssignmentOpen(false)} onSaveAssignment={savePlannerAssignments}
           assignmentOpen={plannerAssignmentOpen} assignmentTaskIds={plannerAssignmentTaskIds} assignmentAssignee={plannerAssignmentAssignee} setAssignmentAssignee={setPlannerAssignmentAssignee}
           assignmentReviewer={plannerAssignmentReviewer} setAssignmentReviewer={setPlannerAssignmentReviewer} assignmentPriority={plannerAssignmentPriority} setAssignmentPriority={setPlannerAssignmentPriority}
@@ -2324,6 +2384,10 @@ function App() {
             onDelete={deleteSelected} onDuplicate={duplicateSelected} onUndo={undo} onRedo={redo}
             onReset={resetView} onPrevious={() => changeTask(-1)} onNext={() => changeTask(1)}
             onSave={saveTask} onSubmit={submitTask} message={workspaceMessage}
+            mode={workstationMode} setMode={setWorkstationMode} onSkip={skipTask}
+            onAccept={() => reviewCurrentTask("Approved")} onReject={() => reviewCurrentTask("Rejected")}
+            currentReview={currentTask ? qaReviews[currentTask.id] : null} canReview={canReview}
+            onBackToTasks={() => navigate("Projects")}
             updateAnnotation={updateAnnotation} startAnnotationEdit={startAnnotationEdit} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
             onImport={() => imageInputRef.current?.click()}
             imageInputRef={imageInputRef} importImages={importImages}
@@ -2376,7 +2440,7 @@ function App() {
   );
 }
 
-function Dashboard({ projects, stats, onCreate, onNavigate, userName }) {
+function Dashboard({ projects, stats, onCreate, onNavigate, onOpenWorkstation, userName }) {
   return (
     <div className="page">
       <div className="page-head">
@@ -2397,7 +2461,7 @@ function Dashboard({ projects, stats, onCreate, onNavigate, userName }) {
       </section>
       <div className="dashboard-bottom">
         <section className="panel"><div className="panel-head"><div><h2>Recent Activity</h2><p>Latest workspace events</p></div></div><div className="activity-list"><ActivityRow icon={CheckCircle2} title="Road Object Detection" text="Task batch completed" time="8 min ago"/><ActivityRow icon={ShieldCheck} title="QA Review" text="18 annotations approved" time="31 min ago"/><ActivityRow icon={Users} title="Team activity" text="3 annotators started work" time="1 hr ago"/><ActivityRow icon={Upload} title="Dataset import" text="120 images added" time="2 hrs ago"/></div></section>
-        <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => onNavigate("Annotation Workspace")}/><Quick icon={Target} title="Task Planner" onClick={() => onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => onNavigate("QA & Reviews")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => onNavigate("Projects")}/></div></section>
+        <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => onOpenWorkstation(null, "Annotation")}/><Quick icon={Target} title="Task Planner" onClick={() => onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => onOpenWorkstation(null, "Review")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => onNavigate("Projects")}/></div></section>
       </div>
     </div>
   );
@@ -2410,8 +2474,10 @@ function Workspace({
   canvasRef, imageRef, onCanvasPointerDown, onCanvasPointerMove, onCanvasPointerUp, onCanvasDoubleClick, handleImageError,
   onDelete, onDuplicate, onUndo, onRedo, onReset, onPrevious, onNext, onSave, onSubmit, message,
   updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport,
-  insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee, coEditors
+  insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee, coEditors,
+  mode = "Annotation", setMode, onSkip, onAccept, onReject, currentReview, canReview = true, onBackToTasks
 }) {
+  const isReview = mode === "Review";
   const [taskSearch, setTaskSearch] = useState("");
   const [rightTab, setRightTab] = useState("Labels");
   const [infoTab, setInfoTab] = useState("Info");
@@ -2436,10 +2502,20 @@ function Workspace({
   return (
     <div className="workspace-page build8-workspace">
       <div className="workspace-top">
+        <button className="workstation-back" onClick={onBackToTasks} title="Back to tasks"><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Tasks</button>
         <div className="workspace-project"><span>PROJECT</span><select value={workspaceProject} onChange={e => { const id=e.target.value; setWorkspaceProject(id); const first=tasks.findIndex(t=>!id || t.projectId===id); setSelectedTaskIndex(first>=0?first:0); setZoom(1); setPan({x:0,y:0}); }}><option value="">All Projects</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
         <div className="workspace-task-title"><b>{currentTask?.name || "No task loaded"}</b><span>{currentTask?.id || "—"} · {selectedTaskIndex + 1} / {tasks.length} tasks</span></div>
         <div className="workspace-top-meta"><span className="workspace-live-dot"></span><span>{currentAnnotations.length} objects</span><span>{selectedLabelObject?.name || "No label selected"}</span></div>
-        <div className="workspace-actions"><button className="secondary-btn" onClick={onSave}><Save size={16}/> Save</button><button className="primary-btn" onClick={onSubmit}><CheckCircle2 size={16}/> Submit</button></div>
+        <div className="workstation-mode-switch" role="tablist" aria-label="Task stage">
+          <button role="tab" aria-selected={!isReview} className={!isReview ? "active" : ""} onClick={()=>setMode && setMode("Annotation")}><Edit3 size={14}/> Annotation</button>
+          <button role="tab" aria-selected={isReview} className={isReview ? "active" : ""} onClick={()=>setMode && setMode("Review")}><ClipboardCheck size={14}/> Review</button>
+        </div>
+        <div className="workspace-actions">
+          <button className="secondary-btn" onClick={onSave}><Save size={16}/> Save</button>
+          {isReview
+            ? <><button className="secondary-btn reject-btn" onClick={onReject} disabled={!canReview || !currentTask}><AlertCircle size={16}/> Reject</button><button className="primary-btn accept-btn" onClick={onAccept} disabled={!canReview || !currentTask}><CheckCircle2 size={16}/> Accept</button></>
+            : <><button className="secondary-btn skip-btn" onClick={onSkip} disabled={!currentTask}><ChevronDown size={16} style={{transform:"rotate(-90deg)"}}/> Skip</button><button className="primary-btn" onClick={onSubmit} disabled={!currentTask}><CheckCircle2 size={16}/> Submit</button></>}
+        </div>
       </div>
       {coEditors?.length > 0 && <div className="co-edit-banner"><Users size={14}/><span>{coEditors.map(u=>u.name).join(", ")} {coEditors.length===1?"is":"are"} also viewing this task right now — coordinate before submitting to avoid overwriting each other's work.</span></div>}
 
@@ -2521,7 +2597,7 @@ function Workspace({
             </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>{currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div></div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
             {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
           </div>
-          <div className="right-footer build8-right-footer"><div><span>Task status</span><StatusBadge status={currentTask?.status || "Pending"}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
+          <div className="right-footer build8-right-footer"><div><span>{isReview ? "Review decision" : "Task status"}</span><StatusBadge status={isReview ? (currentReview?.decision || "Pending Review") : (currentTask?.status || "Pending")}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
         </aside>
       </div>
       <div className="quick-label-bar"><div className="quick-label-title"><Zap size={14}/><b>QUICK LABELS</b></div><div className="quick-label-scroll">{labels.map(label=><button key={label.id} className={selectedLabel===label.id?"active":""} onClick={()=>setSelectedLabel(label.id)}><span style={{background:label.color}}></span>{label.name}</button>)}</div></div>
@@ -2810,7 +2886,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
 function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
 function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
-function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onTaskSettings,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
+function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onTaskSettings,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
   const [activeCategory, setActiveCategory] = useState(null);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupStatusFilter, setGroupStatusFilter] = useState("Active");
@@ -2869,7 +2945,7 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
 
       <section className="panel">
         <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
-        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)} onSettings={()=>onTaskSettings(p.id)} canManage={canEditProject(activeGroup)}/>)}</div>
+        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onReview={()=>onReview(p.id)} onPlanner={()=>onPlanner(p.id)} onSettings={()=>onTaskSettings(p.id)} canManage={canEditProject(activeGroup)}/>)}</div>
         {!categoryProjects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No tasks in {activeGroup.name} yet</h3><p>Create one to get started.</p></div>}
       </section>
     </div>;
@@ -2924,8 +3000,17 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
   </div>;
 }
 
-function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onSettings,canManage}) {
-  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div></article>;
+function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onSettings,canManage}) {
+  return <article className="project-card task-open-card">
+    <div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div>
+    <button className="task-open-zone" onClick={onWorkspace} title="Open annotation workstation">
+      <div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div>
+      <div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div>
+      <div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div>
+    </button>
+    <div className="task-workflow-row"><button className="workflow-btn annotate" onClick={onWorkspace}><Play size={13}/> Annotation</button><button className="workflow-btn review" onClick={onReview}><ClipboardCheck size={13}/> Review</button></div>
+    <div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div>
+  </article>;
 }
 
 function ProjectModal({form,setForm,editing,onClose,onSave}) {
