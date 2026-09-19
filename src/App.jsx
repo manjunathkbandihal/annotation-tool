@@ -262,6 +262,7 @@ function App() {
         if (error) throw error;
         const { data } = supabase.storage.from("task-images").getPublicUrl(path);
         setTasks(prev => prev.map(t => t.id === task.id ? { ...t, image: data.publicUrl, source: "Cloud Storage" } : t));
+        syncUpdate("tasks", task.id, { image: data.publicUrl, source: "Cloud Storage" });
         setImageMigration(prev => ({ ...prev, done: prev.done + 1 }));
       } catch (err) {
         console.warn("[Storage] image migration failed for", task.id, err.message);
@@ -364,6 +365,83 @@ function App() {
     ];
   }
 
+  // ---- Build 30.1: Supabase Live Data Cutover — row <-> app-shape mappers (Phase 1) ----
+  function groupFromRow(g) {
+    return { id: g.id, name: g.name, description: g.description || "", icon: g.icon || "FolderKanban", color: g.color || "#2563eb", status: g.status || "Active", ownerId: g.owner_id || "", teamIds: g.team_ids || [] };
+  }
+  function groupToRow(g) {
+    return { id: g.id, name: g.name, description: g.description || "", icon: g.icon || "FolderKanban", color: g.color || "#2563eb", status: g.status || "Active", owner_id: g.ownerId || null, team_ids: g.teamIds || [] };
+  }
+  function projectFromRow(p) {
+    return { id: p.id, groupId: p.group_id || "", name: p.name, client: p.client || "", annotationType: p.annotation_type || "Bounding Box", totalImages: Number(p.total_images) || 0, completedImages: Number(p.completed_images) || 0, team: p.team || "", status: p.status || "Pending", startDate: p.start_date || "", dueDate: p.due_date || "", description: p.description || "" };
+  }
+  function projectToRow(p) {
+    return { id: p.id, group_id: p.groupId || null, name: p.name, client: p.client || "", annotation_type: p.annotationType || "Bounding Box", total_images: Number(p.totalImages) || 0, completed_images: Number(p.completedImages) || 0, team: p.team || "", status: p.status || "Pending", start_date: p.startDate || null, due_date: p.dueDate || null, description: p.description || "" };
+  }
+  function datasetFromRow(d) {
+    return { id: d.id, projectId: d.project_id || "", name: d.name, description: d.description || "", version: d.version || 1, stage: d.stage || "Draft", versionHistory: d.version_history || [], status: d.status || "Active", createdAt: d.created_at || new Date().toISOString() };
+  }
+  function datasetToRow(d) {
+    return { id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "", version: d.version || 1, stage: d.stage || "Draft", version_history: d.versionHistory || [], status: d.status || "Active", created_at: d.createdAt || new Date().toISOString() };
+  }
+  function taskFromRow(t) {
+    return { id: t.id, projectId: t.project_id || "", datasetId: t.dataset_id || "", name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", createdAt: t.created_at || new Date().toISOString() };
+  }
+  function taskToRow(t) {
+    return { id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", created_at: t.createdAt || new Date().toISOString() };
+  }
+  function memberFromRow(m) {
+    return { id: m.id, name: m.name, email: m.email || "", role: m.role || "Annotator", status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qaScore: m.qa_score ?? 100 };
+  }
+  function memberToRow(m) {
+    return { id: m.id, name: m.name, email: m.email || null, role: m.role || "Annotator", status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qa_score: m.qaScore ?? 100 };
+  }
+  function syncUpsert(table, row) {
+    if (!session) return;
+    supabase.from(table).upsert(row).then(({ error }) => { if (error) console.warn(`[Cloud] ${table} upsert failed:`, error.message); });
+  }
+  function syncDelete(table, id) {
+    if (!session) return;
+    supabase.from(table).delete().eq("id", id).then(({ error }) => { if (error) console.warn(`[Cloud] ${table} delete failed:`, error.message); });
+  }
+  function syncUpdate(table, id, patch) {
+    if (!session) return;
+    supabase.from(table).update(patch).eq("id", id).then(({ error }) => { if (error) console.warn(`[Cloud] ${table} update failed:`, error.message); });
+  }
+
+  // Hydrate Phase 1 domains from Supabase once per session — cloud is the source of
+  // truth for any device that connects after data already exists there. If a table
+  // comes back empty (fresh workspace, migration not yet run) we keep local/sample
+  // data so the UI isn't blanked out before the one-time migration is performed.
+  const [cloudHydrated, setCloudHydrated] = useState(false);
+  useEffect(() => {
+    if (!session?.user) { setCloudHydrated(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes] = await Promise.all([
+          supabase.from("project_groups").select("*"),
+          supabase.from("projects").select("*"),
+          supabase.from("datasets").select("*"),
+          supabase.from("tasks").select("*"),
+          supabase.from("team_members").select("*")
+        ]);
+        if (cancelled) return;
+        if (!groupsRes.error && groupsRes.data?.length) setProjectGroups(groupsRes.data.map(groupFromRow));
+        if (!projectsRes.error && projectsRes.data?.length) setProjects(projectsRes.data.map(projectFromRow));
+        if (!datasetsRes.error && datasetsRes.data?.length) setDatasets(datasetsRes.data.map(datasetFromRow));
+        if (!tasksRes.error && tasksRes.data?.length) setTasks(tasksRes.data.map(taskFromRow));
+        if (!membersRes.error && membersRes.data?.length) setTeamMembers(membersRes.data.map(memberFromRow));
+        [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes].forEach(r => { if (r.error) console.warn("[Cloud] hydrate failed:", r.error.message); });
+      } catch (err) {
+        console.warn("[Cloud] hydrate failed:", err.message);
+      } finally {
+        if (!cancelled) setCloudHydrated(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
   async function runMigration() {
     if (migrationRunning) return;
     setMigrationRunning(true);
@@ -444,9 +522,13 @@ function App() {
     e.preventDefault();
     if (!groupForm.name.trim()) return;
     if (editingGroupId) {
+      const updated = { ...groupForm, id: editingGroupId };
       setProjectGroups(prev => prev.map(g => g.id === editingGroupId ? { ...g, ...groupForm } : g));
+      syncUpsert("project_groups", groupToRow(updated));
     } else {
-      setProjectGroups(prev => [...prev, { ...groupForm, id: `grp-${Date.now()}` }]);
+      const created = { ...groupForm, id: `grp-${Date.now()}` };
+      setProjectGroups(prev => [...prev, created]);
+      syncUpsert("project_groups", groupToRow(created));
     }
     setGroupModalOpen(false);
   }
@@ -458,15 +540,21 @@ function App() {
     }
     setProjectGroups(prev => prev.filter(g => g.id !== id));
     setProjectConfigs(prev => { const next = { ...prev }; delete next[id]; return next; });
+    syncDelete("project_groups", id);
   }
-  function updateGroupMeta(id, patch) { setProjectGroups(prev => prev.map(g => g.id === id ? { ...g, ...patch } : g)); }
+  function updateGroupMeta(id, patch) {
+    setProjectGroups(prev => prev.map(g => g.id === id ? { ...g, ...patch } : g));
+    syncUpdate("project_groups", id, groupToRow({ ...(projectGroups.find(g => g.id === id) || {}), ...patch }));
+  }
   function archiveGroup(id) { updateGroupMeta(id, { status: "Archived" }); }
   function restoreGroup(id) { updateGroupMeta(id, { status: "Active" }); }
   function duplicateGroup(id) {
     const source = projectGroups.find(g => g.id === id);
     if (!source) return;
     const newId = `grp-${Date.now()}`;
-    setProjectGroups(prev => [...prev, { ...source, id: newId, name: `${source.name} (Copy)`, status: "Active" }]);
+    const copy = { ...source, id: newId, name: `${source.name} (Copy)`, status: "Active" };
+    setProjectGroups(prev => [...prev, copy]);
+    syncUpsert("project_groups", groupToRow(copy));
     setProjectConfigs(prev => {
       const sourceConfig = prev[id] || makeDefaultProjectConfig(source);
       return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: sourceConfig.labels.map(l => ({ ...l, id: `${newId}-${l.id}` })) } };
@@ -502,9 +590,13 @@ function App() {
     e.preventDefault();
     if (!datasetForm.name.trim()) return;
     if (editingDatasetId) {
+      const updated = { ...(datasets.find(d => d.id === editingDatasetId) || {}), ...datasetForm, id: editingDatasetId };
       setDatasets(prev => prev.map(d => d.id === editingDatasetId ? { ...d, ...datasetForm } : d));
+      syncUpsert("datasets", datasetToRow(updated));
     } else {
-      setDatasets(prev => [...prev, { ...datasetForm, id: `ds-${Date.now()}`, status: "Active", versionHistory: [], createdAt: new Date().toISOString() }]);
+      const created = { ...datasetForm, id: `ds-${Date.now()}`, status: "Active", versionHistory: [], createdAt: new Date().toISOString() };
+      setDatasets(prev => [...prev, created]);
+      syncUpsert("datasets", datasetToRow(created));
     }
     setDatasetModalOpen(false);
   }
@@ -514,12 +606,14 @@ function App() {
     const dsTasks = tasks.filter(t => t.datasetId === id);
     const nextVersion = (ds.version || 1) + 1;
     const snapshot = { version: ds.version || 1, savedAt: new Date().toISOString(), imageIds: dsTasks.map(t => t.name) };
-    setDatasets(prev => prev.map(d => d.id === id ? { ...d, version: nextVersion, versionHistory: [...(d.versionHistory || []), snapshot] } : d));
+    const nextHistory = [...(ds.versionHistory || []), snapshot];
+    setDatasets(prev => prev.map(d => d.id === id ? { ...d, version: nextVersion, versionHistory: nextHistory } : d));
+    syncUpsert("datasets", datasetToRow({ ...ds, version: nextVersion, versionHistory: nextHistory }));
     setDatasetToast(`Saved as v${ds.version || 1} — now editing v${nextVersion}`);
     setTimeout(() => setDatasetToast(""), 2400);
   }
-  function archiveDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Archived" } : d)); }
-  function restoreDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Active" } : d)); }
+  function archiveDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Archived" } : d)); syncUpdate("datasets", id, { status: "Archived" }); }
+  function restoreDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Active" } : d)); syncUpdate("datasets", id, { status: "Active" }); }
   function deleteDataset(id) {
     if (tasks.some(t => t.datasetId === id)) {
       setDatasetToast("Remove or move this dataset's images before deleting it.");
@@ -527,6 +621,7 @@ function App() {
       return;
     }
     setDatasets(prev => prev.filter(d => d.id !== id));
+    syncDelete("datasets", id);
     if (activeDatasetId === id) setActiveDatasetId(null);
   }
 
@@ -1089,6 +1184,26 @@ function App() {
         const mapped = { id: row.id, projectId: row.project_id, datasetId: row.dataset_id, name: row.name, status: row.status, image: row.image, size: row.size, source: row.source, createdAt: row.created_at };
         setTasks(prev => prev.some(t => t.id === mapped.id) ? prev.map(t => t.id === mapped.id ? { ...t, ...mapped } : t) : [...prev, mapped]);
       })
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_groups" }, (payload) => {
+        if (payload.eventType === "DELETE") { setProjectGroups(prev => prev.filter(g => g.id !== payload.old.id)); return; }
+        const mapped = groupFromRow(payload.new);
+        setProjectGroups(prev => prev.some(g => g.id === mapped.id) ? prev.map(g => g.id === mapped.id ? mapped : g) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, (payload) => {
+        if (payload.eventType === "DELETE") { setProjects(prev => prev.filter(p => p.id !== payload.old.id)); return; }
+        const mapped = projectFromRow(payload.new);
+        setProjects(prev => prev.some(p => p.id === mapped.id) ? prev.map(p => p.id === mapped.id ? mapped : p) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "datasets" }, (payload) => {
+        if (payload.eventType === "DELETE") { setDatasets(prev => prev.filter(d => d.id !== payload.old.id)); return; }
+        const mapped = datasetFromRow(payload.new);
+        setDatasets(prev => prev.some(d => d.id === mapped.id) ? prev.map(d => d.id === mapped.id ? mapped : d) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_members" }, (payload) => {
+        if (payload.eventType === "DELETE") { setTeamMembers(prev => prev.filter(m => m.id !== payload.old.id)); return; }
+        const mapped = memberFromRow(payload.new);
+        setTeamMembers(prev => prev.some(m => m.id === mapped.id) ? prev.map(m => m.id === mapped.id ? mapped : m) : [...prev, mapped]);
+      })
       .on("postgres_changes", { event: "*", schema: "public", table: "qa_reviews" }, (payload) => {
         if (payload.eventType === "DELETE") return;
         const row = payload.new;
@@ -1258,9 +1373,13 @@ function App() {
     const completed = Math.min(total, Math.max(0, Number(projectForm.completedImages) || 0));
     const next = { ...projectForm, totalImages: total, completedImages: completed };
     if (editingProjectId) {
+      const updated = { ...(projects.find(p => p.id === editingProjectId) || {}), ...next, id: editingProjectId };
       setProjects(prev => prev.map(p => p.id === editingProjectId ? { ...p, ...next } : p));
+      syncUpsert("projects", projectToRow(updated));
     } else {
-      setProjects(prev => [...prev, { ...next, id: `p-${Date.now()}` }]);
+      const created = { ...next, id: `p-${Date.now()}` };
+      setProjects(prev => [...prev, created]);
+      syncUpsert("projects", projectToRow(created));
     }
     setProjectModalOpen(false);
   }
@@ -1269,6 +1388,7 @@ function App() {
   function deleteProject(id) {
     if (!window.confirm("Delete this project?")) return;
     setProjects(prev => prev.filter(p => p.id !== id));
+    syncDelete("projects", id);
     if (workspaceProject === id) setWorkspaceProject(projects.find(p => p.id !== id)?.id || "");
   }
 
@@ -1720,7 +1840,9 @@ function App() {
 
   function saveTask() {
     if (!currentTask) return;
-    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: currentAnnotations.length ? "In Progress" : t.status } : t));
+    const nextStatus = currentAnnotations.length ? "In Progress" : currentTask.status;
+    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: nextStatus } : t));
+    if (nextStatus !== currentTask.status) syncUpdate("tasks", currentTask.id, { status: nextStatus });
     logAudit("Annotation Saved", currentTask.id, currentTask.projectId, `${currentAnnotations.length} annotation${currentAnnotations.length===1?"":"s"} saved.`);
     setWorkspaceMessage("Task saved");
     setTimeout(() => setWorkspaceMessage(""), 1800);
@@ -1729,6 +1851,7 @@ function App() {
   function submitTask() {
     if (!currentTask) return;
     setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: "Submitted" } : t));
+    syncUpdate("tasks", currentTask.id, { status: "Submitted" });
     logAudit("Task Submitted", currentTask.id, currentTask.projectId, "Task submitted for QA review.");
     setWorkspaceMessage("Task submitted for QA review");
     setTimeout(() => setWorkspaceMessage(""), 1800);
@@ -1775,6 +1898,7 @@ function App() {
     setQaReviews(prev => ({ ...prev, [currentTask.id]: review }));
     const nextStatus = decision === "Approved" ? "Approved" : "Rejected";
     setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: nextStatus } : t));
+    syncUpdate("tasks", currentTask.id, { status: nextStatus });
     logAudit(`QA ${decision}`, currentTask.id, currentTask.projectId, `QA score ${review.score}${review.comment ? ` · ${review.comment}` : ""}`, currentUserName, "Reviewer");
     if (session) {
       supabase.from("qa_reviews").upsert({
@@ -1847,6 +1971,7 @@ function App() {
     if (index < 0) return;
     if (!window.confirm(`Remove ${tasks[index].name} from the dataset?`)) return;
     setTasks(prev => prev.filter(t => t.id !== id));
+    syncDelete("tasks", id);
     setSelectedTaskIndex(prev => Math.max(0, Math.min(prev, tasks.length - 2)));
     setDatasetToast("Image removed");
     setTimeout(() => setDatasetToast(""), 1800);
@@ -1856,7 +1981,9 @@ function App() {
     const count = tasks.filter(t => t.datasetId === datasetId).length;
     if (!count) return;
     if (!window.confirm(`Remove all ${count} image${count>1?"s":""} in this dataset?`)) return;
+    const removedIds = tasks.filter(t => t.datasetId === datasetId).map(t => t.id);
     setTasks(prev => prev.filter(t => t.datasetId !== datasetId));
+    if (session) removedIds.forEach(id => syncDelete("tasks", id));
     setSelectedTaskIndex(0);
     setDatasetToast("Dataset images cleared");
     setTimeout(() => setDatasetToast(""), 1800);
@@ -2059,6 +2186,7 @@ function App() {
     setQaReviews(prev => ({ ...prev, [qaSelectedTask.id]: review }));
     const nextStatus = decision === "Approved" ? "Approved" : decision === "Rejected" ? "Rejected" : "QA Review";
     setTasks(prev => prev.map(t => t.id === qaSelectedTask.id ? { ...t, status: nextStatus } : t));
+    syncUpdate("tasks", qaSelectedTask.id, { status: nextStatus });
     logAudit(`QA ${decision}`, qaSelectedTask.id, qaSelectedTask.projectId, `QA score ${qaScore}${qaComment.trim() ? ` · ${qaComment.trim()}` : ""}`, currentUserName, "Reviewer");
     if (session) {
       supabase.from("qa_reviews").upsert({
@@ -2155,11 +2283,14 @@ function App() {
     e.preventDefault();
     if (!teamForm.name.trim() || !teamForm.email.trim()) return;
     if (editingMemberId) {
+      const updated = { ...(teamMembers.find(m => m.id === editingMemberId) || {}), ...teamForm, id: editingMemberId, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0) };
       setTeamMembers(prev => prev.map(m => m.id === editingMemberId ? { ...m, ...teamForm, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0) } : m));
+      syncUpsert("team_members", memberToRow(updated));
       setTeamMessage("Team member updated successfully");
     } else {
       const member = { id: `member-${Date.now()}`, ...teamForm, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0), completed: 0, qaScore: 0 };
       setTeamMembers(prev => [member, ...prev]);
+      syncUpsert("team_members", memberToRow(member));
       setTeamMessage("Team member added successfully");
     }
     setTeamModalOpen(false);
@@ -2169,6 +2300,7 @@ function App() {
   function toggleMemberStatus(member) {
     const next = member.status === "Active" ? "Inactive" : "Active";
     setTeamMembers(prev => prev.map(m => m.id === member.id ? { ...m, status: next } : m));
+    syncUpdate("team_members", member.id, { status: next });
     setTeamMessage(`${member.name} is now ${next.toLowerCase()}`);
     setTimeout(() => setTeamMessage(""), 2600);
   }
@@ -2177,12 +2309,17 @@ function App() {
     if (member.id === "m1") return;
     setTeamMembers(prev => prev.filter(m => m.id !== member.id));
     setTasks(prev => prev.map(t => t.assigneeId === member.id ? { ...t, assigneeId: null } : t));
+    syncDelete("team_members", member.id);
     setTeamMessage(`${member.name} removed from the workspace`);
     setTimeout(() => setTeamMessage(""), 2600);
   }
 
   function assignTask(taskId, memberId) {
+    const prevTask = tasks.find(t => t.id === taskId);
+    const nextTaskStatus = memberId && prevTask?.status === "Pending" ? "In Progress" : prevTask?.status;
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigneeId: memberId || null, status: memberId && t.status === "Pending" ? "In Progress" : t.status } : t));
+    // Note: assigneeId isn't in the current tasks table schema, so only the status change syncs to cloud.
+    if (nextTaskStatus && nextTaskStatus !== prevTask?.status) syncUpdate("tasks", taskId, { status: nextTaskStatus });
     const member = teamMembers.find(m => m.id === memberId);
     logAudit(member ? "Task Assigned" : "Task Unassigned", taskId, tasks.find(t=>t.id===taskId)?.projectId, member ? `Assigned to ${member.name}.` : "Assignment cleared.");
     setTeamMessage(member ? `Task assigned to ${member.name}` : "Task assignment cleared");
@@ -2210,11 +2347,14 @@ function App() {
 
   function savePlannerAssignments() {
     if (!plannerAssignmentTaskIds.length) { flashPlanner("Select at least one task"); return; }
+    // Note: assigneeId/reviewerId/priority/queue aren't in the current tasks table
+    // schema, so only the status change syncs to cloud until those columns exist.
     setTasks(prev => prev.map(task => {
       if (!plannerAssignmentTaskIds.includes(task.id)) return task;
       let status = task.status;
       if (plannerAssignmentAssignee && status === "Pending") status = "In Progress";
       if (!plannerAssignmentAssignee && status === "In Progress") status = "Pending";
+      if (status !== task.status) syncUpdate("tasks", task.id, { status });
       return {
         ...task,
         assigneeId: plannerAssignmentAssignee || null,
@@ -2249,10 +2389,12 @@ function App() {
 
   function applyPlannerRework(action) {
     if (!plannerReworkSelection.length) { flashPlanner("Select at least one task first"); return; }
+    const reworkStatus = action === "rework" ? "Changes Requested" : "Pending";
     setTasks(prev => prev.map(task => plannerReworkSelection.includes(task.id)
-      ? { ...task, status: action === "rework" ? "Changes Requested" : "Pending" }
+      ? { ...task, status: reworkStatus }
       : task
     ));
+    plannerReworkSelection.forEach(id => syncUpdate("tasks", id, { status: reworkStatus }));
     flashPlanner(`${plannerReworkSelection.length} task${plannerReworkSelection.length === 1 ? "" : "s"} moved to ${action === "rework" ? "rework" : "the original queue"}`);
     setPlannerReworkSelection([]);
   }
@@ -3858,4 +4000,3 @@ function NotificationsPage({notifications,setNotifications,filter,setFilter,sear
     <div className="notification-list panel">{visible.length===0?<div className="empty-state"><Bell size={30}/><h3>No notifications</h3><p>Your notification center is clear.</p></div>:visible.map(n=>{const Icon=iconFor(n.type);return <div key={n.id} className={`notification-row ${n.read?"read":"unread"}`}><div className="notification-icon"><Icon size={18}/></div><div className="notification-main"><div className="notification-title"><strong>{n.title}</strong>{!n.read&&<span className="unread-dot"/>}</div><p>{n.message}</p><div className="notification-meta"><span>{n.type}</span>{n.projectId&&<span>{projectName(n.projectId)}</span>}{n.taskId&&<span>{n.taskId}</span>}<span>{new Date(n.createdAt).toLocaleString()}</span></div></div><div className="notification-actions">{!n.read&&<button className="secondary-btn small-btn" onClick={()=>markRead(n.id)}><Check size={14}/> Read</button>}<button className="icon-btn" onClick={()=>remove(n.id)} title="Delete notification"><Trash2 size={16}/></button></div></div>})}</div>
   </div>;
 }
- 
