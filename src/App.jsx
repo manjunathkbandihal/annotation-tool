@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import "./App.css";
 import { supabase } from "./supabaseClient.js";
+import JSZip from "jszip";
 
 const PROJECTS_KEY = "annotatepro_projects_v2";
 const TASKS_KEY = "annotatepro_tasks_v1";
@@ -235,6 +236,9 @@ function App() {
     defaultPage: "Dashboard"
   }));
   const [settingsTab, setSettingsTab] = useState("Workspace");
+  const [taskSettingsId, setTaskSettingsId] = useState(null);
+  const [taskSettingsTab, setTaskSettingsTab] = useState("General");
+  const [taskSettingsSubTab, setTaskSettingsSubTab] = useState("Import");
   const [settingsMessage, setSettingsMessage] = useState("");
 
   const [migrationStatus, setMigrationStatus] = useState({});
@@ -645,6 +649,23 @@ function App() {
   const [importDuplicateMode, setImportDuplicateMode] = useState("Skip");
   const structuredInputRef = useRef(null);
 
+  const [advImportOpen, setAdvImportOpen] = useState(false);
+  const [advImportStep, setAdvImportStep] = useState("upload"); // upload | mapping | preview
+  const [advImportKind, setAdvImportKind] = useState(null); // zip-images | yolo | coco
+  const [advImportFileName, setAdvImportFileName] = useState("");
+  const [advImportError, setAdvImportError] = useState("");
+  const [advImportParsed, setAdvImportParsed] = useState(null);
+  const [advImportMapping, setAdvImportMapping] = useState({});
+  const [advImportProgress, setAdvImportProgress] = useState({ done: 0, total: 0 });
+  const [advImportRunning, setAdvImportRunning] = useState(false);
+  const advImportInputRef = useRef(null);
+
+  function resetAdvImportWizard() {
+    setAdvImportStep("upload"); setAdvImportKind(null); setAdvImportFileName("");
+    setAdvImportError(""); setAdvImportParsed(null); setAdvImportMapping({});
+    setAdvImportProgress({ done: 0, total: 0 });
+  }
+
   function resetImportWizard() {
     setImportStep("upload"); setImportRows([]); setImportColumns([]);
     setImportMapping({ name: "", image: "", status: "" }); setImportFileName(""); setImportError("");
@@ -767,6 +788,246 @@ function App() {
     resetImportWizard();
     setDatasetToast(`${newTasks.length} task${newTasks.length > 1 ? "s" : ""} imported from ${importFileName}`);
     setTimeout(() => setDatasetToast(""), 2600);
+  }
+
+  async function handleAdvancedImportFile(file) {
+    if (!file) return;
+    setAdvImportFileName(file.name);
+    setAdvImportError("");
+    try {
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        const zip = await JSZip.loadAsync(file);
+        const entries = Object.entries(zip.files).filter(([, e]) => !e.dir);
+        const isImage = (p) => /\.(jpe?g|png|webp|gif|bmp)$/i.test(p);
+        const baseName = (p) => p.split("/").pop();
+        const stripExt = (n) => n.replace(/\.[^.]+$/, "");
+
+        const imageEntries = entries.filter(([p]) => isImage(p));
+        if (!imageEntries.length) { setAdvImportError("No image files found inside this zip."); return; }
+
+        const classesEntry = entries.find(([p]) => /(^|\/)classes\.txt$/i.test(p));
+        const yamlEntry = entries.find(([p]) => /(^|\/)data\.ya?ml$/i.test(p));
+        const labelTxtEntries = entries.filter(([p]) => /\.txt$/i.test(p) && !/classes\.txt$/i.test(p));
+        const cocoJsonEntry = entries.find(([p]) => /\.json$/i.test(p));
+
+        // Try COCO: any JSON entry shaped like {images, annotations, categories}
+        if (cocoJsonEntry) {
+          const jsonText = await cocoJsonEntry[1].async("string");
+          let cocoData;
+          try { cocoData = JSON.parse(jsonText); } catch { cocoData = null; }
+          if (cocoData && Array.isArray(cocoData.images) && Array.isArray(cocoData.annotations) && Array.isArray(cocoData.categories)) {
+            const images = [];
+            for (const [path, entry] of imageEntries) {
+              const blob = await entry.async("blob");
+              images.push({ name: baseName(path), blob });
+            }
+            const categories = cocoData.categories.map(c => ({ id: c.id, name: c.name }));
+            const imagesById = Object.fromEntries(cocoData.images.map(im => [im.id, im]));
+            const annotationsByImageName = {};
+            cocoData.annotations.forEach(ann => {
+              const im = imagesById[ann.image_id];
+              if (!im) return;
+              const key = baseName(im.file_name || "");
+              if (!annotationsByImageName[key]) annotationsByImageName[key] = [];
+              const w = im.width || 1, h = im.height || 1;
+              let shape = null;
+              if (Array.isArray(ann.segmentation) && ann.segmentation.length && Array.isArray(ann.segmentation[0])) {
+                const flat = ann.segmentation[0];
+                const points = [];
+                for (let i = 0; i < flat.length - 1; i += 2) points.push({ x: Math.max(0, Math.min(100, (flat[i] / w) * 100)), y: Math.max(0, Math.min(100, (flat[i + 1] / h) * 100)) });
+                if (points.length >= 3) shape = { type: "polygon", points };
+              }
+              if (!shape && Array.isArray(ann.bbox) && ann.bbox.length === 4) {
+                const [x, y, bw, bh] = ann.bbox;
+                shape = { type: "rectangle", x: Math.max(0, (x / w) * 100), y: Math.max(0, (y / h) * 100), w: Math.min(100, (bw / w) * 100), h: Math.min(100, (bh / h) * 100) };
+              }
+              if (shape) annotationsByImageName[key].push({ ...shape, categoryId: ann.category_id });
+            });
+            setAdvImportParsed({ kind: "coco", images, classes: categories, annotationsByImageName });
+            setAdvImportMapping({});
+            setAdvImportKind("coco");
+            setAdvImportStep(categories.length ? "mapping" : "preview");
+            return;
+          }
+        }
+
+        // Try YOLO: classes file/yaml + matching .txt label files
+        if ((classesEntry || yamlEntry) && labelTxtEntries.length) {
+          let classNames = [];
+          if (classesEntry) {
+            const text = await classesEntry[1].async("string");
+            classNames = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          } else if (yamlEntry) {
+            const text = await yamlEntry[1].async("string");
+            const inline = text.match(/names:\s*\[(.+?)\]/s);
+            if (inline) classNames = inline[1].split(",").map(s => s.replace(/['"]/g, "").trim()).filter(Boolean);
+            else {
+              const lines = text.split(/\r?\n/);
+              const idx = lines.findIndex(l => /^names:/.test(l.trim()));
+              if (idx >= 0) {
+                for (let i = idx + 1; i < lines.length; i++) {
+                  const m = lines[i].match(/^\s*\d+:\s*(.+)$/) || lines[i].match(/^\s*-\s*(.+)$/);
+                  if (!m) break;
+                  classNames.push(m[1].replace(/['"]/g, "").trim());
+                }
+              }
+            }
+          }
+          if (!classNames.length) { setAdvImportError("Found label files but couldn't read class names from classes.txt / data.yaml."); return; }
+
+          const images = [];
+          for (const [path, entry] of imageEntries) {
+            const blob = await entry.async("blob");
+            images.push({ name: baseName(path), blob, key: stripExt(baseName(path)) });
+          }
+          const annotationsByImageName = {};
+          for (const [path, entry] of labelTxtEntries) {
+            const key = stripExt(baseName(path));
+            const match = images.find(im => im.key === key);
+            if (!match) continue;
+            const text = await entry.async("string");
+            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const shapes = lines.map(line => {
+              const parts = line.split(/\s+/).map(Number);
+              if (parts.length < 5) return null;
+              const [classId, cx, cy, w, h] = parts;
+              return { type: "rectangle", x: Math.max(0, (cx - w / 2) * 100), y: Math.max(0, (cy - h / 2) * 100), w: Math.min(100, w * 100), h: Math.min(100, h * 100), categoryId: classId };
+            }).filter(Boolean);
+            annotationsByImageName[match.name] = shapes;
+          }
+          setAdvImportParsed({ kind: "yolo", images, classes: classNames.map((n, i) => ({ id: i, name: n })), annotationsByImageName });
+          setAdvImportMapping({});
+          setAdvImportKind("yolo");
+          setAdvImportStep("mapping");
+          return;
+        }
+
+        // Plain zip of images, no annotations
+        const images = [];
+        for (const [path, entry] of imageEntries) {
+          const blob = await entry.async("blob");
+          images.push({ name: baseName(path), blob });
+        }
+        setAdvImportParsed({ kind: "zip-images", images, classes: [], annotationsByImageName: {} });
+        setAdvImportKind("zip-images");
+        setAdvImportStep("preview");
+        return;
+      }
+
+      if (file.name.toLowerCase().endsWith(".json")) {
+        const text = await file.text();
+        let cocoData;
+        try { cocoData = JSON.parse(text); } catch { cocoData = null; }
+        if (!cocoData || !Array.isArray(cocoData.images) || !Array.isArray(cocoData.annotations) || !Array.isArray(cocoData.categories)) {
+          setAdvImportError("This doesn't look like a COCO file (expected images/annotations/categories). For plain task lists, use the CSV / JSON import instead.");
+          return;
+        }
+        const withUrls = cocoData.images.filter(im => im.coco_url || /^https?:\/\//i.test(im.file_name || ""));
+        if (!withUrls.length) { setAdvImportError("This COCO file's images have no URLs — upload a zip containing both the images and the COCO json instead."); return; }
+        const categories = cocoData.categories.map(c => ({ id: c.id, name: c.name }));
+        const imagesById = Object.fromEntries(cocoData.images.map(im => [im.id, im]));
+        const images = withUrls.map(im => ({ name: (im.file_name || `image-${im.id}`).split("/").pop(), url: im.coco_url || im.file_name }));
+        const annotationsByImageName = {};
+        cocoData.annotations.forEach(ann => {
+          const im = imagesById[ann.image_id];
+          if (!im) return;
+          const key = (im.file_name || "").split("/").pop();
+          if (!annotationsByImageName[key]) annotationsByImageName[key] = [];
+          const w = im.width || 1, h = im.height || 1;
+          if (Array.isArray(ann.bbox) && ann.bbox.length === 4) {
+            const [x, y, bw, bh] = ann.bbox;
+            annotationsByImageName[key].push({ type: "rectangle", x: Math.max(0, (x / w) * 100), y: Math.max(0, (y / h) * 100), w: Math.min(100, (bw / w) * 100), h: Math.min(100, (bh / h) * 100), categoryId: ann.category_id });
+          }
+        });
+        setAdvImportParsed({ kind: "coco-urls", images, classes: categories, annotationsByImageName });
+        setAdvImportMapping({});
+        setAdvImportKind("coco");
+        setAdvImportStep(categories.length ? "mapping" : "preview");
+        return;
+      }
+
+      setAdvImportError("Unsupported file — upload a .zip (images, YOLO export, or COCO export) or a standalone COCO .json.");
+    } catch (err) {
+      setAdvImportError(`Couldn't read this file: ${err.message}`);
+    }
+  }
+
+  function ensureLabelForClass(groupId, className) {
+    const config = projectConfigs[groupId];
+    const existing = config?.labels?.find(l => l.name.toLowerCase() === className.toLowerCase());
+    if (existing) return existing.id;
+    const newLabel = { id: `label-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: className, color: labelPalette[(config?.labels?.length || 0) % labelPalette.length], type: "Rectangle" };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), labels: [...(prev[groupId]?.labels || []), newLabel] } }));
+    return newLabel.id;
+  }
+
+  async function runAdvancedImport() {
+    if (!advImportParsed) return;
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id;
+    const targetDataset = datasets.find(d => d.id === targetDatasetId);
+    if (!targetDataset) { setAdvImportError("Select a dataset to import into."); return; }
+    const groupId = projects.find(p => p.id === targetDataset.projectId)?.groupId;
+
+    const resolvedLabelIds = {};
+    advImportParsed.classes.forEach(c => {
+      const choice = advImportMapping[c.id];
+      if (choice === "__new__" || !choice) resolvedLabelIds[c.id] = ensureLabelForClass(groupId, c.name);
+      else resolvedLabelIds[c.id] = choice;
+    });
+
+    setAdvImportRunning(true);
+    const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
+    const toImport = advImportParsed.images.filter(im => !existingNames.has(im.name));
+    setAdvImportProgress({ done: 0, total: toImport.length });
+
+    const newTasks = [];
+    const newAnnotationsByTask = {};
+    for (let i = 0; i < toImport.length; i++) {
+      const im = toImport[i];
+      let imageUrl = im.url || null;
+      if (!imageUrl && im.blob) {
+        const path = `${targetDataset.projectId || "unassigned"}/${targetDatasetId}/${Date.now()}-${i}-${im.name}`;
+        try {
+          const { error } = await supabase.storage.from("task-images").upload(path, im.blob, { cacheControl: "3600", upsert: false });
+          if (error) throw error;
+          imageUrl = supabase.storage.from("task-images").getPublicUrl(path).data.publicUrl;
+        } catch {
+          imageUrl = await new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => resolve(null); r.readAsDataURL(im.blob); });
+        }
+      }
+      if (!imageUrl) continue;
+      const taskId = `import-${advImportKind}-${Date.now()}-${i}`;
+      newTasks.push({ id: taskId, name: im.name, status: "Pending", image: imageUrl, source: `${advImportKind.toUpperCase()} import`, projectId: targetDataset.projectId, datasetId: targetDatasetId, createdAt: new Date().toISOString() });
+      const shapes = advImportParsed.annotationsByImageName[im.name] || [];
+      if (shapes.length) {
+        newAnnotationsByTask[taskId] = shapes.map((s, si) => ({ id: `${taskId}-ann-${si}`, type: s.type, labelId: resolvedLabelIds[s.categoryId], x: s.x, y: s.y, w: s.w, h: s.h, points: s.points }));
+      }
+      setAdvImportProgress({ done: i + 1, total: toImport.length });
+    }
+
+    setTasks(prev => [...prev, ...newTasks]);
+    setAnnotationsByTask(prev => ({ ...prev, ...newAnnotationsByTask }));
+    if (session) {
+      newTasks.forEach(t => {
+        supabase.from("tasks").upsert({ id: t.id, project_id: t.projectId, dataset_id: t.datasetId, name: t.name, status: t.status, image: t.image, source: t.source, created_at: t.createdAt }).then(({error})=>{if(error) console.warn("[Import] task sync failed:", error.message);});
+      });
+      Object.entries(newAnnotationsByTask).forEach(([taskId, anns]) => {
+        anns.forEach(a => {
+          supabase.from("annotations").upsert({ id: a.id, task_id: taskId, label_id: a.labelId, type: a.type, geometry: { x: a.x, y: a.y, w: a.w, h: a.h, points: a.points } }).then(({error})=>{if(error) console.warn("[Import] annotation sync failed:", error.message);});
+        });
+      });
+    }
+    setImportHistory(prev => [{
+      id: `imp-${Date.now()}`, fileName: advImportFileName, datasetId: targetDatasetId, datasetName: targetDataset.name,
+      imported: newTasks.length, skipped: advImportParsed.images.length - newTasks.length, at: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+
+    setAdvImportRunning(false);
+    setAdvImportOpen(false);
+    resetAdvImportWizard();
+    const annCount = Object.values(newAnnotationsByTask).reduce((n, a) => n + a.length, 0);
+    setDatasetToast(`${newTasks.length} image${newTasks.length !== 1 ? "s" : ""} imported${annCount ? ` with ${annCount} annotations` : ""}`);
+    setTimeout(() => setDatasetToast(""), 3000);
   }
 
   const fileInputRef = useRef(null);
@@ -945,6 +1206,7 @@ function App() {
     setTeamMembers(prev => prev.map(m => m.id === memberId ? { ...m, capacity } : m));
   }
   const currentTask = tasks[selectedTaskIndex] || tasks[0];
+  const taskSettingsTask = projects.find(p => p.id === taskSettingsId) || null;
   const currentAnnotations = annotationsByTask[currentTask?.id] || [];
   const currentLabel = labels.find((l) => l.id === selectedLabel) || labels[0];
 
@@ -1954,7 +2216,7 @@ function App() {
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers], ["Annotation Workspace", Grid3X3],
     ["Team", Users], ["QA & Reviews", ClipboardCheck], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
-    ["Import Data", Upload], ["Export", Download], ["Settings", Settings]
+    ["Settings", Settings]
   ];
 
   const currentConfig = projectConfigs[configProject] || makeDefaultProjectConfig(projectGroups.find(g => g.id === configProject) || projectGroups[0] || defaultProjectGroups[0]);
@@ -2027,7 +2289,7 @@ function App() {
         </header>
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} userName={currentUserName} />}
-        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
+        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => { setWorkspaceProject(id); navigate("Annotation Workspace"); }} onPlanner={openTaskPlanner} onTaskSettings={(id) => { setTaskSettingsId(id); setImportTaskId(id); setExportProject(id); setTaskSettingsTab("General"); navigate("Task Settings"); }} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
@@ -2085,8 +2347,12 @@ function App() {
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
         {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
         {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
-        {activePage === "Import Data" && <ImportPage projects={projects} tasks={tasks} datasets={datasets} projectConfigs={projectConfigs} importHistory={importHistory} onClearHistory={() => setImportHistory([])} importTaskId={importTaskId} setImportTaskId={setImportTaskId} activeDatasetId={activeDatasetId} setActiveDatasetId={setActiveDatasetId} listSearch={datasetListSearch} setListSearch={setDatasetListSearch} listStatus={datasetListStatus} setListStatus={setDatasetListStatus} filteredTasks={datasetFilteredTasks} search={datasetSearch} setSearch={setDatasetSearch} status={datasetStatus} setStatus={setDatasetStatus} view={datasetView} setView={setDatasetView} onImport={(datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }} onCsv={() => setImportOpen(true)} onRemove={removeTask} onClear={clearDataset} onStatus={updateTaskStatus} onExport={exportTasksCsv} onCreateDataset={openCreateDataset} onEditDataset={openEditDataset} onArchiveDataset={archiveDataset} onRestoreDataset={restoreDataset} onDeleteDataset={deleteDataset} onSnapshotVersion={snapshotDatasetVersion} compareVersion={compareVersion} setCompareVersion={setCompareVersion} />}
-        {activePage === "Export" && <ExportPage tasks={exportTasks} allTasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} format={exportFormat} setFormat={setExportFormat} scope={exportScope} setScope={setExportScope} project={exportProject} setProject={setExportProject} projects={projects} search={exportSearch} setSearch={setExportSearch} history={exportHistory} onExport={performExport} onClearHistory={clearExportHistory} message={exportMessage} />}
+        {activePage === "Task Settings" && taskSettingsTask && <TaskSettingsPage
+          task={taskSettingsTask} tab={taskSettingsTab} setTab={setTaskSettingsTab} subTab={taskSettingsSubTab} setSubTab={setTaskSettingsSubTab}
+          onBack={() => navigate("Projects")} onEditTask={() => openEditProject(taskSettingsTask)}
+          importProps={{projects, tasks, datasets, projectConfigs, importHistory, onClearHistory: () => setImportHistory([]), importTaskId, setImportTaskId, activeDatasetId, setActiveDatasetId, listSearch: datasetListSearch, setListSearch: setDatasetListSearch, listStatus: datasetListStatus, setListStatus: setDatasetListStatus, filteredTasks: datasetFilteredTasks, search: datasetSearch, setSearch: setDatasetSearch, status: datasetStatus, setStatus: setDatasetStatus, view: datasetView, setView: setDatasetView, onImport: (datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }, onCsv: () => setImportOpen(true), onAdvImport: (datasetId) => { setImportTargetDataset(datasetId); resetAdvImportWizard(); setAdvImportOpen(true); }, onRemove: removeTask, onClear: clearDataset, onStatus: updateTaskStatus, onExport: exportTasksCsv, onCreateDataset: openCreateDataset, onEditDataset: openEditDataset, onArchiveDataset: archiveDataset, onRestoreDataset: restoreDataset, onDeleteDataset: deleteDataset, onSnapshotVersion: snapshotDatasetVersion, compareVersion, setCompareVersion}}
+          exportProps={{tasks: exportTasks, allTasks: tasks, annotations: annotationsByTask, qaReviews, format: exportFormat, setFormat: setExportFormat, scope: exportScope, setScope: setExportScope, project: exportProject, setProject: setExportProject, projects, search: exportSearch, setSearch: setExportSearch, history: exportHistory, onExport: performExport, onClearHistory: clearExportHistory, message: exportMessage, scopedToTask: true}}
+        />}
         {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage}
           migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={runMigration}
           verifyStatus={verifyStatus} verifying={verifying} onVerify={verifyMigrationCounts} lastMigratedAt={lastMigratedAt}
@@ -2105,6 +2371,7 @@ function App() {
       {datasetModalOpen && <DatasetModal form={datasetForm} setForm={setDatasetForm} editing={!!editingDatasetId} onClose={() => setDatasetModalOpen(false)} onSave={saveDataset} />}
       {projectDetails && <ProjectDetails project={projectDetails} onClose={() => setProjectDetails(null)} onEdit={() => { setProjectDetails(null); openEditProject(projectDetails); }} />}
       {importOpen && <ImportModal onClose={() => { setImportOpen(false); resetImportWizard(); }} onImport={() => { setImportOpen(false); resetImportWizard(); imageInputRef.current?.click(); }} step={importStep} setStep={setImportStep} fileName={importFileName} columns={importColumns} rows={importRows} mapping={importMapping} setMapping={setImportMapping} validation={importValidation} error={importError} duplicateMode={importDuplicateMode} setDuplicateMode={setImportDuplicateMode} datasets={datasets} projects={projects} targetDatasetId={importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id} setTargetDataset={setImportTargetDataset} onFile={handleStructuredFile} fileRef={structuredInputRef} onRun={runStructuredImport} />}
+      {advImportOpen && <AdvancedImportModal onClose={() => { setAdvImportOpen(false); resetAdvImportWizard(); }} step={advImportStep} setStep={setAdvImportStep} kind={advImportKind} fileName={advImportFileName} parsed={advImportParsed} mapping={advImportMapping} setMapping={setAdvImportMapping} error={advImportError} progress={advImportProgress} running={advImportRunning} datasets={datasets} projects={projects} projectConfigs={projectConfigs} targetDatasetId={importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id} setTargetDataset={setImportTargetDataset} onFile={handleAdvancedImportFile} fileRef={advImportInputRef} onRun={runAdvancedImport} />}
     </div>
   );
 }
@@ -2130,7 +2397,7 @@ function Dashboard({ projects, stats, onCreate, onNavigate, userName }) {
       </section>
       <div className="dashboard-bottom">
         <section className="panel"><div className="panel-head"><div><h2>Recent Activity</h2><p>Latest workspace events</p></div></div><div className="activity-list"><ActivityRow icon={CheckCircle2} title="Road Object Detection" text="Task batch completed" time="8 min ago"/><ActivityRow icon={ShieldCheck} title="QA Review" text="18 annotations approved" time="31 min ago"/><ActivityRow icon={Users} title="Team activity" text="3 annotators started work" time="1 hr ago"/><ActivityRow icon={Upload} title="Dataset import" text="120 images added" time="2 hrs ago"/></div></section>
-        <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => onNavigate("Annotation Workspace")}/><Quick icon={Target} title="Task Planner" onClick={() => onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => onNavigate("QA & Reviews")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => onNavigate("Import Data")}/></div></section>
+        <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => onNavigate("Annotation Workspace")}/><Quick icon={Target} title="Task Planner" onClick={() => onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => onNavigate("QA & Reviews")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => onNavigate("Projects")}/></div></section>
       </div>
     </div>
   );
@@ -2543,7 +2810,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
 function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
 function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
 
-function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
+function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onTaskSettings,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
   const [activeCategory, setActiveCategory] = useState(null);
   const [groupSearch, setGroupSearch] = useState("");
   const [groupStatusFilter, setGroupStatusFilter] = useState("Active");
@@ -2602,7 +2869,7 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
 
       <section className="panel">
         <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
-        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)} canManage={canEditProject(activeGroup)}/>)}</div>
+        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onPlanner={()=>onPlanner(p.id)} onSettings={()=>onTaskSettings(p.id)} canManage={canEditProject(activeGroup)}/>)}</div>
         {!categoryProjects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No tasks in {activeGroup.name} yet</h3><p>Create one to get started.</p></div>}
       </section>
     </div>;
@@ -2657,8 +2924,8 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
   </div>;
 }
 
-function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onPlanner,canManage}) {
-  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div></article>;
+function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onPlanner,onSettings,canManage}) {
+  return <article className="project-card"><div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div><div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div><div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div><div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div><div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="start-link" onClick={onWorkspace}><Play size={13}/> Annotate</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div></article>;
 }
 
 function ProjectModal({form,setForm,editing,onClose,onSave}) {
@@ -2679,7 +2946,45 @@ function ProjectDetails({project,onClose,onEdit}) {
   return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Task</button></div></div></div>;
 }
 
-function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClearHistory,importTaskId,setImportTaskId,activeDatasetId,setActiveDatasetId,listSearch,setListSearch,listStatus,setListStatus,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onRemove,onClear,onStatus,onExport,onCreateDataset,onEditDataset,onArchiveDataset,onRestoreDataset,onDeleteDataset,onSnapshotVersion,compareVersion,setCompareVersion}) {
+function TaskSettingsPage({task, tab, setTab, subTab, setSubTab, onBack, onEditTask, importProps, exportProps}) {
+  return <div className="page task-settings-page">
+    <div className="page-head category-drill-head">
+      <div>
+        <button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Projects</button>
+        <div className="category-drill-title"><h1>{task.name}</h1><StatusBadge status={task.status}/></div>
+        <p className="category-drill-desc">{task.client} · {task.annotationType}</p>
+      </div>
+    </div>
+    <div className="config-tabs">
+      <button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button>
+      <button className={tab==="Import"?"active":""} onClick={()=>setTab("Import")}><Upload size={16}/> Import &amp; Export</button>
+    </div>
+
+    {tab === "General" && <section className="panel config-panel general-settings-panel">
+      <div className="config-panel-head"><div><h2>Task Details</h2><p>Basic information for this task.</p></div><button className="secondary-btn" onClick={onEditTask}><Edit3 size={15}/> Edit</button></div>
+      <div className="detail-grid" style={{padding:"0 20px 20px"}}>
+        <Detail label="Client" value={task.client||"—"}/>
+        <Detail label="Annotation type" value={task.annotationType}/>
+        <Detail label="Team" value={task.team||"—"}/>
+        <Detail label="Start date" value={task.startDate||"—"}/>
+        <Detail label="Due date" value={task.dueDate||"—"}/>
+        <Detail label="Total images" value={Number(task.totalImages).toLocaleString()}/>
+      </div>
+      {task.description && <div className="description-box" style={{margin:"0 20px 20px"}}><b>Description</b><p>{task.description}</p></div>}
+    </section>}
+
+    {tab === "Import" && <section>
+      <div className="import-export-subtabs">
+        <button className={subTab==="Import"?"active":""} onClick={()=>setSubTab("Import")}><Upload size={14}/> Import</button>
+        <button className={subTab==="Export"?"active":""} onClick={()=>setSubTab("Export")}><Download size={14}/> Export</button>
+      </div>
+      {subTab === "Import" && <ImportPage {...importProps}/>}
+      {subTab === "Export" && <ExportPage {...exportProps}/>}
+    </section>}
+  </div>;
+}
+
+function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClearHistory,importTaskId,setImportTaskId,activeDatasetId,setActiveDatasetId,listSearch,setListSearch,listStatus,setListStatus,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onAdvImport,onRemove,onClear,onStatus,onExport,onCreateDataset,onEditDataset,onArchiveDataset,onRestoreDataset,onDeleteDataset,onSnapshotVersion,compareVersion,setCompareVersion}) {
   const taskProjects = projects.length ? projects : [];
   const currentTask = taskProjects.find(p => p.id === importTaskId) || taskProjects[0];
   const taskDatasets = datasets.filter(d => d.projectId === currentTask?.id);
@@ -2699,7 +3004,7 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
     const added = compareSnapshot ? [...currentNames].filter(n => !compareNames.has(n)) : [];
     const removed = compareSnapshot ? [...compareNames].filter(n => !currentNames.has(n)) : [];
     return <div className="page dataset-page">
-      <div className="page-head category-drill-head"><div><button className="category-back-btn" onClick={()=>setActiveDatasetId(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {currentTask?.name} Datasets</button><span className="eyebrow">DATASET</span><h1>{activeDataset.name}</h1><p>Version {activeDataset.version || 1} · {dsTasks.length} images{invalid?` · ${invalid} invalid`:""}</p><div className="category-drill-title" style={{marginTop:"8px"}}><span className="category-count-pill stage-pill">{activeDataset.stage || "Draft"}</span><span className={`category-count-pill health-pill ${validation.valid ? "health-healthy" : "health-at-risk"}`}>{validation.valid ? "Validated" : "Needs Attention"}</span></div></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={()=>onSnapshotVersion(activeDataset.id)}><Copy size={15}/> Save as New Version</button><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={16}/> Add Images</button></div></div>
+      <div className="page-head category-drill-head"><div><button className="category-back-btn" onClick={()=>setActiveDatasetId(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {currentTask?.name} Datasets</button><span className="eyebrow">DATASET</span><h1>{activeDataset.name}</h1><p>Version {activeDataset.version || 1} · {dsTasks.length} images{invalid?` · ${invalid} invalid`:""}</p><div className="category-drill-title" style={{marginTop:"8px"}}><span className="category-count-pill stage-pill">{activeDataset.stage || "Draft"}</span><span className={`category-count-pill health-pill ${validation.valid ? "health-healthy" : "health-at-risk"}`}>{validation.valid ? "Validated" : "Needs Attention"}</span></div></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={()=>onSnapshotVersion(activeDataset.id)}><Copy size={15}/> Save as New Version</button><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="secondary-btn" onClick={()=>onAdvImport(activeDataset.id)}><FileArchive size={15}/> ZIP / COCO / YOLO</button><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={16}/> Add Images</button></div></div>
       <div className="dataset-cards"><MiniStat label="Total Images" value={dsTasks.length}/><MiniStat label="Annotated" value={annotated}/><MiniStat label="Unannotated" value={dsTasks.length-annotated}/><MiniStat label="Invalid Files" value={invalid}/></div>
       {!validation.valid && <div className="validation-panel"><AlertCircle size={16}/><div><b>This dataset needs attention before it's production-ready</b><ul>{validation.issues.map((issue,i)=><li key={i}>{issue}</li>)}</ul></div></div>}
       <section className="dataset-info panel"><div className="dataset-info-main"><div className="dataset-logo"><Database size={22}/></div><div><b className="dataset-name-input" style={{display:"block"}}>{activeDataset.name}</b><span className="dataset-description-input" style={{display:"block",color:"var(--muted)"}}>{activeDataset.description||"No description"}</span><div className="dataset-meta-line"><span>Created {new Date(activeDataset.createdAt).toLocaleDateString()}</span><span>•</span><span>{currentTask?.name}</span><span>•</span><span>Autosaved</span></div></div></div><div className="dataset-info-actions"><button className="secondary-btn" onClick={()=>onEditDataset(activeDataset)}><Edit3 size={15}/> Edit</button>{activeDataset.status==="Archived" ? <button className="secondary-btn" onClick={()=>onRestoreDataset(activeDataset.id)}><RotateCcw size={15}/> Restore</button> : <button className="secondary-btn" onClick={()=>onArchiveDataset(activeDataset.id)}><Archive size={15}/> Archive</button>}<button className="danger-outline" onClick={()=>onClear(activeDataset.id)}><Trash2 size={15}/> Clear Images</button></div></section>
@@ -2720,7 +3025,7 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
     .filter(d => d.name.toLowerCase().includes(listSearch.toLowerCase()));
 
   return <div className="page dataset-page">
-    <div className="page-head"><div><span className="eyebrow">DATASET MANAGEMENT</span><h1>Datasets</h1><p>Every project can hold multiple datasets — organize imports by batch, version or source.</p></div><div className="dataset-head-actions"><div className="select-wrap"><FolderKanban size={15}/><select value={importTaskId} onChange={e=>{setImportTaskId(e.target.value);setActiveDatasetId(null);}}>{taskProjects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div><button className="primary-btn" onClick={()=>onCreateDataset(currentTask?.id)}><Plus size={16}/> Create Dataset</button></div></div>
+    <div className="page-head"><div><span className="eyebrow">DATASET MANAGEMENT</span><h1>Datasets</h1><p>Every project can hold multiple datasets — organize imports by batch, version or source.</p></div><div className="dataset-head-actions"><button className="primary-btn" onClick={()=>onCreateDataset(currentTask?.id)}><Plus size={16}/> Create Dataset</button></div></div>
     <div className="dataset-cards"><MiniStat label="Datasets" value={taskDatasets.length}/><MiniStat label="Total Images" value={tasks.filter(t=>taskDatasets.some(d=>d.id===t.datasetId)).length}/><MiniStat label="Active" value={taskDatasets.filter(d=>(d.status||"Active")==="Active").length}/><MiniStat label="Archived" value={taskDatasets.filter(d=>d.status==="Archived").length}/></div>
     <div className="project-filters standalone"><div className="filter-search"><Search size={17}/><input value={listSearch} onChange={e=>setListSearch(e.target.value)} placeholder="Search datasets..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={listStatus} onChange={e=>setListStatus(e.target.value)}><option>All</option><option>Active</option><option>Archived</option></select></div></div>
     <div className="dataset-grid">
@@ -2758,7 +3063,7 @@ function DatasetModal({form,setForm,editing,onClose,onSave}) {
   return <div className="modal-backdrop"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label><label>Lifecycle stage<select value={form.stage||"Draft"} onChange={e=>set("stage",e.target.value)}>{DATASET_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
 }
 
-function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message}) {
+function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message, scopedToTask}) {
   const totalAnnotations = tasks.reduce((n,t) => n + (annotations[t.id] || []).length, 0);
   const approved = tasks.filter(t => qaReviews[t.id]?.decision === "Approved").length;
   const formats = [
@@ -2769,7 +3074,7 @@ function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat,
     ["YOLO Manifest", FileText, "Normalized bounding-box manifest ready for YOLO conversion pipelines."]
   ];
   return <div className="page export-page">
-    <div className="page-head"><div><span className="eyebrow">DATA DELIVERY</span><h1>Export</h1><p>Package annotation data for downstream QA, reporting and machine-learning workflows.</p></div><div className="export-head-status"><span><i></i> Local export engine</span></div></div>
+    {!scopedToTask && <div className="page-head"><div><span className="eyebrow">DATA DELIVERY</span><h1>Export</h1><p>Package annotation data for downstream QA, reporting and machine-learning workflows.</p></div><div className="export-head-status"><span><i></i> Local export engine</span></div></div>}
     <div className="export-summary-grid">
       <MiniStat label="Tasks selected" value={tasks.length}/><MiniStat label="Annotations" value={totalAnnotations}/><MiniStat label="QA approved" value={approved}/><MiniStat label="Available tasks" value={allTasks.length}/>
     </div>
@@ -2781,7 +3086,7 @@ function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat,
           <div className="format-grid">{formats.map(([name,Icon,desc]) => <button key={name} className={`format-card ${format===name?"active":""}`} onClick={()=>setFormat(name)}><span><Icon size={19}/></span><div><b>{name}</b><small>{desc}</small></div>{format===name && <Check size={17}/>}</button>)}</div>
           <div className="export-filter-grid">
             <div><label className="export-label">TASK SCOPE</label><div className="export-select"><Filter size={15}/><select value={scope} onChange={e=>setScope(e.target.value)}><option>All Tasks</option><option>Annotated Only</option><option>Completed Only</option><option>QA Approved</option></select></div></div>
-            <div><label className="export-label">PROJECT</label><div className="export-select"><FolderKanban size={15}/><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div></div>
+            {!scopedToTask && <div><label className="export-label">PROJECT</label><div className="export-select"><FolderKanban size={15}/><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div></div>}
           </div>
           <label className="export-label">TASK SEARCH</label><div className="export-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter by task name or ID..."/></div>
           <div className="export-ready"><div><b>{tasks.length} tasks ready</b><span>{totalAnnotations} annotations will be included in this export.</span></div><button className="primary-btn" onClick={onExport}><Download size={16}/> Export {format}</button></div>
@@ -2847,6 +3152,63 @@ function ImportModal({onClose,onImport,step,setStep,fileName,columns,rows,mappin
       <button className="secondary-btn" onClick={onImport}><Upload size={15}/> Image Upload Instead</button>
       {step==="mapping" && <button className="primary-btn" disabled={!mapping.name||!mapping.image} onClick={()=>setStep("preview")}>Continue</button>}
       {step==="preview" && <button className="primary-btn" onClick={onRun}><Check size={16}/> Import {duplicateMode==="Import anyway"?validation.valid.length+validation.duplicates.length:validation.valid.length} tasks</button>}
+    </div>
+  </div></div>;
+}
+
+function AdvancedImportModal({onClose,step,setStep,kind,fileName,parsed,mapping,setMapping,error,progress,running,datasets,projects,projectConfigs,targetDatasetId,setTargetDataset,onFile,fileRef,onRun}) {
+  const kindLabel = kind === "coco" ? "COCO" : kind === "yolo" ? "YOLO" : "Image ZIP";
+  const targetDataset = datasets.find(d => d.id === targetDatasetId);
+  const groupId = projects.find(p => p.id === targetDataset?.projectId)?.groupId;
+  const existingLabels = projectConfigs?.[groupId]?.labels || [];
+  const annotationCount = parsed ? Object.values(parsed.annotationsByImageName || {}).reduce((n,a)=>n+a.length,0) : 0;
+
+  return <div className="modal-backdrop"><div className="modal import-wizard-modal">
+    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import ZIP / COCO / YOLO</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div>
+    <div className="import-steps">
+      {["upload","mapping","preview"].map((s,i)=><div key={s} className={`import-step ${step===s?"active":""} ${["upload","mapping","preview"].indexOf(step)>i?"done":""}`}><span>{i+1}</span>{s==="upload"?"Upload":s==="mapping"?"Map Labels":"Preview"}</div>)}
+    </div>
+
+    {step==="upload" && <div className="import-body">
+      <input ref={fileRef} type="file" accept=".zip,.json" hidden onChange={e=>{onFile(e.target.files?.[0]); e.target.value="";}}/>
+      <button className="import-dropzone" onClick={()=>fileRef.current?.click()}>
+        <Upload size={30}/>
+        <b>Choose a .zip or COCO .json file</b>
+        <span>Plain image zips, YOLO exports (images/ + labels/ + classes.txt), and COCO exports (images + annotations.json) are all detected automatically.</span>
+      </button>
+      <div className="import-format-help">
+        <div><FileArchive size={16}/><div><b>ZIP of images</b><code>photo1.jpg, photo2.jpg, ...</code></div></div>
+        <div><FileArchive size={16}/><div><b>YOLO</b><code>images/*.jpg + labels/*.txt + classes.txt</code></div></div>
+        <div><FileJson size={16}/><div><b>COCO</b><code>images[] + annotations[] + categories[]</code></div></div>
+      </div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="mapping" && parsed && <div className="import-body">
+      <div className="import-file-row"><FileArchive size={16}/><b>{fileName}</b><span>{kindLabel} · {parsed.images.length} images · {annotationCount} annotations</span></div>
+      <label className="export-label">IMPORT INTO DATASET</label>
+      <div className="export-select"><Database size={15}/><select value={targetDatasetId||""} onChange={e=>setTargetDataset(e.target.value)}>{datasets.map(d=>{const proj=projects.find(p=>p.id===d.projectId);return <option key={d.id} value={d.id}>{proj?`${proj.name} — `:""}{d.name}</option>;})}</select></div>
+      <label className="export-label" style={{marginTop:"16px"}}>LABEL MAPPING — {parsed.classes.length} classes found</label>
+      <div className="import-mapping-list">{parsed.classes.map(c=><div className="import-mapping-row" key={c.id}><div><b>{c.name}</b><small>Detected class</small></div><select value={mapping[c.id]||"__new__"} onChange={e=>setMapping(m=>({...m,[c.id]:e.target.value}))}><option value="__new__">+ Create new label "{c.name}"</option>{existingLabels.map(l=><option key={l.id} value={l.id}>Map to "{l.name}"</option>)}</select></div>)}</div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="preview" && parsed && <div className="import-body">
+      <label className="export-label">IMPORT INTO DATASET</label>
+      <div className="export-select"><Database size={15}/><select value={targetDatasetId||""} onChange={e=>setTargetDataset(e.target.value)}>{datasets.map(d=>{const proj=projects.find(p=>p.id===d.projectId);return <option key={d.id} value={d.id}>{proj?`${proj.name} — `:""}{d.name}</option>;})}</select></div>
+      <div className="import-validation-cards" style={{marginTop:"14px"}}>
+        <div className="import-valid-card"><b>{parsed.images.length}</b><span>Images found</span></div>
+        <div className="import-valid-card"><b>{annotationCount}</b><span>Annotations</span></div>
+        <div className="import-valid-card"><b>{parsed.classes.length}</b><span>Classes</span></div>
+      </div>
+      {running && <div className="import-progress"><div className="import-progress-bar"><i style={{width:`${progress.total?Math.round(progress.done/progress.total*100):0}%`}}/></div><span>Uploading {progress.done} / {progress.total}...</span></div>}
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    <div className="modal-foot">
+      {step!=="upload" && !running && <button className="secondary-btn" onClick={()=>setStep(step==="preview" && (kind==="coco"||kind==="yolo") ?"mapping":"upload")}>Back</button>}
+      {step==="mapping" && <button className="primary-btn" onClick={()=>setStep("preview")}>Continue</button>}
+      {step==="preview" && <button className="primary-btn" disabled={running} onClick={onRun}><Check size={16}/> {running?"Importing...":`Import ${parsed?.images.length||0} images`}</button>}
     </div>
   </div></div>;
 }
