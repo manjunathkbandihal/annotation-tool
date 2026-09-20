@@ -326,6 +326,7 @@ function App() {
       { key: "qa", label: "QA reviews", table: "qa_reviews", rows: () => Object.entries(qaReviews).map(([taskId, r]) => ({
           task_id: taskId, decision: r.decision || null, score: r.score ?? null, reviewer: r.reviewer || null,
           comment: r.comment || "", reason: r.reason || "", annotation_count: r.annotationCount || 0,
+          criteria_scores: r.criteriaScores || {}, errors: r.errors || [],
           history: r.history || [], reviewed_at: r.reviewedAt || new Date().toISOString()
         })) },
       { key: "notifications", label: "Notifications", table: "notifications", rows: () => notifications.map(n => ({
@@ -425,12 +426,13 @@ function App() {
     let cancelled = false;
     (async () => {
       try {
-        const [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes] = await Promise.all([
+        const [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes, qaRes] = await Promise.all([
           supabase.from("project_groups").select("*"),
           supabase.from("projects").select("*"),
           supabase.from("datasets").select("*"),
           supabase.from("tasks").select("*"),
-          supabase.from("team_members").select("*")
+          supabase.from("team_members").select("*"),
+          supabase.from("qa_reviews").select("*")
         ]);
         if (cancelled) return;
         if (!groupsRes.error && groupsRes.data?.length) setProjectGroups(groupsRes.data.map(groupFromRow));
@@ -438,7 +440,14 @@ function App() {
         if (!datasetsRes.error && datasetsRes.data?.length) setDatasets(datasetsRes.data.map(datasetFromRow));
         if (!tasksRes.error && tasksRes.data?.length) setTasks(tasksRes.data.map(taskFromRow));
         if (!membersRes.error && membersRes.data?.length) setTeamMembers(membersRes.data.map(memberFromRow));
-        [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes].forEach(r => { if (r.error) console.warn("[Cloud] hydrate failed:", r.error.message); });
+        if (!qaRes.error && qaRes.data?.length) {
+          const mapped = {};
+          qaRes.data.forEach(row => {
+            mapped[row.task_id] = { decision: row.decision, score: row.score, reviewer: row.reviewer, comment: row.comment, reason: row.reason, annotationCount: row.annotation_count, criteriaScores: row.criteria_scores || {}, errors: row.errors || [], history: row.history || [], reviewedAt: row.reviewed_at };
+          });
+          setQaReviews(mapped);
+        }
+        [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes, qaRes].forEach(r => { if (r.error) console.warn("[Cloud] hydrate failed:", r.error.message); });
       } catch (err) {
         console.warn("[Cloud] hydrate failed:", err.message);
       } finally {
@@ -569,7 +578,7 @@ function App() {
       const groupIdMap = {};
       const newLabelGroups = (sourceConfig.labelGroups || []).map(g => { const nid = `${newId}-${g.id}`; groupIdMap[g.id] = nid; return { ...g, id: nid }; });
       newLabels.forEach(l => { if (l.groupId) l.groupId = groupIdMap[l.groupId] || null; });
-      return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: newLabels, labelGroups: newLabelGroups, schemaVersion: 1, schemaHistory: [], automationRules: (sourceConfig.automationRules || []).map(r => ({ ...r, id: `${newId}-rule-${r.id}` })) } };
+      return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: newLabels, labelGroups: newLabelGroups, schemaVersion: 1, schemaHistory: [], automationRules: (sourceConfig.automationRules || []).map(r => ({ ...r, id: `${newId}-rule-${r.id}` })), qaCriteria: sourceConfig.qaCriteria || [], errorCategories: sourceConfig.errorCategories || [], samplingRate: sourceConfig.samplingRate ?? 100, calibrationSet: [] } };
     });
   }
 
@@ -667,6 +676,9 @@ function App() {
   const [qaFilter, setQaFilter] = useState("All");
   const [qaSearch, setQaSearch] = useState("");
   const [qaScore, setQaScore] = useState(96);
+  const [qaCriteriaScores, setQaCriteriaScores] = useState({});
+  const [qaErrors, setQaErrors] = useState([]);
+  const [qaScorecardOpen, setQaScorecardOpen] = useState(false);
   const [qaReason, setQaReason] = useState("Incorrect label");
   const [qaComment, setQaComment] = useState("");
   const [qaMessage, setQaMessage] = useState("");
@@ -710,6 +722,20 @@ function App() {
     annotatorSlaHours: 24,
     reviewerSlaHours: 12,
     escalateAfterHours: 24,
+    qaCriteria: [
+      { id: "crit-accuracy", name: "Label Accuracy", weight: 40 },
+      { id: "crit-boundary", name: "Boundary Precision", weight: 35 },
+      { id: "crit-completeness", name: "Completeness", weight: 25 }
+    ],
+    errorCategories: [
+      { id: "err-missing", name: "Missing Object", severity: "Major" },
+      { id: "err-wrong-label", name: "Wrong Label", severity: "Major" },
+      { id: "err-boundary", name: "Boundary Error", severity: "Minor" },
+      { id: "err-duplicate", name: "Duplicate Annotation", severity: "Minor" },
+      { id: "err-attribute", name: "Attribute Error", severity: "Minor" }
+    ],
+    samplingRate: 100,
+    calibrationSet: [],
     requireQa: true, allowAnnotatorSubmit: true, autoSave: true, defaultReviewer: "", maxTasksPerAnnotator: 10,
     instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality.",
     color: labelPalette[0],
@@ -1235,7 +1261,7 @@ function App() {
       .on("postgres_changes", { event: "*", schema: "public", table: "qa_reviews" }, (payload) => {
         if (payload.eventType === "DELETE") return;
         const row = payload.new;
-        setQaReviews(prev => ({ ...prev, [row.task_id]: { decision: row.decision, score: row.score, reviewer: row.reviewer, comment: row.comment, reason: row.reason, annotationCount: row.annotation_count, history: row.history, reviewedAt: row.reviewed_at } }));
+        setQaReviews(prev => ({ ...prev, [row.task_id]: { decision: row.decision, score: row.score, reviewer: row.reviewer, comment: row.comment, reason: row.reason, annotationCount: row.annotation_count, criteriaScores: row.criteria_scores || {}, errors: row.errors || [], history: row.history, reviewedAt: row.reviewed_at } }));
       })
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, (payload) => {
         const row = payload.new;
@@ -1843,6 +1869,8 @@ function App() {
     setSelectedAnnotationId(null);
     setSelectedTaskIndex(i => Math.max(0, Math.min(tasks.length - 1, i + delta)));
     resetView();
+    setQaCriteriaScores({});
+    setQaErrors([]);
   }
 
   function logAudit(action, taskId=null, projectId=null, details="", actor=currentUserName, actorRole="Team Lead") {
@@ -1902,6 +1930,8 @@ function App() {
     setSelectedAnnotationId(null);
     setDrawing(null);
     resetView();
+    setQaCriteriaScores({});
+    setQaErrors([]);
     navigate("Annotation Workspace");
   }
 
@@ -1911,34 +1941,43 @@ function App() {
     const now = new Date().toISOString();
     const existing = qaReviews[currentTask.id];
     const annotationCount = (annotationsByTask[currentTask.id] || []).length;
+    const groupConfig = getGroupConfig(getGroupIdForTask(currentTask));
+    const criteria = groupConfig.qaCriteria || [];
+    const hasScorecardInput = criteria.length && Object.keys(qaCriteriaScores).length;
+    const computedScore = hasScorecardInput ? weightedQaScore(criteria, qaCriteriaScores) : Number(existing?.score ?? qaScore ?? 96);
     const review = {
       decision,
-      score: Number(existing?.score ?? qaScore ?? 96),
+      score: computedScore,
       reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "",
       comment: (qaComment || "").trim(),
       reviewer: currentUserName,
       reviewedAt: now,
       annotationCount,
+      criteriaScores: hasScorecardInput ? { ...qaCriteriaScores } : (existing?.criteriaScores || {}),
+      errors: qaErrors.length ? qaErrors : (existing?.errors || []),
       history: [
         ...(existing?.history || []),
-        { decision, score: Number(existing?.score ?? qaScore ?? 96), reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "", comment: (qaComment || "").trim(), reviewer: currentUserName, reviewedAt: now }
+        { decision, score: computedScore, reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "", comment: (qaComment || "").trim(), reviewer: currentUserName, reviewedAt: now }
       ]
     };
     setQaReviews(prev => ({ ...prev, [currentTask.id]: review }));
     const nextStatus = decision === "Approved" ? "Approved" : "Rejected";
     setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: nextStatus } : t));
     syncUpdate("tasks", currentTask.id, { status: nextStatus });
-    logAudit(`QA ${decision}`, currentTask.id, currentTask.projectId, `QA score ${review.score}${review.comment ? ` · ${review.comment}` : ""}`, currentUserName, "Reviewer");
+    logAudit(`QA ${decision}`, currentTask.id, currentTask.projectId, `QA score ${review.score ?? "—"}${review.errors.length ? ` · ${review.errors.length} error${review.errors.length===1?"":"s"} logged` : ""}${review.comment ? ` · ${review.comment}` : ""}`, currentUserName, "Reviewer");
     if (session) {
       supabase.from("qa_reviews").upsert({
         task_id: currentTask.id, decision: review.decision, score: review.score, reviewer: review.reviewer,
         comment: review.comment, reason: review.reason, annotation_count: review.annotationCount,
+        criteria_scores: review.criteriaScores || {}, errors: review.errors || [],
         history: review.history, reviewed_at: review.reviewedAt
       }).then(({ error }) => { if (error) console.warn("[Realtime] QA review sync failed:", error.message); });
     }
     if (decision === "Rejected") {
       pushNotification("qa", "QA Rejected", `${currentTask.name} was rejected by ${currentUserName}${review.reason ? ` — ${review.reason}` : ""}`, currentTask.projectId, currentTask.id);
     }
+    setQaCriteriaScores({});
+    setQaErrors([]);
     setWorkspaceMessage(`${currentTask.name} ${decision.toLowerCase()}`);
     setTimeout(() => setWorkspaceMessage(""), 1800);
   }
@@ -2207,6 +2246,8 @@ function App() {
       reviewer: currentUserName,
       reviewedAt: now,
       annotationCount: qaSelectedAnnotations.length,
+      criteriaScores: qaSelectedReview?.criteriaScores || {},
+      errors: qaSelectedReview?.errors || [],
       history: [
         ...(qaSelectedReview?.history || []),
         { decision, score: Number(qaScore), reason: decision === "Approved" ? "" : qaReason, comment: qaComment.trim(), reviewer: currentUserName, reviewedAt: now }
@@ -2221,6 +2262,7 @@ function App() {
       supabase.from("qa_reviews").upsert({
         task_id: qaSelectedTask.id, decision: review.decision, score: review.score, reviewer: review.reviewer,
         comment: review.comment, reason: review.reason, annotation_count: review.annotationCount,
+        criteria_scores: review.criteriaScores, errors: review.errors,
         history: review.history, reviewed_at: review.reviewedAt
       }).then(({ error }) => { if (error) console.warn("[Realtime] QA review sync failed:", error.message); });
     }
@@ -2457,7 +2499,7 @@ function App() {
 
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers],
-    ["Team", Users], ["Deadlines", Calendar], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
+    ["Team", Users], ["Deadlines", Calendar], ["QA & Quality", ShieldCheck], ["Reports", TrendingUp], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
     ["Settings", Settings]
   ];
 
@@ -2810,6 +2852,270 @@ function App() {
     return { rows, overdue, dueToday, dueWeek, agingBuckets, slaCompliance, measured, upcomingProjects };
   }, [tasks, projects, projectConfigs, projectGroups, auditEvents]);
 
+  // ---- Build 35: Advanced QA & Quality Scoring ----
+  function createQaCriterion(groupId) {
+    const criterion = { id: `crit-${Date.now()}`, name: "New criterion", weight: 10 };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), qaCriteria: [...(prev[groupId]?.qaCriteria || []), criterion] } }));
+  }
+  function updateQaCriterion(groupId, id, patch) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], qaCriteria: (prev[groupId]?.qaCriteria || []).map(c => c.id === id ? { ...c, ...patch } : c) } }));
+  }
+  function deleteQaCriterion(groupId, id) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], qaCriteria: (prev[groupId]?.qaCriteria || []).filter(c => c.id !== id) } }));
+  }
+  function createErrorCategory(groupId) {
+    const category = { id: `err-${Date.now()}`, name: "New error type", severity: "Minor" };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), errorCategories: [...(prev[groupId]?.errorCategories || []), category] } }));
+  }
+  function updateErrorCategory(groupId, id, patch) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], errorCategories: (prev[groupId]?.errorCategories || []).map(c => c.id === id ? { ...c, ...patch } : c) } }));
+  }
+  function deleteErrorCategory(groupId, id) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], errorCategories: (prev[groupId]?.errorCategories || []).filter(c => c.id !== id) } }));
+  }
+  function addCalibrationEntry(groupId, taskId, goldScore, notes) {
+    if (!taskId) return;
+    const entry = { id: `cal-${Date.now()}`, taskId, goldScore: Math.max(0, Math.min(100, Number(goldScore) || 0)), notes: notes || "", addedAt: new Date().toISOString() };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), calibrationSet: [...(prev[groupId]?.calibrationSet || []), entry] } }));
+  }
+  function deleteCalibrationEntry(groupId, id) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], calibrationSet: (prev[groupId]?.calibrationSet || []).filter(e => e.id !== id) } }));
+  }
+
+  function weightedQaScore(criteria, criteriaScores) {
+    if (!criteria?.length || !criteriaScores) return null;
+    const totalWeight = criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0) || 1;
+    const weighted = criteria.reduce((s, c) => s + ((criteriaScores[c.id] ?? 100) * (Number(c.weight) || 0)), 0);
+    return Math.round(weighted / totalWeight);
+  }
+
+  // Sampling: when a task first becomes Submitted, decide whether it needs full QA
+  // or can be auto-approved outside the review sample, based on the project's sampling rate.
+  const samplingProcessedRef = useRef(new Set());
+  useEffect(() => {
+    tasks.forEach(task => {
+      if (task.status !== "Submitted") return;
+      if (qaReviews[task.id]) return;
+      const groupId = getGroupIdForTask(task);
+      const config = getGroupConfig(groupId);
+      const rate = config.samplingRate ?? 100;
+      if (rate >= 100) return;
+      const key = task.id;
+      if (samplingProcessedRef.current.has(key)) return;
+      samplingProcessedRef.current.add(key);
+      if (Math.random() * 100 >= rate) {
+        const now = new Date().toISOString();
+        const review = { decision: "Approved", score: null, reason: "", comment: "Outside QA sample — auto-approved.", reviewer: "System", reviewedAt: now, annotationCount: (annotationsByTask[task.id] || []).length, criteriaScores: {}, errors: [], history: [{ decision: "Approved", score: null, reason: "", comment: "Auto-approved (sampling)", reviewer: "System", reviewedAt: now }] };
+        setQaReviews(prev => ({ ...prev, [task.id]: review }));
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "Approved" } : t));
+        syncUpdate("tasks", task.id, { status: "Approved" });
+        logAudit("QA Sampling Skip", task.id, task.projectId, `Outside the ${rate}% QA sample — auto-approved.`, "System", "Automation");
+        if (session) supabase.from("qa_reviews").upsert({ task_id: task.id, decision: review.decision, score: review.score, reviewer: review.reviewer, comment: review.comment, reason: review.reason, annotation_count: review.annotationCount, criteria_scores: {}, errors: [], history: review.history, reviewed_at: review.reviewedAt }).then(({ error }) => { if (error) console.warn("[Cloud] qa_reviews upsert failed:", error.message); });
+      }
+    });
+  }, [tasks, projectConfigs]);
+
+  // Quality analytics: trends, rankings, agreement, calibration drift — computed
+  // once per relevant change rather than re-derived inline in the page component.
+  const qualityAnalytics = useMemo(() => {
+    const reviewEntries = Object.entries(qaReviews).map(([taskId, r]) => ({ taskId, task: tasks.find(t => t.id === taskId), ...r }));
+    const scored = reviewEntries.filter(r => r.score !== null && r.score !== undefined);
+
+    // Quality trend: weekly average score over the last 8 weeks
+    const now = Date.now();
+    const weeks = Array.from({ length: 8 }, (_, i) => 7 - i).map(weeksAgo => {
+      const end = now - weeksAgo * 7 * 86400000;
+      const start = end - 7 * 86400000;
+      const inWeek = scored.filter(r => { const t = new Date(r.reviewedAt).getTime(); return t >= start && t < end; });
+      const avg = inWeek.length ? Math.round(inWeek.reduce((s, r) => s + r.score, 0) / inWeek.length) : null;
+      return { label: new Date(end).toLocaleDateString(undefined, { month: "short", day: "numeric" }), avg, count: inWeek.length };
+    });
+
+    // Annotator quality ranking
+    const annotators = teamMembers.filter(m => m.role === "Annotator");
+    const annotatorStats = annotators.map(m => {
+      const mine = reviewEntries.filter(r => r.task && r.task.assigneeId === m.id);
+      const mineScored = mine.filter(r => r.score !== null && r.score !== undefined);
+      const approved = mine.filter(r => r.decision === "Approved").length;
+      const errorCount = mine.reduce((s, r) => s + (r.errors?.length || 0), 0);
+      return {
+        member: m, reviewCount: mine.length,
+        avgScore: mineScored.length ? Math.round(mineScored.reduce((s, r) => s + r.score, 0) / mineScored.length) : null,
+        approvalRate: mine.length ? Math.round((approved / mine.length) * 100) : null,
+        errorCount
+      };
+    }).filter(a => a.reviewCount > 0).sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
+
+    // Reviewer performance
+    const reviewerNames = [...new Set(reviewEntries.map(r => r.reviewer).filter(Boolean))];
+    const reviewerStats = reviewerNames.map(name => {
+      const mine = reviewEntries.filter(r => r.reviewer === name);
+      const mineScored = mine.filter(r => r.score !== null && r.score !== undefined);
+      const rejected = mine.filter(r => r.decision === "Rejected").length;
+      const turnarounds = mine.map(r => {
+        const submitEvt = auditEvents.find(e => e.taskId === r.taskId && e.action === "Task Submitted");
+        if (!submitEvt) return null;
+        return (new Date(r.reviewedAt) - new Date(submitEvt.timestamp)) / 3600000;
+      }).filter(h => h !== null && h >= 0);
+      return {
+        name, reviewCount: mine.length,
+        avgScoreGiven: mineScored.length ? Math.round(mineScored.reduce((s, r) => s + r.score, 0) / mineScored.length) : null,
+        rejectionRate: mine.length ? Math.round((rejected / mine.length) * 100) : null,
+        avgTurnaroundHours: turnarounds.length ? (turnarounds.reduce((s, h) => s + h, 0) / turnarounds.length) : null
+      };
+    }).filter(r => r.name !== "System").sort((a, b) => b.reviewCount - a.reviewCount);
+
+    // Reviewer agreement: among tasks reviewed more than once, how often every
+    // round agreed with the final decision — a data-grounded proxy for inter-rater
+    // consistency given the app's single-reviewer-per-round model.
+    const multiReviewed = reviewEntries.filter(r => (r.history || []).length > 1);
+    let agreeCount = 0;
+    multiReviewed.forEach(r => { if ((r.history || []).every(h => h.decision === r.decision)) agreeCount++; });
+    const agreementRate = multiReviewed.length ? Math.round((agreeCount / multiReviewed.length) * 100) : null;
+
+    // Error category breakdown — resolved to names/severity here since each task's
+    // group can define its own category set, so a raw categoryId isn't safe to
+    // display without its owning config.
+    const errorTally = {};
+    reviewEntries.forEach(r => {
+      if (!r.errors?.length || !r.task) return;
+      const groupConfig = getGroupConfig(getGroupIdForTask(r.task));
+      r.errors.forEach(e => {
+        const cat = (groupConfig.errorCategories || []).find(c => c.id === e.categoryId);
+        const name = cat?.name || "Unknown";
+        const key = name;
+        if (!errorTally[key]) errorTally[key] = { name, severity: cat?.severity || e.severity || "Minor", count: 0 };
+        errorTally[key].count++;
+      });
+    });
+    const errorTallyList = Object.values(errorTally).sort((a, b) => b.count - a.count);
+
+    // Calibration drift per group
+    const calibrationRows = [];
+    projectGroups.forEach(g => {
+      const config = projectConfigs[g.id];
+      (config?.calibrationSet || []).forEach(entry => {
+        const review = qaReviews[entry.taskId];
+        calibrationRows.push({ group: g, entry, review, drift: review && review.score !== null && review.score !== undefined ? review.score - entry.goldScore : null });
+      });
+    });
+
+    return { reviewEntries, scored, weeks, annotatorStats, reviewerStats, agreementRate, multiReviewedCount: multiReviewed.length, errorTally: errorTallyList, calibrationRows };
+  }, [qaReviews, tasks, teamMembers, auditEvents, projectGroups, projectConfigs]);
+
+  // ---- Build 37: Advanced Analytics & Reporting ----
+  const reportingAnalytics = useMemo(() => {
+    const now = Date.now();
+    const DONE_STATUSES = ["Approved", "Completed"];
+
+    // Throughput: tasks completed (Approved/Completed) per day over the last 30 days,
+    // derived from the audit log so it reflects when work actually finished.
+    const completionEvents = auditEvents.filter(e => e.action === "QA Approved" || e.action === "Task Completed");
+    const throughputDays = Array.from({ length: 30 }, (_, i) => 29 - i).map(daysAgo => {
+      const dayStart = now - daysAgo * 86400000;
+      const dayEnd = dayStart + 86400000;
+      const count = completionEvents.filter(e => { const t = new Date(e.timestamp).getTime(); return t >= dayStart - (dayStart % 86400000) && t < dayEnd; }).length;
+      return { label: new Date(dayStart).toLocaleDateString(undefined, { month: "short", day: "numeric" }), count };
+    });
+    const last7 = throughputDays.slice(-7).reduce((s, d) => s + d.count, 0);
+    const prev7 = throughputDays.slice(-14, -7).reduce((s, d) => s + d.count, 0);
+    const throughputTrendPct = prev7 ? Math.round(((last7 - prev7) / prev7) * 100) : null;
+    const dailyVelocity = last7 / 7;
+
+    // Production
+    const totalImages = tasks.length;
+    const processedImages = tasks.filter(t => t.status !== "Pending").length;
+    const totalAnnotationsCount = Object.values(annotationsByTask).reduce((s, l) => s + (l?.length || 0), 0);
+    const avgAnnotationsPerTask = processedImages ? (totalAnnotationsCount / processedImages) : 0;
+
+    // Team analytics: utilization per member across all roles
+    const teamUtilization = teamMembers.filter(m => m.status === "Active").map(m => {
+      const assigned = tasks.filter(t => t.assigneeId === m.id && ["Pending", "In Progress"].includes(t.status)).length;
+      const capacity = Number(m.capacity) || 1;
+      return { member: m, assigned, capacity, utilization: Math.round((assigned / capacity) * 100) };
+    }).sort((a, b) => b.utilization - a.utilization);
+
+    // Accuracy & rework, from QA review history
+    const reviewed = Object.values(qaReviews);
+    const finalApproved = reviewed.filter(r => r.decision === "Approved").length;
+    const finalRejected = reviewed.filter(r => r.decision === "Rejected").length;
+    const accuracyRate = (finalApproved + finalRejected) ? Math.round((finalApproved / (finalApproved + finalRejected)) * 100) : null;
+    const firstPassApproved = reviewed.filter(r => r.decision === "Approved" && (r.history || []).length <= 1).length;
+    const firstPassYield = reviewed.length ? Math.round((firstPassApproved / reviewed.length) * 100) : null;
+    const reworkedCount = reviewed.filter(r => (r.history || []).length > 1).length;
+    const reworkRate = reviewed.length ? Math.round((reworkedCount / reviewed.length) * 100) : null;
+
+    // Forecasting: per active project, remaining work vs recent velocity
+    const forecasts = projects.filter(p => (Number(p.completedImages) || 0) < (Number(p.totalImages) || 0)).map(p => {
+      const projectTaskIds = new Set(tasks.filter(t => t.projectId === p.id).map(t => t.id));
+      const recentCompletions = completionEvents.filter(e => projectTaskIds.has(e.taskId) && (now - new Date(e.timestamp).getTime()) <= 7 * 86400000).length;
+      const velocity = recentCompletions / 7;
+      const remaining = Math.max(0, (Number(p.totalImages) || 0) - (Number(p.completedImages) || 0));
+      const daysLeft = velocity > 0 ? Math.ceil(remaining / velocity) : null;
+      const projectedDate = daysLeft !== null ? new Date(now + daysLeft * 86400000) : null;
+      return { project: p, remaining, velocity, daysLeft, projectedDate };
+    }).sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
+
+    return { throughputDays, last7, prev7, throughputTrendPct, dailyVelocity, totalImages, processedImages, totalAnnotationsCount, avgAnnotationsPerTask, teamUtilization, accuracyRate, firstPassYield, reworkRate, reworkedCount, reviewedCount: reviewed.length, forecasts };
+  }, [tasks, projects, teamMembers, qaReviews, auditEvents, annotationsByTask]);
+
+  function exportCustomReport(sections, projectFilter, rangeDays) {
+    const lines = [];
+    const push = (row) => lines.push(row.map(v => `"${String(v ?? "").replaceAll('"', '""')}"`).join(","));
+    push([`AnnotatePro Custom Report — generated ${new Date().toLocaleString()}`]);
+    push([`Project filter: ${projectFilter === "All" ? "All Projects" : projects.find(p => p.id === projectFilter)?.name || projectFilter}`, `Range: last ${rangeDays} days`]);
+    push([]);
+    if (sections.production) {
+      push(["PRODUCTION"]);
+      push(["Total Images", reportingAnalytics.totalImages]);
+      push(["Processed Images", reportingAnalytics.processedImages]);
+      push(["Total Annotations", reportingAnalytics.totalAnnotationsCount]);
+      push(["Avg Annotations / Task", reportingAnalytics.avgAnnotationsPerTask.toFixed(2)]);
+      push(["Throughput (last 7 days)", reportingAnalytics.last7]);
+      push([]);
+    }
+    if (sections.team) {
+      push(["TEAM UTILIZATION"]);
+      push(["Name", "Role", "Assigned", "Capacity", "Utilization %"]);
+      reportingAnalytics.teamUtilization.forEach(u => push([u.member.name, u.member.role, u.assigned, u.capacity, u.utilization]));
+      push([]);
+    }
+    if (sections.qa) {
+      push(["QA & QUALITY"]);
+      push(["Accuracy Rate %", reportingAnalytics.accuracyRate ?? "—"]);
+      push(["First-Pass Yield %", reportingAnalytics.firstPassYield ?? "—"]);
+      push(["Rework Rate %", reportingAnalytics.reworkRate ?? "—"]);
+      push(["Reviewer Agreement %", qualityAnalytics.agreementRate ?? "—"]);
+      push([]);
+      push(["Annotator", "Reviews", "Avg Score", "Approval Rate %"]);
+      qualityAnalytics.annotatorStats.forEach(a => push([a.member.name, a.reviewCount, a.avgScore ?? "—", a.approvalRate ?? "—"]));
+      push([]);
+      push(["Reviewer", "Reviews", "Avg Score Given", "Rejection Rate %", "Avg Turnaround (h)"]);
+      qualityAnalytics.reviewerStats.forEach(r => push([r.name, r.reviewCount, r.avgScoreGiven ?? "—", r.rejectionRate ?? "—", r.avgTurnaroundHours !== null ? r.avgTurnaroundHours.toFixed(1) : "—"]));
+      push([]);
+    }
+    if (sections.sla) {
+      push(["SLA & DEADLINES"]);
+      push(["Overdue Tasks", deadlineOverview.overdue.length]);
+      push(["Due Today", deadlineOverview.dueToday.length]);
+      push(["Due This Week", deadlineOverview.dueWeek.length]);
+      push(["SLA Compliance %", deadlineOverview.slaCompliance ?? "—"]);
+      push([]);
+    }
+    if (sections.forecast) {
+      push(["FORECASTING"]);
+      push(["Project", "Remaining Images", "Velocity /day", "Est. Days Left", "Projected Completion"]);
+      reportingAnalytics.forecasts.forEach(f => push([f.project.name, f.remaining, f.velocity.toFixed(1), f.daysLeft ?? "—", f.projectedDate ? f.projectedDate.toLocaleDateString() : "—"]));
+      push([]);
+    }
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `annotatepro-report-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    logAudit("Custom Report Exported", null, projectFilter === "All" ? null : projectFilter, `Sections: ${Object.entries(sections).filter(([,v])=>v).map(([k])=>k).join(", ")}`);
+  }
+
+
+
 
   if (authLoading) {
     return <div className="auth-loading-screen"><div className="brand-mark"><Grid3X3 size={22}/></div><RefreshCw size={20} className="mig-spin"/><span>Loading AnnotatePro...</span></div>;
@@ -2883,6 +3189,9 @@ function App() {
           onSaveSchemaVersion={saveLabelSchemaVersion} onRestoreSchemaVersion={restoreLabelSchemaVersion}
           onExportSchema={exportLabelSchema} onImportSchema={importLabelSchema} labelUsageStats={labelUsageStats}
           teamMembers={teamMembers} onCreateRule={createAutomationRule} onUpdateRule={updateAutomationRule} onDeleteRule={deleteAutomationRule} onAddSuggestedRule={addSuggestedRule}
+          onCreateCriterion={createQaCriterion} onUpdateCriterion={updateQaCriterion} onDeleteCriterion={deleteQaCriterion}
+          onCreateErrorCategory={createErrorCategory} onUpdateErrorCategory={updateErrorCategory} onDeleteErrorCategory={deleteErrorCategory}
+          onAddCalibration={addCalibrationEntry} onDeleteCalibration={deleteCalibrationEntry} qaReviews={qaReviews}
         />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
@@ -2921,6 +3230,11 @@ function App() {
             onAccept={() => reviewCurrentTask("Approved")} onReject={() => reviewCurrentTask("Rejected")}
             currentReview={currentTask ? qaReviews[currentTask.id] : null} canReview={canReview}
             onBackToTasks={() => navigate("Projects")}
+            qaCriteria={(projectConfigs[getGroupIdForTask(currentTask||{})]||{}).qaCriteria || []}
+            errorCategories={(projectConfigs[getGroupIdForTask(currentTask||{})]||{}).errorCategories || []}
+            qaCriteriaScores={qaCriteriaScores} setQaCriteriaScores={setQaCriteriaScores}
+            qaErrors={qaErrors} setQaErrors={setQaErrors}
+            qaScorecardOpen={qaScorecardOpen} setQaScorecardOpen={setQaScorecardOpen}
             updateAnnotation={updateAnnotation} startAnnotationEdit={startAnnotationEdit} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
             onImport={() => imageInputRef.current?.click()}
             imageInputRef={imageInputRef} importImages={importImages}
@@ -2940,9 +3254,11 @@ function App() {
           onInvite={inviteTeamMember} onSendReset={sendPasswordReset} accountActionStatus={accountActionStatus} isAdmin={isAdmin}
         />}
         {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} canReview={canReview} /> }
-        {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
+        {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} auditEvents={auditEvents} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} onExport={exportCustomReport} />}
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
         {activePage === "Deadlines" && <DeadlinesPage overview={deadlineOverview} projects={projects} teamMembers={teamMembers} onSetTaskDueDate={setTaskDueDate} onEscalate={escalateTaskNow} onOpenTask={(task) => openWorkstation(task.projectId, task.status === "Submitted" || task.status === "QA Review" ? "Review" : "Annotation", task.id)} />}
+        {activePage === "QA & Quality" && <QaQualityPage analytics={qualityAnalytics} projectGroups={projectGroups} />}
+        {activePage === "Reports" && <ReportsPage reporting={reportingAnalytics} quality={qualityAnalytics} deadlines={deadlineOverview} projects={projects} onExport={exportCustomReport} />}
         {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
         {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
         {activePage === "Task Settings" && taskSettingsTask && <TaskSettingsPage
@@ -3001,6 +3317,43 @@ function Dashboard({ projects, stats, onCreate, onNavigate, onOpenWorkstation, u
   );
 }
 
+function QaScorecardPanel({ criteria, categories, scores, setScores, errors, setErrors, open, setOpen }) {
+  const totalWeight = (criteria || []).reduce((s, c) => s + (Number(c.weight) || 0), 0) || 1;
+  const overallScore = criteria?.length ? Math.round((criteria || []).reduce((s, c) => s + ((scores[c.id] ?? 100) * (Number(c.weight) || 0)), 0) / totalWeight) : null;
+  return <div className="qa-scorecard-panel">
+    <button type="button" className="qa-scorecard-toggle" onClick={() => setOpen(v => !v)}>
+      <ShieldCheck size={14}/> QA Scorecard
+      {overallScore !== null && <b className="qa-live-score">{overallScore}</b>}
+      <ChevronDown size={14} style={{ marginLeft: "auto", transform: open ? "rotate(180deg)" : "none" }}/>
+    </button>
+    {open && <div className="qa-scorecard-body">
+      {criteria?.length ? criteria.map(c => <div className="qa-criterion-row" key={c.id}>
+        <span>{c.name}<small>{c.weight}%</small></span>
+        <input type="range" min="0" max="100" value={scores[c.id] ?? 100} onChange={e => setScores(prev => ({ ...prev, [c.id]: Number(e.target.value) }))}/>
+        <b>{scores[c.id] ?? 100}</b>
+      </div>) : <p className="qa-scorecard-empty">No scoring criteria configured — add some in Project Configuration → QA Scorecard.</p>}
+      <div className="qa-error-log">
+        <span className="section-label">ERRORS LOGGED ({errors.length})</span>
+        {errors.map(err => <div className="qa-error-chip" key={err.id}>
+          <b>{categories.find(c => c.id === err.categoryId)?.name || "Error"}</b>
+          <span className={`sev-badge sev-${(err.severity || "Minor").toLowerCase()}`}>{err.severity}</span>
+          <button type="button" onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}><X size={11}/></button>
+        </div>)}
+        {categories?.length ? <QaErrorAdder categories={categories} onAdd={(categoryId, severity) => setErrors(prev => [...prev, { id: `logged-${Date.now()}`, categoryId, severity }])}/> : null}
+      </div>
+    </div>}
+  </div>;
+}
+
+function QaErrorAdder({ categories, onAdd }) {
+  const [categoryId, setCategoryId] = useState(categories[0]?.id || "");
+  const cat = categories.find(c => c.id === categoryId);
+  return <div className="qa-error-adder">
+    <select value={categoryId} onChange={e => setCategoryId(e.target.value)}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+    <button type="button" className="ghost-btn" onClick={() => categoryId && onAdd(categoryId, cat?.severity || "Minor")}><Plus size={12}/> Log</button>
+  </div>;
+}
+
 function Workspace({
   projects, workspaceProject, setWorkspaceProject, tasks, currentTask, selectedTaskIndex, setSelectedTaskIndex,
   filteredTasks, taskFilter, setTaskFilter, tool, setTool, labels, selectedLabel, setSelectedLabel,
@@ -3009,7 +3362,8 @@ function Workspace({
   onDelete, onDuplicate, onUndo, onRedo, onReset, onPrevious, onNext, onSave, onSubmit, message,
   updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport,
   insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee, coEditors,
-  mode = "Annotation", setMode, onSkip, onAccept, onReject, currentReview, canReview = true, onBackToTasks
+  mode = "Annotation", setMode, onSkip, onAccept, onReject, currentReview, canReview = true, onBackToTasks,
+  qaCriteria, errorCategories, qaCriteriaScores, setQaCriteriaScores, qaErrors, setQaErrors, qaScorecardOpen, setQaScorecardOpen
 }) {
   const isReview = mode === "Review";
   const [taskSearch, setTaskSearch] = useState("");
@@ -3131,6 +3485,7 @@ function Workspace({
             </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>{currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div></div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
             {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
           </div>
+          {isReview && <QaScorecardPanel criteria={qaCriteria} categories={errorCategories} scores={qaCriteriaScores} setScores={setQaCriteriaScores} errors={qaErrors} setErrors={setQaErrors} open={qaScorecardOpen} setOpen={setQaScorecardOpen}/>}
           <div className="right-footer build8-right-footer"><div><span>{isReview ? "Review decision" : "Task status"}</span><StatusBadge status={isReview ? (currentReview?.decision || "Pending Review") : (currentTask?.status || "Pending")}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
         </aside>
       </div>
@@ -3349,7 +3704,7 @@ function TargetTable({role, people, tasks, annotations, qaReviews, targets, setT
   </tbody></table></div>;
 }
 
-function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,onBack,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel,labelSchemaError,setLabelSchemaError,onCreateLabelGroup,onRenameLabelGroup,onDeleteLabelGroup,onSaveSchemaVersion,onRestoreSchemaVersion,onExportSchema,onImportSchema,labelUsageStats,teamMembers,onCreateRule,onUpdateRule,onDeleteRule,onAddSuggestedRule}) {
+function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,onBack,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel,labelSchemaError,setLabelSchemaError,onCreateLabelGroup,onRenameLabelGroup,onDeleteLabelGroup,onSaveSchemaVersion,onRestoreSchemaVersion,onExportSchema,onImportSchema,labelUsageStats,teamMembers,onCreateRule,onUpdateRule,onDeleteRule,onAddSuggestedRule,onCreateCriterion,onUpdateCriterion,onDeleteCriterion,onCreateErrorCategory,onUpdateErrorCategory,onDeleteErrorCategory,onAddCalibration,onDeleteCalibration,qaReviews}) {
   const project = groups.find(g => g.id === configProject) || groups[0];
   const reviewers = ["", "Priya Sharma", "Kavya Nair"];
   const workspaceOptions = ["", "Production", "QA Sandbox", "Client Review"];
@@ -3364,7 +3719,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
   return <div className="page project-config-page">
     <div className="page-head"><div><button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {project?.name || "Projects"}</button><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div></div>
     <div className="config-overview"><div className="config-project-icon" style={{background:project?.color?`${project.color}22`:undefined,color:project?.color||undefined}}><GroupIcon size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{groupTaskIds.length} task{groupTaskIds.length===1?"":"s"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
-    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Automation"?"active":""} onClick={()=>setTab("Automation")}><Zap size={16}/> Automation</button><button className={tab==="SLA"?"active":""} onClick={()=>setTab("SLA")}><Calendar size={16}/> SLA & Deadlines</button></div>
+    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Automation"?"active":""} onClick={()=>setTab("Automation")}><Zap size={16}/> Automation</button><button className={tab==="SLA"?"active":""} onClick={()=>setTab("SLA")}><Calendar size={16}/> SLA & Deadlines</button><button className={tab==="QA Scorecard"?"active":""} onClick={()=>setTab("QA Scorecard")}><ShieldCheck size={16}/> QA Scorecard</button></div>
 
     {tab === "General" && <section className="panel config-panel general-settings-panel">
       <div className="config-panel-head"><div><h2>General Settings</h2><p>Basic identity and task-ordering rules for this project.</p></div><SlidersHorizontal size={20}/></div>
@@ -3415,6 +3770,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
       </div>
       <div className="config-empty small"><Calendar size={22}/><p>Individual task due dates can be set from the Deadlines dashboard. Project-level due dates are set when editing a project.</p></div>
     </section>}
+    {tab === "QA Scorecard" && <QaScorecardConfigTab groupId={configProject} config={config} qaReviews={qaReviews} onUpdateConfig={onUpdateConfig} onCreateCriterion={onCreateCriterion} onUpdateCriterion={onUpdateCriterion} onDeleteCriterion={onDeleteCriterion} onCreateErrorCategory={onCreateErrorCategory} onUpdateErrorCategory={onUpdateErrorCategory} onDeleteErrorCategory={onDeleteErrorCategory} onAddCalibration={onAddCalibration} onDeleteCalibration={onDeleteCalibration} groupTasks={flatProjects.filter(p=>p.groupId===configProject).map(p=>p.id)} allTasks={tasks}/>}
     {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
     {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>{setLabelEditorOpen(false); setLabelSchemaError("");}} onSave={onSaveLabel} error={labelSchemaError} allLabels={config.labels} editingLabelId={editingLabelId} labelGroups={config.labelGroups||[]}/>} 
   </div>;
@@ -3597,6 +3953,69 @@ function AutomationRuleRow({ rule, teamMembers, onUpdate, onDelete }) {
     {rule.action === "notify" && <input className="rule-note-input" value={rule.note || ""} onChange={e => onUpdate({ note: e.target.value })} placeholder="Notification message"/>}
     <button className="danger-icon" onClick={onDelete} title="Delete rule"><Trash2 size={15}/></button>
   </div>;
+}
+
+const SEVERITY_OPTIONS = ["Minor", "Major", "Critical"];
+
+function QaScorecardConfigTab({ groupId, config, qaReviews, onUpdateConfig, onCreateCriterion, onUpdateCriterion, onDeleteCriterion, onCreateErrorCategory, onUpdateErrorCategory, onDeleteErrorCategory, onAddCalibration, onDeleteCalibration, groupTasks, allTasks }) {
+  const criteria = config.qaCriteria || [];
+  const categories = config.errorCategories || [];
+  const calibration = config.calibrationSet || [];
+  const totalWeight = criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0);
+  const groupTaskSet = new Set(groupTasks);
+  const reviewableTasks = allTasks.filter(t => groupTaskSet.has(t.projectId) && qaReviews[t.id]);
+  const [calTaskId, setCalTaskId] = useState("");
+  const [calGold, setCalGold] = useState(90);
+  const [calNotes, setCalNotes] = useState("");
+
+  return <section className="panel config-panel qa-scorecard-config">
+    <div className="config-panel-head"><div><h2>QA Scorecard</h2><p>Define weighted scoring criteria, error taxonomy, sampling rate and calibration references for this project's reviewers.</p></div><ShieldCheck size={20}/></div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>Scoring Criteria <span className={`weight-total ${totalWeight===100?"ok":"warn"}`}>{totalWeight}% total</span></h3><button className="ghost-btn" onClick={() => onCreateCriterion(groupId)}><Plus size={13}/> Add Criterion</button></div>
+      {criteria.length ? <div className="qa-criteria-config-list">{criteria.map(c => <div className="qa-criterion-config-row" key={c.id}>
+        <input value={c.name} onChange={e => onUpdateCriterion(groupId, c.id, { name: e.target.value })}/>
+        <div className="weight-input"><input type="number" min="0" max="100" value={c.weight} onChange={e => onUpdateCriterion(groupId, c.id, { weight: Math.max(0, Number(e.target.value) || 0) })}/><span>%</span></div>
+        <button className="danger-icon" onClick={() => onDeleteCriterion(groupId, c.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><ShieldCheck size={22}/><p>No criteria yet — reviewers will use a single overall score instead.</p></div>}
+      {totalWeight !== 100 && !!criteria.length && <p className="field-hint weight-warning">Weights should add up to 100% — they're currently normalized automatically, but exact weights are clearer.</p>}
+    </div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>Error Categories</h3><button className="ghost-btn" onClick={() => onCreateErrorCategory(groupId)}><Plus size={13}/> Add Category</button></div>
+      {categories.length ? <div className="qa-criteria-config-list">{categories.map(c => <div className="qa-error-config-row" key={c.id}>
+        <input value={c.name} onChange={e => onUpdateErrorCategory(groupId, c.id, { name: e.target.value })}/>
+        <select value={c.severity} onChange={e => onUpdateErrorCategory(groupId, c.id, { severity: e.target.value })}>{SEVERITY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        <button className="danger-icon" onClick={() => onDeleteErrorCategory(groupId, c.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><AlertCircle size={22}/><p>No error categories defined yet.</p></div>}
+    </div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>QA Sampling</h3></div>
+      <label className="sampling-slider-label"><span>Review {config.samplingRate ?? 100}% of submitted tasks</span><input type="range" min="1" max="100" value={config.samplingRate ?? 100} onChange={e => onUpdateConfig({ samplingRate: Number(e.target.value) })}/></label>
+      <p className="field-hint">Tasks outside the sample are auto-approved on submission and logged as a sampling skip. Set to 100% to review everything.</p>
+    </div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>Calibration Set</h3></div>
+      <form className="calibration-add-form" onSubmit={e => { e.preventDefault(); if (!calTaskId.trim()) return; onAddCalibration(groupId, calTaskId.trim(), calGold, calNotes); setCalTaskId(""); setCalNotes(""); }}>
+        <input value={calTaskId} onChange={e => setCalTaskId(e.target.value)} placeholder="Task ID"/>
+        <input type="number" min="0" max="100" value={calGold} onChange={e => setCalGold(e.target.value)} placeholder="Gold score"/>
+        <input value={calNotes} onChange={e => setCalNotes(e.target.value)} placeholder="Notes (optional)" className="calibration-notes-input"/>
+        <button type="submit" className="ghost-btn"><Plus size={13}/> Add</button>
+      </form>
+      {calibration.length ? <div className="calibration-list">{calibration.map(entry => {
+        const review = qaReviews[entry.taskId];
+        const drift = review && review.score !== null && review.score !== undefined ? review.score - entry.goldScore : null;
+        return <div className="calibration-row" key={entry.id}>
+          <div><b>{entry.taskId}</b><span>Gold: {entry.goldScore}{entry.notes ? ` · ${entry.notes}` : ""}</span></div>
+          {drift !== null ? <span className={`drift-badge ${Math.abs(drift) <= 5 ? "good" : Math.abs(drift) <= 15 ? "warn" : "bad"}`}>{review.reviewer}: {review.score} ({drift > 0 ? "+" : ""}{drift})</span> : <span className="drift-badge pending">Not reviewed yet</span>}
+          <button className="danger-icon" onClick={() => onDeleteCalibration(groupId, entry.id)}><Trash2 size={13}/></button>
+        </div>;
+      })}</div> : <div className="config-empty small"><Target size={22}/><p>Add a reference task with an expert "gold" score to track reviewer calibration drift.</p></div>}
+      {!!reviewableTasks.length && <p className="field-hint">{reviewableTasks.length} reviewed task{reviewableTasks.length===1?"":"s"} in this project can be used as calibration references.</p>}
+    </div>
+  </section>;
 }
 
 function LabelEditorModal({editing,form,setForm,onClose,onSave,error,allLabels,editingLabelId,labelGroups}) {
@@ -4185,32 +4604,55 @@ function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, sel
     </div>
   );
 }
-function AnalyticsPage({ projects, tasks, annotations, qaReviews, range, setRange, project, setProject }) {
+function AnalyticsPage({ projects, tasks, annotations, qaReviews, auditEvents, range, setRange, project, setProject, onExport }) {
   const visibleTasks = useMemo(() => {
     if (project === "All Projects") return tasks;
     const projectName = projects.find(p => p.id === project)?.name;
     return tasks.filter(t => !projectName || t.projectName === projectName || t.projectId === project);
   }, [tasks, projects, project]);
 
-  const totalAnnotations = Object.values(annotations || {}).reduce((sum, list) => sum + (list?.length || 0), 0);
-  const reviewed = Object.values(qaReviews || {}).filter(Boolean);
+  const visibleTaskIds = useMemo(() => new Set(visibleTasks.map(t => t.id)), [visibleTasks]);
+  const totalAnnotations = visibleTasks.reduce((sum, t) => sum + (annotations[t.id]?.length || 0), 0);
+  const reviewed = visibleTasks.map(t => qaReviews[t.id]).filter(Boolean);
   const approved = reviewed.filter(r => r.decision === "Approved").length;
   const rejected = reviewed.filter(r => r.decision === "Rejected").length;
   const changes = reviewed.filter(r => r.decision === "Changes Requested").length;
-  const averageQA = reviewed.length ? Math.round(reviewed.reduce((sum, r) => sum + Number(r.score || 0), 0) / reviewed.length) : 0;
+  const scoredReviews = reviewed.filter(r => r.score !== null && r.score !== undefined);
+  const averageQA = scoredReviews.length ? Math.round(scoredReviews.reduce((sum, r) => sum + Number(r.score || 0), 0) / scoredReviews.length) : null;
   const completedTasks = visibleTasks.filter(t => ["Completed", "Submitted", "QA Review", "Approved", "Rejected"].includes(t.status)).length;
   const completionRate = visibleTasks.length ? Math.round((completedTasks / visibleTasks.length) * 100) : 0;
   const annotatedTasks = visibleTasks.filter(t => (annotations[t.id] || []).length > 0).length;
   const annotationCoverage = visibleTasks.length ? Math.round((annotatedTasks / visibleTasks.length) * 100) : 0;
-  const productivity = Math.min(100, Math.round((totalAnnotations / Math.max(1, visibleTasks.length * 4)) * 100));
 
-  const trend = range === "24 hours" ? [28, 34, 31, 45, 41, 56, 61, 68] : range === "30 days" ? [42, 48, 51, 57, 54, 65, 72, 81] : [35, 42, 39, 51, 48, 61, 66, 74];
-  const maxTrend = Math.max(...trend);
-  const teamRows = projects.slice(0, 5).map((p, index) => {
-    const projectTasks = tasks.filter(t => t.projectId === p.id || t.projectName === p.name);
-    const count = projectTasks.length || Math.max(1, Math.round(Number(p.completedImages || 0) / 20));
-    const quality = reviewed.length ? Math.max(0, Math.min(100, averageQA + (index % 3) - 1)) : 96 - index;
-    return { name: p.team || "Annotation Team", project: p.name, tasks: count, quality, progress: progressOf(p) };
+  // Real activity trend, bucketed from the audit log rather than simulated —
+  // scoped to whichever project is selected, across the chosen time window.
+  const relevantEvents = useMemo(() => {
+    const actionable = ["Annotation Saved", "Task Submitted", "QA Approved", "QA Rejected"];
+    return (auditEvents || []).filter(e => actionable.includes(e.action) && (project === "All Projects" || visibleTaskIds.has(e.taskId)));
+  }, [auditEvents, project, visibleTaskIds]);
+
+  const trend = useMemo(() => {
+    const now = Date.now();
+    const bucketMs = range === "24 hours" ? 3 * 3600000 : range === "30 days" ? 7 * 86400000 : 86400000;
+    return Array.from({ length: 8 }, (_, i) => 7 - i).map(stepsAgo => {
+      const end = now - stepsAgo * bucketMs;
+      const start = end - bucketMs;
+      return relevantEvents.filter(e => { const t = new Date(e.timestamp).getTime(); return t >= start && t < end; }).length;
+    });
+  }, [relevantEvents, range]);
+  const maxTrend = Math.max(1, ...trend);
+  const trendTotal = trend.reduce((a, b) => a + b, 0);
+  const trendFirstHalf = trend.slice(0, 4).reduce((a, b) => a + b, 0);
+  const trendSecondHalf = trend.slice(4).reduce((a, b) => a + b, 0);
+  const trendChangePct = trendFirstHalf ? Math.round(((trendSecondHalf - trendFirstHalf) / trendFirstHalf) * 100) : null;
+
+  const projectQuality = (p) => {
+    const scored = tasks.filter(t => t.projectId === p.id).map(t => qaReviews[t.id]).filter(r => r && r.score !== null && r.score !== undefined);
+    return scored.length ? Math.round(scored.reduce((s, r) => s + r.score, 0) / scored.length) : null;
+  };
+  const teamRows = projects.slice(0, 5).map((p) => {
+    const projectTasks = tasks.filter(t => t.projectId === p.id);
+    return { name: p.team || "Annotation Team", project: p.name, tasks: projectTasks.length, quality: projectQuality(p), progress: progressOf(p) };
   });
 
   return <div className="page analytics-page">
@@ -4220,30 +4662,30 @@ function AnalyticsPage({ projects, tasks, annotations, qaReviews, range, setRang
     </div>
 
     <div className="stats-grid analytics-stats">
-      <StatCard icon={TrendingUp} label="Productivity" value={`${productivity}%`} meta={`${totalAnnotations} annotations recorded`} />
+      <StatCard icon={TrendingUp} label="Recent Activity" value={trendTotal} meta={trendChangePct===null?`${totalAnnotations} annotations recorded`:`${trendChangePct>=0?"+":""}${trendChangePct}% vs earlier in period`} />
       <StatCard icon={CheckCircle2} label="Task Completion" value={`${completionRate}%`} meta={`${completedTasks} completed workflow tasks`} />
-      <StatCard icon={ShieldCheck} label="QA Quality" value={reviewed.length ? `${averageQA}%` : "—"} meta={`${approved} approved · ${rejected} rejected`} />
+      <StatCard icon={ShieldCheck} label="QA Quality" value={averageQA===null ? "—" : `${averageQA}%`} meta={`${approved} approved · ${rejected} rejected`} />
       <StatCard icon={Target} label="Annotation Coverage" value={`${annotationCoverage}%`} meta={`${annotatedTasks} tasks annotated`} />
     </div>
 
     <div className="analytics-grid-top">
       <section className="panel analytics-chart-panel">
-        <div className="panel-head"><div><h2>Annotation Productivity</h2><p>Relative output trend for the selected period</p></div><span className="chart-value">{totalAnnotations} <small>objects</small></span></div>
-        <div className="trend-chart"><div className="chart-y"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div className="chart-bars">{trend.map((v,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${Math.max(8,(v/maxTrend)*100)}%`}}></div><span>{range === "24 hours" ? `${i+1}h` : range === "30 days" ? `W${i+1}` : `D${i+1}`}</span></div>)}</div></div>
+        <div className="panel-head"><div><h2>Annotation Activity</h2><p>Real annotation, submission and review events for the selected period</p></div><span className="chart-value">{totalAnnotations} <small>objects</small></span></div>
+        <div className="trend-chart"><div className="chart-y"><span>{maxTrend}</span><span>{Math.round(maxTrend*0.75)}</span><span>{Math.round(maxTrend*0.5)}</span><span>{Math.round(maxTrend*0.25)}</span><span>0</span></div><div className="chart-bars">{trend.map((v,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${v?Math.max(8,(v/maxTrend)*100):3}%`}}></div><span>{range === "24 hours" ? `${(i+1)*3}h` : range === "30 days" ? `W${i+1}` : `D${i+1}`}</span></div>)}</div></div>
       </section>
       <section className="panel quality-panel">
         <div className="panel-head"><div><h2>QA Distribution</h2><p>Current review decisions</p></div><ClipboardCheck size={17}/></div>
-        <div className="quality-ring"><div><strong>{reviewed.length ? `${averageQA}%` : "—"}</strong><span>avg score</span></div></div>
+        <div className="quality-ring"><div><strong>{averageQA===null ? "—" : `${averageQA}%`}</strong><span>avg score</span></div></div>
         <div className="quality-legend"><div><i className="approved-dot"></i><span>Approved</span><b>{approved}</b></div><div><i className="changes-dot"></i><span>Changes requested</span><b>{changes}</b></div><div><i className="rejected-dot"></i><span>Rejected</span><b>{rejected}</b></div></div>
       </section>
     </div>
 
     <div className="analytics-grid-bottom">
-      <section className="panel analytics-table-panel"><div className="panel-head"><div><h2>Project Performance</h2><p>Progress and delivery health across projects</p></div><button className="text-btn">Export report →</button></div><div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>TEAM</th><th>PROGRESS</th><th>QUALITY</th><th>HEALTH</th></tr></thead><tbody>{projects.map(p=><tr key={p.id}><td><b>{p.name}</b><small>{Number(p.totalImages||0).toLocaleString()} images</small></td><td>{p.team}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><strong className="quality-number">{reviewed.length ? `${Math.max(90, Math.min(100, averageQA + (p.id.charCodeAt(1) % 5) - 2))}%` : "—"}</strong></td><td><span className={`health-pill ${progressOf(p) >= 70 ? "healthy" : progressOf(p) >= 40 ? "watch" : "risk"}`}><i></i>{progressOf(p) >= 70 ? "On track" : progressOf(p) >= 40 ? "Watch" : "At risk"}</span></td></tr>)}</tbody></table></div></section>
-      <section className="panel team-performance"><div className="panel-head"><div><h2>Team Performance</h2><p>Workload and quality snapshot</p></div><Users size={17}/></div><div className="team-list">{teamRows.length ? teamRows.map(row=><div className="team-row" key={row.project}><div className="team-avatar">{row.name.charAt(0)}</div><div className="team-main"><b>{row.name}</b><span>{row.project}</span><div className="team-meter"><i style={{width:`${Math.min(100, row.progress)}%`}}></i></div></div><div className="team-metrics"><strong>{row.quality}%</strong><span>{row.tasks} tasks</span></div></div>) : <div className="analytics-empty">No team data available.</div>}</div></section>
+      <section className="panel analytics-table-panel"><div className="panel-head"><div><h2>Project Performance</h2><p>Progress and delivery health across projects</p></div><button className="text-btn" onClick={()=>onExport({production:true,team:true,qa:true,sla:true,forecast:true}, project==="All Projects"?"All":project, range==="24 hours"?1:range==="30 days"?30:7)}>Export report →</button></div><div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>TEAM</th><th>PROGRESS</th><th>QUALITY</th><th>HEALTH</th></tr></thead><tbody>{projects.map(p=>{const q=projectQuality(p); return <tr key={p.id}><td><b>{p.name}</b><small>{Number(p.totalImages||0).toLocaleString()} images</small></td><td>{p.team}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><strong className="quality-number">{q===null?"—":`${q}%`}</strong></td><td><span className={`health-pill ${progressOf(p) >= 70 ? "healthy" : progressOf(p) >= 40 ? "watch" : "risk"}`}><i></i>{progressOf(p) >= 70 ? "On track" : progressOf(p) >= 40 ? "Watch" : "At risk"}</span></td></tr>;})}</tbody></table></div></section>
+      <section className="panel team-performance"><div className="panel-head"><div><h2>Team Performance</h2><p>Workload and quality snapshot</p></div><Users size={17}/></div><div className="team-list">{teamRows.length ? teamRows.map(row=><div className="team-row" key={row.project}><div className="team-avatar">{row.name.charAt(0)}</div><div className="team-main"><b>{row.name}</b><span>{row.project}</span><div className="team-meter"><i style={{width:`${Math.min(100, row.progress)}%`}}></i></div></div><div className="team-metrics"><strong>{row.quality===null?"—":`${row.quality}%`}</strong><span>{row.tasks} tasks</span></div></div>) : <div className="analytics-empty">No team data available.</div>}</div></section>
     </div>
 
-    <div className="analytics-insight"><div className="insight-icon"><Zap size={17}/></div><div><b>Performance insight</b><p>{reviewed.length ? `The workspace is averaging ${averageQA}% QA quality. ${changes} task${changes === 1 ? " has" : "s have"} requested changes and should be prioritized for correction.` : "Complete a few QA reviews to unlock quality trends, rejection analysis and actionable performance insights."}</p></div><span>LIVE</span></div>
+    <div className="analytics-insight"><div className="insight-icon"><Zap size={17}/></div><div><b>Performance insight</b><p>{scoredReviews.length ? `The workspace is averaging ${averageQA}% QA quality. ${changes} task${changes === 1 ? " has" : "s have"} requested changes and should be prioritized for correction.` : "Complete a few QA reviews to unlock quality trends, rejection analysis and actionable performance insights."}</p></div><span>LIVE</span></div>
   </div>;
 }
 
@@ -4428,6 +4870,117 @@ function DeadlinesPage({ overview, projects, teamMembers, onSetTaskDueDate, onEs
   </div>;
 }
 
+
+function QaQualityPage({ analytics, projectGroups }) {
+  const { scored, weeks, annotatorStats, reviewerStats, agreementRate, multiReviewedCount, errorTally, calibrationRows } = analytics;
+  const avgScore = scored.length ? Math.round(scored.reduce((s, r) => s + r.score, 0) / scored.length) : null;
+  const totalErrors = errorTally.reduce((s, e) => s + e.count, 0);
+  const groupName = id => projectGroups.find(g => g.id === id)?.name || "";
+  return <div className="page qa-quality-page">
+    <div className="page-head"><div><span className="eyebrow">ADVANCED QA & QUALITY SCORING</span><h1>QA & Quality</h1><p>Scorecards, error trends, calibration and quality rankings across every reviewed task.</p></div></div>
+
+    <div className="stats-grid">
+      <StatCard icon={ShieldCheck} label="Reviews Scored" value={scored.length} meta="Tasks with a recorded QA score"/>
+      <StatCard icon={TrendingUp} label="Average Score" value={avgScore===null?"—":`${avgScore}%`} meta="Across all scored reviews"/>
+      <StatCard icon={Users} label="Reviewer Agreement" value={agreementRate===null?"—":`${agreementRate}%`} meta={multiReviewedCount ? `${multiReviewedCount} task${multiReviewedCount===1?"":"s"} reviewed more than once` : "No repeat reviews yet"}/>
+      <StatCard icon={AlertCircle} label="Errors Logged" value={totalErrors} meta={`${errorTally.length} categor${errorTally.length===1?"y":"ies"} in use`}/>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Quality Trend</h2><p>Average QA score by week (last 8 weeks)</p></div></div>
+        <div className="trend-chart"><div className="chart-y"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div className="chart-bars">{weeks.map((w,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${w.avg?Math.max(6,w.avg):3}%`}} title={w.avg!==null?`${w.avg}% (${w.count} review${w.count===1?"":"s"})`:"No reviews"}></div><span>{w.label}</span></div>)}</div></div>
+      </section>
+      <section className="panel deadlines-upcoming-panel">
+        <div className="panel-head"><div><h2>Error Categories</h2><p>Most frequently logged QA errors</p></div></div>
+        {errorTally.length ? <div className="error-tally-list">{errorTally.slice(0,8).map(e => <div className="error-tally-row" key={e.name}><span className={`sev-dot sev-${(e.severity||"Minor").toLowerCase()}`}/><b>{e.name}</b><span className="error-tally-count">{e.count}</span></div>)}</div> : <div className="config-empty small"><AlertCircle size={22}/><p>No errors logged yet — they're tagged from the QA Scorecard during review.</p></div>}
+      </section>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel">
+        <div className="panel-head"><div><h2>Annotator Quality Ranking</h2><p>Average QA score across each annotator's reviewed tasks</p></div></div>
+        {annotatorStats.length ? <div className="ranking-list">{annotatorStats.map((a,i) => <div className="ranking-row" key={a.member.id}><span className="rank-number">{i+1}</span><div className="ranking-main"><b>{a.member.name}</b><span>{a.reviewCount} reviewed · {a.errorCount} error{a.errorCount===1?"":"s"}</span></div><span className="ranking-score">{a.avgScore===null?"—":`${a.avgScore}%`}</span><span className="ranking-approval">{a.approvalRate===null?"—":`${a.approvalRate}% approved`}</span></div>)}</div> : <div className="config-empty small"><Users size={22}/><p>No reviewed tasks yet.</p></div>}
+      </section>
+      <section className="panel">
+        <div className="panel-head"><div><h2>Reviewer Performance</h2><p>Throughput, scoring tendency and turnaround per reviewer</p></div></div>
+        {reviewerStats.length ? <div className="ranking-list">{reviewerStats.map((r,i) => <div className="ranking-row" key={r.name}><span className="rank-number">{i+1}</span><div className="ranking-main"><b>{r.name}</b><span>{r.reviewCount} review{r.reviewCount===1?"":"s"} · {r.rejectionRate===null?"—":`${r.rejectionRate}% rejected`}</span></div><span className="ranking-score">{r.avgScoreGiven===null?"—":`${r.avgScoreGiven}%`}</span><span className="ranking-approval">{r.avgTurnaroundHours===null?"—":`${r.avgTurnaroundHours.toFixed(1)}h avg`}</span></div>)}</div> : <div className="config-empty small"><ShieldCheck size={22}/><p>No reviews recorded yet.</p></div>}
+      </section>
+    </div>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Calibration Drift</h2><p>How reviewed scores compare to gold-standard references, across every project</p></div></div>
+      {calibrationRows.length ? <div className="calibration-list">{calibrationRows.map(row => <div className="calibration-row" key={row.entry.id}>
+        <div><b>{row.entry.taskId}</b><span>{groupName(row.group.id)} · Gold: {row.entry.goldScore}</span></div>
+        {row.drift !== null ? <span className={`drift-badge ${Math.abs(row.drift)<=5?"good":Math.abs(row.drift)<=15?"warn":"bad"}`}>{row.review.reviewer}: {row.review.score} ({row.drift>0?"+":""}{row.drift})</span> : <span className="drift-badge pending">Not reviewed yet</span>}
+      </div>)}</div> : <div className="config-empty small"><Target size={22}/><p>Add calibration references from each project's Configuration → QA Scorecard tab.</p></div>}
+    </section>
+  </div>;
+}
+
+function ReportsPage({ reporting, quality, deadlines, projects, onExport }) {
+  const [sections, setSections] = useState({ production: true, team: true, qa: true, sla: true, forecast: true });
+  const [reportProject, setReportProject] = useState("All");
+  const [reportRange, setReportRange] = useState(30);
+  const recentDays = reporting.throughputDays.slice(-14);
+  const maxDay = Math.max(1, ...recentDays.map(d => d.count));
+  const toggleSection = (key) => setSections(prev => ({ ...prev, [key]: !prev[key] }));
+
+  return <div className="page reports-page">
+    <div className="page-head"><div><span className="eyebrow">ADVANCED ANALYTICS & REPORTING</span><h1>Reports</h1><p>Production, team, QA, SLA and forecasting analytics in one place, with exportable custom reports.</p></div></div>
+
+    <div className="stats-grid">
+      <StatCard icon={TrendingUp} label="Throughput (7d)" value={reporting.last7} meta={reporting.throughputTrendPct===null?"vs prior week: —":`${reporting.throughputTrendPct>=0?"+":""}${reporting.throughputTrendPct}% vs prior week`}/>
+      <StatCard icon={CheckCircle2} label="Accuracy Rate" value={reporting.accuracyRate===null?"—":`${reporting.accuracyRate}%`} meta="Approved of all reviewed decisions"/>
+      <StatCard icon={ShieldCheck} label="First-Pass Yield" value={reporting.firstPassYield===null?"—":`${reporting.firstPassYield}%`} meta="Approved with no rework cycle"/>
+      <StatCard icon={RotateCcw} label="Rework Rate" value={reporting.reworkRate===null?"—":`${reporting.reworkRate}%`} meta={`${reporting.reworkedCount} of ${reporting.reviewedCount} reviewed tasks`}/>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Throughput</h2><p>Tasks completed per day (last 14 days)</p></div><span className="chart-value">{reporting.dailyVelocity.toFixed(1)} <small>/day avg</small></span></div>
+        <div className="trend-chart"><div className="chart-y"><span>{maxDay}</span><span>{Math.round(maxDay*0.5)}</span><span>0</span></div><div className="chart-bars">{recentDays.map((d,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${Math.max(4,(d.count/maxDay)*100)}%`}} title={`${d.count} on ${d.label}`}></div><span>{d.label}</span></div>)}</div></div>
+      </section>
+      <section className="panel">
+        <div className="panel-head"><div><h2>Production</h2><p>Overall volume across the workspace</p></div></div>
+        <div className="production-stat-list">
+          <div className="production-stat-row"><span>Total Images</span><b>{reporting.totalImages.toLocaleString()}</b></div>
+          <div className="production-stat-row"><span>Processed</span><b>{reporting.processedImages.toLocaleString()}</b></div>
+          <div className="production-stat-row"><span>Total Annotations</span><b>{reporting.totalAnnotationsCount.toLocaleString()}</b></div>
+          <div className="production-stat-row"><span>Avg Annotations / Task</span><b>{reporting.avgAnnotationsPerTask.toFixed(1)}</b></div>
+          <div className="production-stat-row"><span>SLA Compliance</span><b>{deadlines.slaCompliance===null?"—":`${deadlines.slaCompliance}%`}</b></div>
+          <div className="production-stat-row"><span>Reviewer Agreement</span><b>{quality.agreementRate===null?"—":`${quality.agreementRate}%`}</b></div>
+        </div>
+      </section>
+    </div>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Team Utilization</h2><p>Active workload against each member's capacity</p></div></div>
+      {reporting.teamUtilization.length ? <div className="utilization-list">{reporting.teamUtilization.map(u => <div className="utilization-row" key={u.member.id}>
+        <div className="utilization-main"><b>{u.member.name}</b><span>{u.member.role} · {u.assigned}/{u.capacity} tasks</span></div>
+        <div className="utilization-track"><i className={u.utilization>=100?"over":u.utilization>=75?"high":""} style={{width:`${Math.min(100,u.utilization)}%`}}/></div>
+        <span className="utilization-pct">{u.utilization}%</span>
+      </div>)}</div> : <div className="config-empty small"><Users size={22}/><p>No active team members yet.</p></div>}
+    </section>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Forecasting</h2><p>Projected completion based on each project's last 7 days of velocity</p></div></div>
+      {reporting.forecasts.length ? <div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>REMAINING</th><th>VELOCITY /DAY</th><th>DAYS LEFT</th><th>PROJECTED DATE</th></tr></thead><tbody>{reporting.forecasts.map(f => <tr key={f.project.id}><td><b>{f.project.name}</b></td><td>{f.remaining.toLocaleString()}</td><td>{f.velocity.toFixed(1)}</td><td>{f.daysLeft??"—"}</td><td>{f.projectedDate?f.projectedDate.toLocaleDateString():<span className="forecast-stalled">No recent progress</span>}</td></tr>)}</tbody></table></div> : <div className="config-empty small"><Target size={22}/><p>All projects are complete or have no images yet.</p></div>}
+    </section>
+
+    <section className="panel report-builder-panel">
+      <div className="panel-head"><div><h2>Custom Report</h2><p>Pick what to include and export a CSV snapshot</p></div><FileText size={18}/></div>
+      <div className="report-builder-controls">
+        <label><span>PROJECT</span><select value={reportProject} onChange={e=>setReportProject(e.target.value)}><option value="All">All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        <label><span>RANGE</span><select value={reportRange} onChange={e=>setReportRange(Number(e.target.value))}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></select></label>
+      </div>
+      <div className="report-section-toggles">
+        {[["production","Production"],["team","Team Utilization"],["qa","QA & Quality"],["sla","SLA & Deadlines"],["forecast","Forecasting"]].map(([key,label]) => <label key={key} className="report-toggle-chip"><input type="checkbox" checked={sections[key]} onChange={()=>toggleSection(key)}/> {label}</label>)}
+      </div>
+      <button className="primary-btn" onClick={()=>onExport(sections, reportProject, reportRange)}><Download size={16}/> Generate CSV Report</button>
+    </section>
+  </div>;
+}
 
 function SimplePage({title,subtitle,icon:Icon,stats}) {
   return <div className="page"><div className="page-head"><div><span className="eyebrow">ANNOTATEPRO</span><h1>{title}</h1><p>{subtitle}</p></div></div><div className="stats-grid">{stats.map((s,i)=><StatCard key={s} icon={[Activity,Target,ShieldCheck,TrendingUp][i%4]} label={s.split(" ").slice(1).join(" ")} value={s.split(" ")[0]} meta="Workspace metric"/>)}</div><section className="panel placeholder-large"><Icon size={42}/><h2>{title} module</h2><p>This module is connected to the AnnotatePro application shell. The full operational workflow will use the same shared project and task data.</p></section></div>;
