@@ -296,7 +296,7 @@ function App() {
       { key: "tasks", label: "Images", table: "tasks", rows: () => tasks.map(t => ({
           id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name,
           status: t.status || "Pending", image: t.image || null, size: t.size || null,
-          source: t.source || "Sample", created_at: t.createdAt || new Date().toISOString()
+          source: t.source || "Sample", due_date: t.dueDate || null, created_at: t.createdAt || new Date().toISOString()
         })) },
       { key: "annotations", label: "Annotations", table: "annotations", rows: () => {
           const rows = [];
@@ -389,10 +389,10 @@ function App() {
     return { id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "", version: d.version || 1, stage: d.stage || "Draft", version_history: d.versionHistory || [], status: d.status || "Active", created_at: d.createdAt || new Date().toISOString() };
   }
   function taskFromRow(t) {
-    return { id: t.id, projectId: t.project_id || "", datasetId: t.dataset_id || "", name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", createdAt: t.created_at || new Date().toISOString() };
+    return { id: t.id, projectId: t.project_id || "", datasetId: t.dataset_id || "", name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", dueDate: t.due_date || null, createdAt: t.created_at || new Date().toISOString() };
   }
   function taskToRow(t) {
-    return { id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", created_at: t.createdAt || new Date().toISOString() };
+    return { id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", due_date: t.dueDate || null, created_at: t.createdAt || new Date().toISOString() };
   }
   function memberFromRow(m) {
     return { id: m.id, name: m.name, email: m.email || "", role: m.role || "Annotator", status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qaScore: m.qa_score ?? 100 };
@@ -1200,6 +1200,9 @@ function App() {
         if (payload.eventType === "DELETE") { setTasks(prev => prev.filter(t => t.id !== payload.old.id)); return; }
         const row = payload.new;
         const mapped = { id: row.id, projectId: row.project_id, datasetId: row.dataset_id, name: row.name, status: row.status, image: row.image, size: row.size, source: row.source, createdAt: row.created_at };
+        // Only touch dueDate if the cloud row actually carries a due_date column — otherwise
+        // leave any locally-set due date alone instead of wiping it with undefined.
+        if (row.due_date !== undefined) mapped.dueDate = row.due_date;
         setTasks(prev => prev.some(t => t.id === mapped.id) ? prev.map(t => t.id === mapped.id ? { ...t, ...mapped } : t) : [...prev, mapped]);
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "project_groups" }, (payload) => {
@@ -2701,8 +2704,8 @@ function App() {
   function taskHoursOverdue(task) { const dl = taskDeadline(task); return dl === null ? 0 : Math.max(0, (Date.now() - dl) / 3600000); }
   function taskAgingHours(task) { return Math.max(0, (Date.now() - new Date(getTaskStatusSince(task)).getTime()) / 3600000); }
   function setTaskDueDate(taskId, dateStr) {
-    // Note: task-level due dates aren't a column in the current tasks table schema yet, so this stays local-only for now.
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, dueDate: dateStr || null } : t));
+    syncUpdate("tasks", taskId, { due_date: dateStr || null });
   }
   function escalateTaskNow(task) {
     const groupId = getGroupIdForTask(task);
