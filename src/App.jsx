@@ -75,12 +75,16 @@ function defaultDatasetFor(project) {
 const defaultDatasets = sampleProjects.map(defaultDatasetFor);
 
 const defaultLabels = [
-  { id: "car", name: "Car", color: "#2563eb", type: "Rectangle" },
-  { id: "person", name: "Person", color: "#16a34a", type: "Rectangle" },
-  { id: "truck", name: "Truck", color: "#dc2626", type: "Rectangle" },
-  { id: "bus", name: "Bus", color: "#9333ea", type: "Rectangle" },
-  { id: "traffic-sign", name: "Traffic Sign", color: "#ea580c", type: "Rectangle" }
+  { id: "car", name: "Car", color: "#2563eb", type: "Rectangle", parentId: null, groupId: null, shortcut: "1", attributes: [] },
+  { id: "person", name: "Person", color: "#16a34a", type: "Rectangle", parentId: null, groupId: null, shortcut: "2", attributes: [] },
+  { id: "truck", name: "Truck", color: "#dc2626", type: "Rectangle", parentId: null, groupId: null, shortcut: "3", attributes: [] },
+  { id: "bus", name: "Bus", color: "#9333ea", type: "Rectangle", parentId: null, groupId: null, shortcut: "4", attributes: [] },
+  { id: "traffic-sign", name: "Traffic Sign", color: "#ea580c", type: "Rectangle", parentId: null, groupId: null, shortcut: "5", attributes: [] }
 ];
+// Single-character keys reserved by the annotation workspace's tool shortcuts —
+// label shortcuts can't reuse these since tool-switching takes priority.
+const RESERVED_SHORTCUTS = ["v","b","p","l","k","g","r","e"," "];
+const ATTRIBUTE_TYPES = ["Text", "Number", "Boolean", "Select"];
 
 const emptyProject = {
   name: "", client: "", annotationType: "Bounding Box", groupId: defaultProjectGroups[0].id, totalImages: 100,
@@ -557,7 +561,13 @@ function App() {
     syncUpsert("project_groups", groupToRow(copy));
     setProjectConfigs(prev => {
       const sourceConfig = prev[id] || makeDefaultProjectConfig(source);
-      return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: sourceConfig.labels.map(l => ({ ...l, id: `${newId}-${l.id}` })) } };
+      const idMap = {};
+      const newLabels = sourceConfig.labels.map(l => { const nid = `${newId}-${l.id}`; idMap[l.id] = nid; return { ...l, id: nid }; });
+      newLabels.forEach(l => { if (l.parentId) l.parentId = idMap[l.parentId] || null; });
+      const groupIdMap = {};
+      const newLabelGroups = (sourceConfig.labelGroups || []).map(g => { const nid = `${newId}-${g.id}`; groupIdMap[g.id] = nid; return { ...g, id: nid }; });
+      newLabels.forEach(l => { if (l.groupId) l.groupId = groupIdMap[l.groupId] || null; });
+      return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: newLabels, labelGroups: newLabelGroups, schemaVersion: 1, schemaHistory: [], automationRules: (sourceConfig.automationRules || []).map(r => ({ ...r, id: `${newId}-rule-${r.id}` })) } };
     });
   }
 
@@ -691,6 +701,10 @@ function App() {
   const makeDefaultProjectConfig = (project) => ({
     projectId: project.id,
     labels: defaultLabels.map(label => ({ ...label, id: `${project.id}-${label.id}` })),
+    labelGroups: [],
+    schemaVersion: 1,
+    schemaHistory: [],
+    automationRules: [],
     requireQa: true, allowAnnotatorSubmit: true, autoSave: true, defaultReviewer: "", maxTasksPerAnnotator: 10,
     instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality.",
     color: labelPalette[0],
@@ -730,7 +744,8 @@ function App() {
   const [workloadSettings, setWorkloadSettings] = useState(() => readStorage(WORKLOAD_KEY, { defaultDailyCapacity: 8, defaultWeeklyCapacity: 40 }));
   const [labelEditorOpen, setLabelEditorOpen] = useState(false);
   const [editingLabelId, setEditingLabelId] = useState(null);
-  const [labelForm, setLabelForm] = useState({ name: "", color: labelPalette[0], type: "Rectangle" });
+  const emptyLabelForm = { name: "", color: labelPalette[0], type: "Rectangle", parentId: "", groupId: "", shortcut: "", attributes: [] };
+  const [labelForm, setLabelForm] = useState(emptyLabelForm);
   const [importOpen, setImportOpen] = useState(false);
   const [imageUploadOpen, setImageUploadOpen] = useState(false);
   const IMPORT_HISTORY_KEY = "annotatepro_import_history_v1";
@@ -1052,7 +1067,7 @@ function App() {
     const config = projectConfigs[groupId];
     const existing = config?.labels?.find(l => l.name.toLowerCase() === className.toLowerCase());
     if (existing) return existing.id;
-    const newLabel = { id: `label-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: className, color: labelPalette[(config?.labels?.length || 0) % labelPalette.length], type: "Rectangle" };
+    const newLabel = { id: `label-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: className, color: labelPalette[(config?.labels?.length || 0) % labelPalette.length], type: "Rectangle", parentId: null, groupId: null, shortcut: null, attributes: [] };
     setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), labels: [...(prev[groupId]?.labels || []), newLabel] } }));
     return newLabel.id;
   }
@@ -1312,6 +1327,7 @@ function App() {
       if (!target) return;
       const idx = next.findIndex(t => t.id === task.id);
       if (idx >= 0) next[idx] = { ...next[idx], assigneeId: target.id, priority: next[idx].priority || "MEDIUM", queue: next[idx].queue || "Now", status: "In Progress" };
+      syncUpdate("tasks", task.id, { status: "In Progress" });
       counts[target.id] = (counts[target.id] || 0) + 1;
     });
     setTasks(next);
@@ -2231,6 +2247,13 @@ function App() {
       else if (e.key === "ArrowRight") changeTask(1);
       else if (e.key === "ArrowLeft") changeTask(-1);
       else if (e.key === " ") { e.preventDefault(); setTool("pan"); }
+      else {
+        const key = e.key.toLowerCase();
+        if (!RESERVED_SHORTCUTS.includes(key)) {
+          const match = labels.find(l => (l.shortcut || "").toLowerCase() === key);
+          if (match) setSelectedLabel(match.id);
+        }
+      }
     }
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
@@ -2419,11 +2442,248 @@ function App() {
   ];
 
   const currentConfig = projectConfigs[configProject] || makeDefaultProjectConfig(projectGroups.find(g => g.id === configProject) || projectGroups[0] || defaultProjectGroups[0]);
-  const openCreateLabel = () => { setEditingLabelId(null); setLabelForm({ name: "", color: labelPalette[currentConfig.labels.length % labelPalette.length], type: "Rectangle" }); setLabelEditorOpen(true); };
-  const openEditLabel = (label) => { setEditingLabelId(label.id); setLabelForm({ name: label.name, color: label.color || labelPalette[0], type: label.type || "Rectangle" }); setLabelEditorOpen(true); };
-  const saveProjectLabel = (e) => { e.preventDefault(); const name = labelForm.name.trim(); if (!name) return; setProjectConfigs(prev => { const cfg = prev[configProject] || currentConfig; const nextLabels = editingLabelId ? cfg.labels.map(l => l.id === editingLabelId ? { ...l, name, color: labelForm.color, type: labelForm.type } : l) : [...cfg.labels, { id: `${configProject}-label-${Date.now()}`, name, color: labelForm.color, type: labelForm.type }]; return { ...prev, [configProject]: { ...cfg, labels: nextLabels } }; }); setLabelEditorOpen(false); setConfigMessage(editingLabelId ? "Label updated" : "Label added"); setTimeout(() => setConfigMessage(""), 2200); };
-  const deleteProjectLabel = (labelId) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: currentConfig.labels.filter(l => l.id !== labelId) } })); setConfigMessage("Label removed"); setTimeout(() => setConfigMessage(""), 2200); };
+  const openCreateLabel = (parentId = null) => { setEditingLabelId(null); setLabelForm({ ...emptyLabelForm, color: labelPalette[currentConfig.labels.length % labelPalette.length], parentId: parentId || "" }); setLabelEditorOpen(true); };
+  const openEditLabel = (label) => { setEditingLabelId(label.id); setLabelForm({ name: label.name, color: label.color || labelPalette[0], type: label.type || "Rectangle", parentId: label.parentId || "", groupId: label.groupId || "", shortcut: label.shortcut || "", attributes: (label.attributes || []).map(a => ({ ...a })) }); setLabelEditorOpen(true); };
+  const [labelSchemaError, setLabelSchemaError] = useState("");
+  const saveProjectLabel = (e) => {
+    e.preventDefault();
+    const name = labelForm.name.trim();
+    if (!name) return;
+    const shortcut = (labelForm.shortcut || "").trim().toLowerCase().slice(0, 1);
+    if (shortcut && RESERVED_SHORTCUTS.includes(shortcut)) { setLabelSchemaError(`"${shortcut.toUpperCase()}" is reserved for a workspace tool shortcut.`); return; }
+    const cleanAttributes = (labelForm.attributes || []).filter(a => a.name.trim()).map(a => ({ id: a.id || `attr-${Date.now()}-${Math.random().toString(36).slice(2,5)}`, name: a.name.trim(), type: a.type || "Text", options: a.type === "Select" ? (a.options || "").split(",").map(o => o.trim()).filter(Boolean) : [], required: !!a.required }));
+    setProjectConfigs(prev => {
+      const cfg = prev[configProject] || currentConfig;
+      const duplicateShortcut = shortcut && cfg.labels.some(l => l.id !== editingLabelId && (l.shortcut || "").toLowerCase() === shortcut);
+      if (duplicateShortcut) { setLabelSchemaError(`Shortcut "${shortcut.toUpperCase()}" is already used by another label.`); return prev; }
+      setLabelSchemaError("");
+      const payload = { name, color: labelForm.color, type: labelForm.type, parentId: labelForm.parentId || null, groupId: labelForm.groupId || null, shortcut: shortcut || null, attributes: cleanAttributes };
+      const nextLabels = editingLabelId
+        ? cfg.labels.map(l => l.id === editingLabelId ? { ...l, ...payload } : l)
+        : [...cfg.labels, { id: `${configProject}-label-${Date.now()}`, ...payload }];
+      return { ...prev, [configProject]: { ...cfg, labels: nextLabels } };
+    });
+    if (labelSchemaError) return;
+    setLabelEditorOpen(false);
+    setConfigMessage(editingLabelId ? "Label updated" : "Label added");
+    setTimeout(() => setConfigMessage(""), 2200);
+  };
+  const deleteProjectLabel = (labelId) => {
+    const childCount = currentConfig.labels.filter(l => l.parentId === labelId).length;
+    if (childCount && !window.confirm(`This label has ${childCount} child label${childCount===1?"":"s"}. Delete it and promote its children to top-level?`)) return;
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: currentConfig.labels.filter(l => l.id !== labelId).map(l => l.parentId === labelId ? { ...l, parentId: null } : l) } }));
+    setConfigMessage("Label removed");
+    setTimeout(() => setConfigMessage(""), 2200);
+  };
+
+  // ---- Build 32: label groups ----
+  function createLabelGroup(name) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    const group = { id: `lg-${Date.now()}`, name: trimmed, color: labelPalette[(currentConfig.labelGroups?.length || 0) % labelPalette.length] };
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labelGroups: [...(currentConfig.labelGroups || []), group] } }));
+  }
+  function renameLabelGroup(id, name) {
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labelGroups: (currentConfig.labelGroups || []).map(g => g.id === id ? { ...g, name } : g) } }));
+  }
+  function deleteLabelGroup(id) {
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labelGroups: (currentConfig.labelGroups || []).filter(g => g.id !== id), labels: currentConfig.labels.map(l => l.groupId === id ? { ...l, groupId: null } : l) } }));
+  }
+
+  // ---- Build 32: label schema versioning ----
+  function saveLabelSchemaVersion(note) {
+    const version = (currentConfig.schemaVersion || 1) + 1;
+    const snapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: note || "", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, schemaVersion: version, schemaHistory: [snapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
+    setConfigMessage(`Saved as schema v${snapshot.version} — now editing v${version}`);
+    setTimeout(() => setConfigMessage(""), 2400);
+  }
+  function restoreLabelSchemaVersion(snapshot) {
+    if (!window.confirm(`Restore schema v${snapshot.version}? This replaces the current label set (current labels are kept in history).`)) return;
+    const currentSnapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: "Replaced by restore", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: snapshot.labels, labelGroups: snapshot.labelGroups || [], schemaVersion: (currentConfig.schemaVersion || 1) + 1, schemaHistory: [currentSnapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
+    setConfigMessage(`Restored schema v${snapshot.version}`);
+    setTimeout(() => setConfigMessage(""), 2400);
+  }
+
+  // ---- Build 32: schema import / export ----
+  function exportLabelSchema() {
+    const payload = { exportedAt: new Date().toISOString(), projectName: (projectGroups.find(g => g.id === configProject) || {}).name || configProject, schemaVersion: currentConfig.schemaVersion || 1, labelGroups: currentConfig.labelGroups || [], labels: currentConfig.labels };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `${(payload.projectName||"labels").toLowerCase().replace(/\s+/g,"-")}-label-schema-v${payload.schemaVersion}.json`; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importLabelSchema(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const importedLabels = Array.isArray(parsed.labels) ? parsed.labels : [];
+        if (!importedLabels.length) { setConfigMessage("Import failed: no labels found in file"); setTimeout(() => setConfigMessage(""), 2600); return; }
+        const idPrefix = `${configProject}-import-${Date.now()}`;
+        const idMap = {};
+        const newLabels = importedLabels.map((l, i) => { const nid = `${idPrefix}-${i}`; idMap[l.id] = nid; return { id: nid, name: l.name || "Untitled", color: l.color || labelPalette[i % labelPalette.length], type: l.type || "Rectangle", parentId: l.parentId || null, groupId: l.groupId || null, shortcut: l.shortcut || null, attributes: l.attributes || [] }; });
+        newLabels.forEach(l => { if (l.parentId) l.parentId = idMap[l.parentId] || null; });
+        const groupIdMap = {};
+        const newGroups = (Array.isArray(parsed.labelGroups) ? parsed.labelGroups : []).map((g, i) => { const nid = `${idPrefix}-grp-${i}`; groupIdMap[g.id] = nid; return { ...g, id: nid }; });
+        newLabels.forEach(l => { if (l.groupId) l.groupId = groupIdMap[l.groupId] || null; });
+        const currentSnapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: "Replaced by import", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
+        setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: [...currentConfig.labels, ...newLabels], labelGroups: [...(currentConfig.labelGroups || []), ...newGroups], schemaVersion: (currentConfig.schemaVersion || 1) + 1, schemaHistory: [currentSnapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
+        setConfigMessage(`Imported ${newLabels.length} label${newLabels.length===1?"":"s"}`);
+        setTimeout(() => setConfigMessage(""), 2600);
+      } catch (err) {
+        setConfigMessage("Import failed: file isn't valid label schema JSON");
+        setTimeout(() => setConfigMessage(""), 2600);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // ---- Build 32: label usage statistics ----
+  const labelUsageStats = useMemo(() => {
+    const groupProjectIds = new Set(projects.filter(p => p.groupId === configProject).map(p => p.id));
+    const groupTaskIds = new Set(tasks.filter(t => groupProjectIds.has(t.projectId)).map(t => t.id));
+    const counts = {};
+    Object.entries(annotationsByTask).forEach(([taskId, list]) => {
+      if (!groupTaskIds.has(taskId)) return;
+      (list || []).forEach(a => { counts[a.labelId] = (counts[a.labelId] || 0) + 1; });
+    });
+    return counts;
+  }, [projects, tasks, annotationsByTask, configProject]);
   const updateProjectConfig = (patch) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, ...patch } })); setConfigMessage("Project configuration saved"); setTimeout(() => setConfigMessage(""), 2200); };
+
+  // ---- Build 33: Workflow Automation ----
+  function getGroupIdForTask(task) { return projects.find(p => p.id === task?.projectId)?.groupId || null; }
+  function statusAuditActions(status) {
+    switch (status) {
+      case "Submitted": case "QA Review": return ["Task Submitted"];
+      case "Rejected": case "Changes Requested": return ["QA Rejected"];
+      case "Approved": return ["QA Approved"];
+      case "Pending": return ["Task Unassigned"];
+      default: return [];
+    }
+  }
+  function getTaskStatusSince(task) {
+    const actions = statusAuditActions(task.status);
+    const match = auditEvents.find(e => e.taskId === task.id && actions.includes(e.action));
+    return match?.timestamp || task.createdAt || new Date().toISOString();
+  }
+
+  function createAutomationRule(groupId) {
+    const rule = { id: `rule-${Date.now()}`, name: "New rule", enabled: true, whenStatus: "Pending", afterHours: 0, action: "auto_assign", note: "" };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), automationRules: [...(prev[groupId]?.automationRules || []), rule] } }));
+    return rule.id;
+  }
+  function updateAutomationRule(groupId, ruleId, patch) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], automationRules: (prev[groupId]?.automationRules || []).map(r => r.id === ruleId ? { ...r, ...patch } : r) } }));
+  }
+  function deleteAutomationRule(groupId, ruleId) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], automationRules: (prev[groupId]?.automationRules || []).filter(r => r.id !== ruleId) } }));
+  }
+  function addSuggestedRule(groupId, template) {
+    const rule = { id: `rule-${Date.now()}`, ...template };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), automationRules: [...(prev[groupId]?.automationRules || []), rule] } }));
+  }
+
+  function runAutomationAction(rule, task) {
+    const groupId = getGroupIdForTask(task);
+    const group = projectGroups.find(g => g.id === groupId);
+    const eligible = (role) => teamMembers.filter(m => m.status === "Active" && m.role === role && (!group?.teamIds?.length || group.teamIds.includes(m.id)));
+    switch (rule.action) {
+      case "auto_assign": {
+        if (task.assigneeId) return;
+        const pool = eligible("Annotator");
+        if (!pool.length) return;
+        const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.assigneeId === m.id && ["Pending", "In Progress"].includes(t.status)).length]));
+        const target = [...pool].sort((a, b) => (counts[a.id] || 0) - (counts[b.id] || 0))[0];
+        assignTask(task.id, target.id);
+        pushNotification("Assignment", "Auto-assigned by workflow", `${task.name} was auto-assigned to ${target.name} by rule "${rule.name}".`, task.projectId, task.id);
+        break;
+      }
+      case "auto_route_qa": {
+        const pool = eligible("Reviewer");
+        if (!pool.length) return;
+        const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.reviewerId === m.id && ["Submitted", "QA Review"].includes(t.status)).length]));
+        const target = [...pool].sort((a, b) => (counts[a.id] || 0) - (counts[b.id] || 0))[0];
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, reviewerId: target.id } : t));
+        logAudit("Task Routed to QA", task.id, task.projectId, `Routed to reviewer ${target.name} by rule "${rule.name}".`);
+        pushNotification("QA", "Routed for review", `${task.name} was routed to ${target.name} for QA by rule "${rule.name}".`, task.projectId, task.id);
+        break;
+      }
+      case "auto_route_rework": {
+        if (!task.assigneeId) { runAutomationAction({ ...rule, action: "auto_assign" }, task); return; }
+        const assignee = teamMembers.find(m => m.id === task.assigneeId);
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "In Progress" } : t));
+        syncUpdate("tasks", task.id, { status: "In Progress" });
+        logAudit("Task Routed for Rework", task.id, task.projectId, `Sent back to ${assignee?.name || "annotator"} by rule "${rule.name}".`);
+        pushNotification("Rework", "Rework routed", `${task.name} was sent back to ${assignee?.name || "the assignee"} for rework.`, task.projectId, task.id);
+        break;
+      }
+      case "escalate": {
+        const owner = teamMembers.find(m => m.id === group?.ownerId);
+        logAudit("Task Escalated", task.id, task.projectId, `Escalated after sitting in "${task.status}" past the threshold for rule "${rule.name}".`);
+        pushNotification("Alert", "Task escalated", `${task.name} has been stuck in ${task.status}${owner ? ` — escalated to ${owner.name}` : " and was escalated"}.`, task.projectId, task.id);
+        break;
+      }
+      case "auto_complete": {
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "Completed" } : t));
+        syncUpdate("tasks", task.id, { status: "Completed" });
+        logAudit("Task Completed", task.id, task.projectId, `Auto-completed by rule "${rule.name}".`);
+        pushNotification("System", "Task completed", `${task.name} was automatically marked complete.`, task.projectId, task.id);
+        break;
+      }
+      case "notify": {
+        pushNotification("System", rule.name || "Workflow notification", rule.note || `${task.name} matched workflow rule "${rule.name}".`, task.projectId, task.id);
+        break;
+      }
+      default: break;
+    }
+  }
+
+  // Immediate rules: fire once when a task's status transitions into rule.whenStatus.
+  const prevTaskStatusRef = useRef({});
+  useEffect(() => {
+    const prevMap = prevTaskStatusRef.current;
+    tasks.forEach(task => {
+      const prevStatus = prevMap[task.id];
+      if (prevStatus !== undefined && prevStatus !== task.status) {
+        const groupId = getGroupIdForTask(task);
+        const rules = (projectConfigs[groupId]?.automationRules || []).filter(r => r.enabled && r.whenStatus === task.status && (!r.afterHours || r.afterHours <= 0));
+        rules.forEach(rule => runAutomationAction(rule, task));
+      }
+    });
+    const nextMap = {};
+    tasks.forEach(t => { nextMap[t.id] = t.status; });
+    prevTaskStatusRef.current = nextMap;
+  }, [tasks]);
+
+  // Time-based rules (escalation, auto-complete): checked periodically against
+  // how long a task has sat in its current status, derived from the audit log.
+  const firedTimedRulesRef = useRef(new Set());
+  useEffect(() => {
+    const check = () => {
+      tasks.forEach(task => {
+        const groupId = getGroupIdForTask(task);
+        const rules = (projectConfigs[groupId]?.automationRules || []).filter(r => r.enabled && r.whenStatus === task.status && r.afterHours > 0);
+        rules.forEach(rule => {
+          const since = getTaskStatusSince(task);
+          const key = `${task.id}:${rule.id}:${since}`;
+          if (firedTimedRulesRef.current.has(key)) return;
+          const hoursElapsed = (Date.now() - new Date(since).getTime()) / 3600000;
+          if (hoursElapsed >= rule.afterHours) {
+            firedTimedRulesRef.current.add(key);
+            runAutomationAction(rule, task);
+          }
+        });
+      });
+    };
+    check();
+    const id = setInterval(check, 60000);
+    return () => clearInterval(id);
+  }, [tasks, projectConfigs, auditEvents]);
+
 
   if (authLoading) {
     return <div className="auth-loading-screen"><div className="brand-mark"><Grid3X3 size={22}/></div><RefreshCw size={20} className="mig-spin"/><span>Loading AnnotatePro...</span></div>;
@@ -2492,7 +2752,12 @@ function App() {
 
         {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} onOpenWorkstation={openWorkstation} userName={currentUserName} />}
         {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => openWorkstation(id, "Annotation")} onReview={(id) => openWorkstation(id, "Review")} onPlanner={openTaskPlanner} onTaskSettings={(id) => { setTaskSettingsId(id); setImportTaskId(id); setExportProject(id); setTaskSettingsTab("General"); navigate("Task Settings"); }} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
-        {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} />}
+        {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} labelSchemaError={labelSchemaError} setLabelSchemaError={setLabelSchemaError}
+          onCreateLabelGroup={createLabelGroup} onRenameLabelGroup={renameLabelGroup} onDeleteLabelGroup={deleteLabelGroup}
+          onSaveSchemaVersion={saveLabelSchemaVersion} onRestoreSchemaVersion={restoreLabelSchemaVersion}
+          onExportSchema={exportLabelSchema} onImportSchema={importLabelSchema} labelUsageStats={labelUsageStats}
+          teamMembers={teamMembers} onCreateRule={createAutomationRule} onUpdateRule={updateAutomationRule} onDeleteRule={deleteAutomationRule} onAddSuggestedRule={addSuggestedRule}
+        />}
         {activePage === "Task Planner" && <TaskPlannerPage
           projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
           selectedProjectId={plannerProjectId} setSelectedProjectId={setPlannerProjectId} priority={plannerPriority} setPriority={setPlannerPriority}
@@ -2957,7 +3222,7 @@ function TargetTable({role, people, tasks, annotations, qaReviews, targets, setT
   </tbody></table></div>;
 }
 
-function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,onBack,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel}) {
+function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,onBack,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel,labelSchemaError,setLabelSchemaError,onCreateLabelGroup,onRenameLabelGroup,onDeleteLabelGroup,onSaveSchemaVersion,onRestoreSchemaVersion,onExportSchema,onImportSchema,labelUsageStats,teamMembers,onCreateRule,onUpdateRule,onDeleteRule,onAddSuggestedRule}) {
   const project = groups.find(g => g.id === configProject) || groups[0];
   const reviewers = ["", "Priya Sharma", "Kavya Nair"];
   const workspaceOptions = ["", "Production", "QA Sandbox", "Client Review"];
@@ -2972,7 +3237,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
   return <div className="page project-config-page">
     <div className="page-head"><div><button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {project?.name || "Projects"}</button><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div></div>
     <div className="config-overview"><div className="config-project-icon" style={{background:project?.color?`${project.color}22`:undefined,color:project?.color||undefined}}><GroupIcon size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{groupTaskIds.length} task{groupTaskIds.length===1?"":"s"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
-    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button></div>
+    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Automation"?"active":""} onClick={()=>setTab("Automation")}><Zap size={16}/> Automation</button></div>
 
     {tab === "General" && <section className="panel config-panel general-settings-panel">
       <div className="config-panel-head"><div><h2>General Settings</h2><p>Basic identity and task-ordering rules for this project.</p></div><SlidersHorizontal size={20}/></div>
@@ -2991,18 +3256,10 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
       </div>
     </section>}
 
-    {tab === "Labeling Interface" && <section className="panel config-panel labeling-interface-panel">
-      <div className="config-panel-head"><div><h2>Labeling Interface</h2><p>These labels are available to annotators, with a live preview of how the workspace will look.</p></div><button className="primary-btn" onClick={onAddLabel}><Plus size={16}/> Add Label</button></div>
-      <div className="labeling-interface-grid">
-        <div className="label-schema-list">{config.labels.length ? config.labels.map((label,i)=><div className="schema-row" key={label.id}><span className="schema-number">{i+1}</span><span className="schema-color" style={{background:label.color}}></span><div className="schema-main"><b>{label.name}</b><span>{label.type}</span></div><span className="schema-shortcut">{label.type === "Rectangle" ? "BOX" : label.type.toUpperCase()}</span><div className="schema-actions"><button onClick={()=>onEditLabel(label)} title="Edit"><Edit3 size={15}/></button><button className="danger-icon" onClick={()=>onDeleteLabel(label.id)} title="Delete"><Trash2 size={15}/></button></div></div>) : <div className="config-empty"><Palette size={34}/><h3>No labels configured</h3><p>Add labels to make this project annotatable.</p></div>}</div>
-        <div className="ui-preview-panel">
-          <span className="section-label">UI PREVIEW</span>
-          <div className="ui-preview-image">{previewTask ? <img src={previewTask.image} alt=""/> : <div className="ui-preview-empty"><ImageIcon size={26}/><span>No sample image yet</span></div>}</div>
-          <div className="ui-preview-labels"><span className="section-label">labels</span><div className="ui-preview-label-chips">{config.labels.length ? config.labels.map(l=><span key={l.id} className="preview-chip" style={{background:`${l.color}22`,color:l.color,borderColor:`${l.color}55`}}>{l.name}</span>) : <span className="preview-chip-empty">No labels yet</span>}</div></div>
-          <div className="ui-preview-regions"><span className="section-label">regions</span><div className="ui-preview-regions-empty"><MousePointer2 size={16}/><span>Labeled regions will appear here once annotators start working.</span></div></div>
-        </div>
-      </div>
-    </section>}
+    {tab === "Labeling Interface" && <TaxonomyManager config={config} onAddLabel={onAddLabel} onEditLabel={onEditLabel} onDeleteLabel={onDeleteLabel}
+      onCreateLabelGroup={onCreateLabelGroup} onRenameLabelGroup={onRenameLabelGroup} onDeleteLabelGroup={onDeleteLabelGroup}
+      onSaveSchemaVersion={onSaveSchemaVersion} onRestoreSchemaVersion={onRestoreSchemaVersion}
+      onExportSchema={onExportSchema} onImportSchema={onImportSchema} labelUsageStats={labelUsageStats} previewTask={previewTask} />}
 
     {tab === "Annotation" && <section className="panel config-panel annotation-settings-panel">
       <div className="config-panel-head"><div><h2>Annotation Settings</h2><p>Instructions annotators see, plus optional prelabeling from predictions.</p></div><FileText size={20}/></div>
@@ -3021,12 +3278,220 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
     </section>}
 
     {tab === "Workflow" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Annotation workflow</h2><p>Control how tasks move from annotation to quality review.</p></div><CheckSquare size={20}/></div><div className="workflow-settings"><SettingToggle title="Require QA review" text="Every submitted task enters the QA Review queue before approval." checked={config.requireQa} onChange={v=>onUpdateConfig({requireQa:v})}/><SettingToggle title="Allow annotators to submit" text="Annotators can submit completed tasks directly for review." checked={config.allowAnnotatorSubmit} onChange={v=>onUpdateConfig({allowAnnotatorSubmit:v})}/><SettingToggle title="Auto-save annotations" text="Persist annotation changes locally while the task is being edited." checked={config.autoSave} onChange={v=>onUpdateConfig({autoSave:v})}/></div><div className="workflow-grid"><label><span>DEFAULT REVIEWER</span><select value={config.defaultReviewer||""} onChange={e=>onUpdateConfig({defaultReviewer:e.target.value})}>{reviewers.map(r=><option key={r} value={r}>{r || "No default reviewer"}</option>)}</select></label><label><span>MAX TASKS / ANNOTATOR</span><input type="number" min="1" max="1000" value={config.maxTasksPerAnnotator||10} onChange={e=>onUpdateConfig({maxTasksPerAnnotator:Number(e.target.value)||1})}/></label></div><div className="workflow-stages"><span>WORKFLOW</span><div><b>Pending</b><i>→</i><b>In Progress</b><i>→</i><b>Submitted</b><i>→</i><b>QA Review</b><i>→</i><b>Approved</b></div></div></section>}
+    {tab === "Automation" && <WorkflowAutomationPanel groupId={configProject} config={config} groupTasks={(flatProjects.filter(p=>p.groupId===configProject).map(p=>p.id))} allTasks={tasks} teamMembers={teamMembers} onCreateRule={onCreateRule} onUpdateRule={onUpdateRule} onDeleteRule={onDeleteRule} onAddSuggestedRule={onAddSuggestedRule}/>}
     {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
-    {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>setLabelEditorOpen(false)} onSave={onSaveLabel}/>} 
+    {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>{setLabelEditorOpen(false); setLabelSchemaError("");}} onSave={onSaveLabel} error={labelSchemaError} allLabels={config.labels} editingLabelId={editingLabelId} labelGroups={config.labelGroups||[]}/>} 
   </div>;
 }
 function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
-function LabelEditorModal({editing,form,setForm,onClose,onSave}) { return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div><div className="label-editor-form"><label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label><label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label><label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div></form></div>; }
+function buildLabelTree(labels) {
+  const byParent = {};
+  labels.forEach(l => { const key = l.parentId || "__root__"; (byParent[key] = byParent[key] || []).push(l); });
+  return byParent;
+}
+
+function LabelTreeNode({ label, depth, byParent, usage, onEdit, onDelete, onAddChild }) {
+  const children = byParent[label.id] || [];
+  return <>
+    <div className="schema-row taxonomy-row" style={{ paddingLeft: `${14 + depth * 22}px` }}>
+      {depth > 0 && <span className="taxonomy-tree-connector">↳</span>}
+      <span className="schema-color" style={{ background: label.color }}></span>
+      <div className="schema-main">
+        <b>{label.name}</b>
+        <span>{label.type}{label.attributes?.length ? ` · ${label.attributes.length} attribute${label.attributes.length===1?"":"s"}` : ""}</span>
+      </div>
+      {label.shortcut && <span className="schema-shortcut taxonomy-shortcut">{label.shortcut.toUpperCase()}</span>}
+      <span className="taxonomy-usage" title="Annotations using this label">{usage[label.id] || 0} used</span>
+      <div className="schema-actions">
+        <button onClick={() => onAddChild(label.id)} title="Add child label"><Plus size={14}/></button>
+        <button onClick={() => onEdit(label)} title="Edit"><Edit3 size={15}/></button>
+        <button className="danger-icon" onClick={() => onDelete(label.id)} title="Delete"><Trash2 size={15}/></button>
+      </div>
+    </div>
+    {children.map(child => <LabelTreeNode key={child.id} label={child} depth={depth + 1} byParent={byParent} usage={usage} onEdit={onEdit} onDelete={onDelete} onAddChild={onAddChild}/>)}
+  </>;
+}
+
+function TaxonomyManager({ config, onAddLabel, onEditLabel, onDeleteLabel, onCreateLabelGroup, onRenameLabelGroup, onDeleteLabelGroup, onSaveSchemaVersion, onRestoreSchemaVersion, onExportSchema, onImportSchema, labelUsageStats, previewTask }) {
+  const [newGroupName, setNewGroupName] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [groupFilter, setGroupFilter] = useState("All");
+  const fileInputRef = useRef(null);
+  const labels = config.labels || [];
+  const labelGroups = config.labelGroups || [];
+  const filtered = groupFilter === "All" ? labels : labels.filter(l => (l.groupId || "Ungrouped") === groupFilter);
+  const byParent = buildLabelTree(filtered);
+  const roots = byParent["__root__"] || [];
+  return <section className="panel config-panel labeling-interface-panel">
+    <div className="config-panel-head">
+      <div><h2>Label & Taxonomy Manager</h2><p>Build a hierarchy of labels, group them, attach attributes, and track how each one is used.</p></div>
+      <div className="taxonomy-head-actions">
+        <button className="secondary-btn" onClick={onExportSchema} title="Export label schema as JSON"><Download size={15}/> Export</button>
+        <button className="secondary-btn" onClick={() => fileInputRef.current?.click()} title="Import label schema JSON"><Upload size={15}/> Import</button>
+        <input ref={fileInputRef} type="file" accept="application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) onImportSchema(f); e.target.value = ""; }}/>
+        <button className="primary-btn" onClick={() => onAddLabel(null)}><Plus size={16}/> Add Label</button>
+      </div>
+    </div>
+
+    <div className="taxonomy-toolbar">
+      <div className="schema-version-badge"><Layers size={14}/> Schema v{config.schemaVersion || 1}</div>
+      <button className="ghost-btn" onClick={() => onSaveSchemaVersion()}><Save size={14}/> Save New Version</button>
+      <button className="ghost-btn" onClick={() => setHistoryOpen(v => !v)}><Clock3 size={14}/> Version History ({(config.schemaHistory||[]).length})</button>
+    </div>
+    {historyOpen && <div className="schema-history-list">
+      {(config.schemaHistory || []).length ? (config.schemaHistory || []).map((h,i) => <div className="schema-history-row" key={i}>
+        <div><b>v{h.version}</b><span>{h.labelCount} label{h.labelCount===1?"":"s"} · {new Date(h.savedAt).toLocaleString()}{h.note ? ` · ${h.note}` : ""}</span></div>
+        <button className="ghost-btn" onClick={() => onRestoreSchemaVersion(h)}><RotateCcw size={13}/> Restore</button>
+      </div>) : <div className="config-empty small"><Clock3 size={22}/><p>No saved versions yet. Save one before making big schema changes.</p></div>}
+    </div>}
+
+    <div className="label-group-strip">
+      <button className={groupFilter==="All"?"active":""} onClick={()=>setGroupFilter("All")}>All labels ({labels.length})</button>
+      <button className={groupFilter==="Ungrouped"?"active":""} onClick={()=>setGroupFilter("Ungrouped")}>Ungrouped ({labels.filter(l=>!l.groupId).length})</button>
+      {labelGroups.map(g => <span key={g.id} className={`label-group-chip ${groupFilter===g.id?"active":""}`}>
+        <button onClick={()=>setGroupFilter(g.id)} style={{"--chip-color":g.color}}>{g.name} ({labels.filter(l=>l.groupId===g.id).length})</button>
+        <button className="chip-x" title="Delete group" onClick={()=>onDeleteLabelGroup(g.id)}><X size={11}/></button>
+      </span>)}
+      <form className="new-group-form" onSubmit={e=>{e.preventDefault(); if(newGroupName.trim()){onCreateLabelGroup(newGroupName); setNewGroupName("");}}}>
+        <input value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} placeholder="New label group..."/>
+        <button type="submit" title="Create group"><Plus size={14}/></button>
+      </form>
+    </div>
+
+    <div className="labeling-interface-grid">
+      <div className="label-schema-list taxonomy-list">
+        {roots.length ? roots.map(label => <LabelTreeNode key={label.id} label={label} depth={0} byParent={byParent} usage={labelUsageStats||{}} onEdit={onEditLabel} onDelete={onDeleteLabel} onAddChild={onAddLabel}/>)
+          : <div className="config-empty"><Palette size={34}/><h3>No labels configured</h3><p>Add labels to make this project annotatable.</p></div>}
+      </div>
+      <div className="ui-preview-panel">
+        <span className="section-label">UI PREVIEW</span>
+        <div className="ui-preview-image">{previewTask ? <img src={previewTask.image} alt=""/> : <div className="ui-preview-empty"><ImageIcon size={26}/><span>No sample image yet</span></div>}</div>
+        <div className="ui-preview-labels"><span className="section-label">labels</span><div className="ui-preview-label-chips">{labels.length ? labels.map(l=><span key={l.id} className="preview-chip" style={{background:`${l.color}22`,color:l.color,borderColor:`${l.color}55`}}>{l.name}{l.shortcut ? ` (${l.shortcut.toUpperCase()})` : ""}</span>) : <span className="preview-chip-empty">No labels yet</span>}</div></div>
+        <div className="ui-preview-regions"><span className="section-label">usage</span><div className="taxonomy-usage-list">{labels.length ? [...labels].sort((a,b)=>(labelUsageStats?.[b.id]||0)-(labelUsageStats?.[a.id]||0)).slice(0,6).map(l=><div key={l.id} className="taxonomy-usage-row"><span className="schema-color" style={{background:l.color}}/><span>{l.name}</span><b>{labelUsageStats?.[l.id]||0}</b></div>) : <div className="ui-preview-regions-empty"><MousePointer2 size={16}/><span>Usage stats appear once annotators start working.</span></div>}</div></div>
+      </div>
+    </div>
+  </section>;
+}
+
+const PIPELINE_STAGES = ["Created", "Assigned", "Annotating", "Submitted", "QA", "Rework", "Approved", "Completed"];
+const WHEN_STATUS_OPTIONS = [
+  { id: "Pending", label: "Created / Pending" },
+  { id: "Submitted", label: "Submitted" },
+  { id: "QA Review", label: "QA Review" },
+  { id: "Rejected", label: "Rejected" },
+  { id: "Changes Requested", label: "Changes Requested" },
+  { id: "Approved", label: "Approved" }
+];
+const AUTOMATION_ACTIONS = [
+  { id: "auto_assign", label: "Auto-assign to annotator", icon: Users },
+  { id: "auto_route_qa", label: "Route to QA reviewer", icon: ShieldCheck },
+  { id: "auto_route_rework", label: "Route back for rework", icon: RotateCcw },
+  { id: "escalate", label: "Escalate", icon: AlertCircle },
+  { id: "auto_complete", label: "Auto-complete task", icon: CheckCircle2 },
+  { id: "notify", label: "Send notification only", icon: Bell }
+];
+const SUGGESTED_RULE_TEMPLATES = [
+  { name: "Auto-assign new tasks", whenStatus: "Pending", afterHours: 0, action: "auto_assign", note: "", enabled: true, blurb: "Assign unassigned tasks to the least-loaded annotator the moment they're created." },
+  { name: "Route submissions to QA", whenStatus: "Submitted", afterHours: 0, action: "auto_route_qa", note: "", enabled: true, blurb: "Send every submitted task to the least-loaded reviewer automatically." },
+  { name: "Auto rework routing", whenStatus: "Rejected", afterHours: 0, action: "auto_route_rework", note: "", enabled: true, blurb: "Send rejected tasks straight back to their annotator and reopen them." },
+  { name: "Escalate stalled QA", whenStatus: "Submitted", afterHours: 24, action: "escalate", note: "", enabled: true, blurb: "Flag the project owner if a task sits in QA for over 24 hours." },
+  { name: "Auto-complete approved work", whenStatus: "Approved", afterHours: 48, action: "auto_complete", note: "", enabled: true, blurb: "Move approved tasks to Completed after 48 hours with no further action." }
+];
+
+function pipelineStageCounts(groupTasks) {
+  return {
+    Created: groupTasks.filter(t => t.status === "Pending" && !t.assigneeId).length,
+    Assigned: groupTasks.filter(t => t.status === "Pending" && t.assigneeId).length,
+    Annotating: groupTasks.filter(t => t.status === "In Progress").length,
+    Submitted: groupTasks.filter(t => t.status === "Submitted").length,
+    QA: groupTasks.filter(t => t.status === "QA Review").length,
+    Rework: groupTasks.filter(t => ["Rejected", "Changes Requested"].includes(t.status)).length,
+    Approved: groupTasks.filter(t => t.status === "Approved").length,
+    Completed: groupTasks.filter(t => t.status === "Completed").length
+  };
+}
+
+function WorkflowAutomationPanel({ groupId, config, groupTasks, allTasks, teamMembers, onCreateRule, onUpdateRule, onDeleteRule, onAddSuggestedRule }) {
+  const rules = config.automationRules || [];
+  const groupTaskSet = new Set(groupTasks);
+  const scopedTasks = allTasks.filter(t => groupTaskSet.has(t.projectId));
+  const counts = pipelineStageCounts(scopedTasks);
+  const unusedTemplates = SUGGESTED_RULE_TEMPLATES.filter(t => !rules.some(r => r.name === t.name));
+
+  return <section className="panel config-panel automation-panel">
+    <div className="config-panel-head"><div><h2>Workflow Automation</h2><p>Automate assignment, QA routing, rework, escalation and notifications as tasks move through the pipeline.</p></div><Zap size={20}/></div>
+
+    <div className="pipeline-diagram">
+      {PIPELINE_STAGES.map((stage, i) => <React.Fragment key={stage}>
+        <div className="pipeline-stage"><b>{counts[stage] || 0}</b><span>{stage}</span></div>
+        {i < PIPELINE_STAGES.length - 1 && <i className="pipeline-arrow">→</i>}
+      </React.Fragment>)}
+    </div>
+
+    <div className="automation-rules-head"><h3>Automation Rules ({rules.length})</h3><button className="primary-btn" onClick={() => onCreateRule(groupId)}><Plus size={15}/> New Rule</button></div>
+
+    {rules.length ? <div className="automation-rules-list">
+      {rules.map(rule => <AutomationRuleRow key={rule.id} rule={rule} teamMembers={teamMembers} onUpdate={(patch) => onUpdateRule(groupId, rule.id, patch)} onDelete={() => onDeleteRule(groupId, rule.id)}/>)}
+    </div> : <div className="config-empty"><Workflow size={34}/><h3>No automation rules yet</h3><p>Add a rule manually, or start from a suggested template below.</p></div>}
+
+    {!!unusedTemplates.length && <div className="automation-templates">
+      <span className="section-label">SUGGESTED RULES</span>
+      <div className="automation-template-grid">
+        {unusedTemplates.map(t => <div className="automation-template-card" key={t.name}>
+          <b>{t.name}</b><p>{t.blurb}</p>
+          <button className="ghost-btn" onClick={() => onAddSuggestedRule(groupId, { name: t.name, enabled: t.enabled, whenStatus: t.whenStatus, afterHours: t.afterHours, action: t.action, note: t.note })}><Plus size={13}/> Add</button>
+        </div>)}
+      </div>
+    </div>}
+  </section>;
+}
+
+function AutomationRuleRow({ rule, teamMembers, onUpdate, onDelete }) {
+  const ActionIcon = AUTOMATION_ACTIONS.find(a => a.id === rule.action)?.icon || Zap;
+  return <div className={`automation-rule-row ${rule.enabled ? "" : "disabled"}`}>
+    <button type="button" className={`switch-btn ${rule.enabled ? "on" : ""}`} onClick={() => onUpdate({ enabled: !rule.enabled })} title={rule.enabled ? "Disable rule" : "Enable rule"}><i/></button>
+    <input className="rule-name-input" value={rule.name} onChange={e => onUpdate({ name: e.target.value })} placeholder="Rule name"/>
+    <div className="rule-condition">
+      <span>When status is</span>
+      <select value={rule.whenStatus} onChange={e => onUpdate({ whenStatus: e.target.value })}>{WHEN_STATUS_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+      <input type="number" min="0" className="rule-hours-input" value={rule.afterHours || 0} onChange={e => onUpdate({ afterHours: Math.max(0, Number(e.target.value) || 0) })} title="Hours to wait before firing (0 = immediately)"/>
+      <span>hr{rule.afterHours === 1 ? "" : "s"} later</span>
+    </div>
+    <div className="rule-action"><ActionIcon size={14}/><select value={rule.action} onChange={e => onUpdate({ action: e.target.value })}>{AUTOMATION_ACTIONS.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}</select></div>
+    {rule.action === "notify" && <input className="rule-note-input" value={rule.note || ""} onChange={e => onUpdate({ note: e.target.value })} placeholder="Notification message"/>}
+    <button className="danger-icon" onClick={onDelete} title="Delete rule"><Trash2 size={15}/></button>
+  </div>;
+}
+
+function LabelEditorModal({editing,form,setForm,onClose,onSave,error,allLabels,editingLabelId,labelGroups}) {
+  const parentOptions = (allLabels||[]).filter(l => l.id !== editingLabelId);
+  const addAttribute = () => setForm({ ...form, attributes: [...(form.attributes||[]), { id: `attr-${Date.now()}`, name: "", type: "Text", options: "", required: false }] });
+  const updateAttribute = (id, patch) => setForm({ ...form, attributes: (form.attributes||[]).map(a => a.id === id ? { ...a, ...patch } : a) });
+  const removeAttribute = (id) => setForm({ ...form, attributes: (form.attributes||[]).filter(a => a.id !== id) });
+  return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}>
+    <div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
+    <div className="label-editor-form">
+      <label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label>
+      <label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label>
+      <label><span>PARENT LABEL</span><select value={form.parentId||""} onChange={e=>setForm({...form,parentId:e.target.value})}><option value="">No parent (top-level)</option>{parentOptions.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
+      <label><span>LABEL GROUP</span><select value={form.groupId||""} onChange={e=>setForm({...form,groupId:e.target.value})}><option value="">Ungrouped</option>{(labelGroups||[]).map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
+      <label><span>KEYBOARD SHORTCUT</span><input maxLength={1} value={form.shortcut||""} onChange={e=>setForm({...form,shortcut:e.target.value.slice(0,1)})} placeholder="e.g. 1"/><small className="field-hint">Single key to select this label while annotating. V, B, P, L, K, G, R, E and Space are reserved for tools.</small></label>
+      <label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label>
+      <div className="attribute-editor">
+        <div className="attribute-editor-head"><span>ATTRIBUTES</span><button type="button" className="ghost-btn" onClick={addAttribute}><Plus size={13}/> Add Attribute</button></div>
+        {(form.attributes||[]).length ? (form.attributes||[]).map(attr => <div className="attribute-row" key={attr.id}>
+          <input value={attr.name} onChange={e=>updateAttribute(attr.id,{name:e.target.value})} placeholder="Attribute name"/>
+          <select value={attr.type} onChange={e=>updateAttribute(attr.id,{type:e.target.value})}>{ATTRIBUTE_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
+          {attr.type === "Select" && <input value={attr.options||""} onChange={e=>updateAttribute(attr.id,{options:e.target.value})} placeholder="option1, option2, ..."/>}
+          <label className="attribute-required"><input type="checkbox" checked={!!attr.required} onChange={e=>updateAttribute(attr.id,{required:e.target.checked})}/> Required</label>
+          <button type="button" className="danger-icon" onClick={()=>removeAttribute(attr.id)}><Trash2 size={14}/></button>
+        </div>) : <p className="attribute-empty">No attributes yet — add one for extra metadata annotators must fill in (e.g. color, occlusion, condition).</p>}
+      </div>
+      {error && <div className="form-error"><AlertCircle size={14}/> {error}</div>}
+    </div>
+    <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div>
+  </form></div>;
+}
 
 function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onTaskSettings,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
   const [activeCategory, setActiveCategory] = useState(null);
