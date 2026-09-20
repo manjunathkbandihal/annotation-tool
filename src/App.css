@@ -462,3 +462,93 @@ body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);backgroun
   .workstation-back{font-size:0;padding:0 8px}
   .workstation-back svg{margin:0}
 }
+
+/* ===== Build 32 — Label & Taxonomy Manager ===== */
+.taxonomy-head-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.taxonomy-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
+.schema-version-badge{display:flex;align-items:center;gap:6px;background:#eef2ff;color:#4338ca;border:1px solid #e0e4fb;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700}
+.ghost-btn{height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line);background:#fff;font-size:11px;font-weight:600;color:#485463;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.ghost-btn:hover{border-color:#c7d2e0;color:#2563eb}
+
+.schema-history-list{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fafbfd}
+.schema-history-row{display:flex;align-items:center;justify-content:space-between;padding:7px 8px;border-radius:7px}
+.schema-history-row:hover{background:#fff}
+.schema-history-row div{display:flex;flex-direction:column;gap:2px}
+.schema-history-row b{font-size:12px}
+.schema-history-row span{font-size:10.5px;color:#8b96a4}
+.config-empty.small{padding:16px}
+
+.label-group-strip{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.label-group-strip > button{height:28px;padding:0 11px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:10.5px;font-weight:600;color:#5b6675;cursor:pointer}
+.label-group-strip > button.active{background:#1f2937;border-color:#1f2937;color:#fff}
+.label-group-chip{display:inline-flex;align-items:center;border-radius:20px;border:1px solid var(--line);overflow:hidden}
+.label-group-chip button:first-child{height:28px;padding:0 10px;border:0;background:#fff;font-size:10.5px;font-weight:600;color:var(--chip-color,#5b6675);cursor:pointer;border-left:3px solid var(--chip-color,#cbd5e1)}
+.label-group-chip.active button:first-child{background:#f1f4f8}
+.label-group-chip .chip-x{width:20px;height:28px;border:0;background:#fff;color:#9aa4b2;cursor:pointer;border-left:1px solid var(--line)}
+.label-group-chip .chip-x:hover{color:#dc2626}
+.new-group-form{display:flex;align-items:center;gap:4px}
+.new-group-form input{height:28px;border-radius:20px;border:1px dashed #c7d2e0;padding:0 12px;font-size:10.5px;width:140px}
+.new-group-form button{width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#5b6675}
+.new-group-form button:hover{color:#2563eb;border-color:#2563eb}
+
+.taxonomy-list{padding:4px 0}
+.taxonomy-row{position:relative;display:flex;align-items:center;gap:10px}
+.taxonomy-tree-connector{color:#c7d2e0;font-size:13px;margin-right:-4px}
+.taxonomy-shortcut{background:#1f2937;color:#fff;font-family:ui-monospace,monospace}
+.taxonomy-usage{font-size:9.5px;color:#8b96a4;white-space:nowrap;padding:2px 8px;border-radius:20px;background:#f1f4f8;flex:none}
+.taxonomy-usage-list{display:flex;flex-direction:column;gap:6px}
+.taxonomy-usage-row{display:flex;align-items:center;gap:8px;font-size:11px;color:#485463}
+.taxonomy-usage-row b{margin-left:auto;color:#1f2937}
+.taxonomy-usage-row .schema-color{width:9px;height:9px;border-radius:3px;flex:none}
+
+.field-hint{display:block;font-size:9.5px;color:#8b96a4;margin-top:4px;font-weight:400}
+.attribute-editor{border-top:1px solid var(--line);padding-top:12px;margin-top:6px}
+.attribute-editor-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.attribute-editor-head > span{font-size:10.5px;font-weight:700;color:#8b96a4;letter-spacing:.4px}
+.attribute-row{display:grid;grid-template-columns:1.2fr 0.9fr 1fr auto auto;gap:6px;align-items:center;margin-bottom:6px}
+.attribute-row input,.attribute-row select{height:32px;border-radius:7px;border:1px solid var(--line);padding:0 9px;font-size:11.5px}
+.attribute-required{display:flex;align-items:center;gap:5px;font-size:10px;color:#5b6675;white-space:nowrap}
+.attribute-empty{font-size:11px;color:#8b96a4;margin:0}
+.form-error{display:flex;align-items:center;gap:6px;color:#dc2626;font-size:11px;background:#fef2f2;border:1px solid #f3cfcf;border-radius:7px;padding:8px 10px;margin-top:8px}
+
+@media(max-width:700px){
+  .attribute-row{grid-template-columns:1fr}
+  .taxonomy-toolbar{flex-direction:column;align-items:flex-start}
+}
+
+/* ===== Build 33 — Workflow Automation ===== */
+.pipeline-diagram{display:flex;align-items:stretch;gap:6px;overflow-x:auto;margin:16px 0 22px;padding-bottom:4px}
+.pipeline-stage{flex:none;min-width:84px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;text-align:center;background:#fafbfd}
+.pipeline-stage b{display:block;font-size:19px;color:#1f2937;line-height:1.1}
+.pipeline-stage span{display:block;margin-top:3px;font-size:9px;font-weight:700;letter-spacing:.4px;color:#8b96a4;text-transform:uppercase}
+.pipeline-arrow{flex:none;align-self:center;color:#c7d2e0;font-size:16px}
+
+.automation-rules-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
+.automation-rules-head h3{font-size:13px;margin:0}
+.automation-rules-list{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+.automation-rule-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:9px 12px;flex-wrap:wrap;background:#fff}
+.automation-rule-row.disabled{opacity:.55}
+.switch-btn{width:34px;height:19px;border-radius:20px;border:1px solid var(--line);background:#e5e9ee;position:relative;flex:none;cursor:pointer;padding:0}
+.switch-btn i{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.2);transition:transform .15s}
+.switch-btn.on{background:#16a34a;border-color:#16a34a}
+.switch-btn.on i{transform:translateX(15px)}
+.rule-name-input{height:32px;border-radius:7px;border:1px solid var(--line);padding:0 9px;font-size:11.5px;font-weight:600;width:150px;flex:none}
+.rule-condition{display:flex;align-items:center;gap:6px;font-size:10.5px;color:#5b6675;flex-wrap:wrap}
+.rule-condition select{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:10.5px}
+.rule-hours-input{width:48px;height:30px;border-radius:7px;border:1px solid var(--line);padding:0 6px;font-size:10.5px;text-align:center}
+.rule-action{display:flex;align-items:center;gap:6px;color:#5b6675;margin-left:auto}
+.rule-action select{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:10.5px}
+.rule-note-input{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 9px;font-size:10.5px;width:160px}
+
+.automation-templates{border-top:1px solid var(--line);padding-top:14px}
+.automation-template-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:10px}
+.automation-template-card{border:1px dashed #c7d2e0;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:6px;background:#fafbfd}
+.automation-template-card b{font-size:11.5px}
+.automation-template-card p{font-size:10.5px;color:#8b96a4;margin:0;line-height:1.4}
+.automation-template-card .ghost-btn{align-self:flex-start}
+
+@media(max-width:760px){
+  .automation-rule-row{flex-direction:column;align-items:flex-start}
+  .rule-action{margin-left:0}
+  .rule-name-input{width:100%}
+}
