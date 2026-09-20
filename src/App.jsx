@@ -296,7 +296,9 @@ function App() {
       { key: "tasks", label: "Images", table: "tasks", rows: () => tasks.map(t => ({
           id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name,
           status: t.status || "Pending", image: t.image || null, size: t.size || null,
-          source: t.source || "Sample", due_date: t.dueDate || null, created_at: t.createdAt || new Date().toISOString()
+          source: t.source || "Sample", due_date: t.dueDate || null, assignee_id: t.assigneeId || null,
+          reviewer_id: t.reviewerId || null, priority: t.priority || null, queue: t.queue || null,
+          created_at: t.createdAt || new Date().toISOString()
         })) },
       { key: "annotations", label: "Annotations", table: "annotations", rows: () => {
           const rows = [];
@@ -389,10 +391,10 @@ function App() {
     return { id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "", version: d.version || 1, stage: d.stage || "Draft", version_history: d.versionHistory || [], status: d.status || "Active", created_at: d.createdAt || new Date().toISOString() };
   }
   function taskFromRow(t) {
-    return { id: t.id, projectId: t.project_id || "", datasetId: t.dataset_id || "", name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", dueDate: t.due_date || null, createdAt: t.created_at || new Date().toISOString() };
+    return { id: t.id, projectId: t.project_id || "", datasetId: t.dataset_id || "", name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", dueDate: t.due_date || null, assigneeId: t.assignee_id || null, reviewerId: t.reviewer_id || null, priority: t.priority || null, queue: t.queue || null, createdAt: t.created_at || new Date().toISOString() };
   }
   function taskToRow(t) {
-    return { id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", due_date: t.dueDate || null, created_at: t.createdAt || new Date().toISOString() };
+    return { id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", due_date: t.dueDate || null, assignee_id: t.assigneeId || null, reviewer_id: t.reviewerId || null, priority: t.priority || null, queue: t.queue || null, created_at: t.createdAt || new Date().toISOString() };
   }
   function memberFromRow(m) {
     return { id: m.id, name: m.name, email: m.email || "", role: m.role || "Annotator", status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qaScore: m.qa_score ?? 100 };
@@ -1200,9 +1202,14 @@ function App() {
         if (payload.eventType === "DELETE") { setTasks(prev => prev.filter(t => t.id !== payload.old.id)); return; }
         const row = payload.new;
         const mapped = { id: row.id, projectId: row.project_id, datasetId: row.dataset_id, name: row.name, status: row.status, image: row.image, size: row.size, source: row.source, createdAt: row.created_at };
-        // Only touch dueDate if the cloud row actually carries a due_date column — otherwise
-        // leave any locally-set due date alone instead of wiping it with undefined.
+        // Only touch columns that actually came back from the cloud row — otherwise
+        // leave any locally-set value alone instead of wiping it with undefined,
+        // which matters for fields whose columns may not exist yet on every deployment.
         if (row.due_date !== undefined) mapped.dueDate = row.due_date;
+        if (row.assignee_id !== undefined) mapped.assigneeId = row.assignee_id;
+        if (row.reviewer_id !== undefined) mapped.reviewerId = row.reviewer_id;
+        if (row.priority !== undefined) mapped.priority = row.priority;
+        if (row.queue !== undefined) mapped.queue = row.queue;
         setTasks(prev => prev.some(t => t.id === mapped.id) ? prev.map(t => t.id === mapped.id ? { ...t, ...mapped } : t) : [...prev, mapped]);
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "project_groups" }, (payload) => {
@@ -1333,7 +1340,7 @@ function App() {
       if (!target) return;
       const idx = next.findIndex(t => t.id === task.id);
       if (idx >= 0) next[idx] = { ...next[idx], assigneeId: target.id, priority: next[idx].priority || "MEDIUM", queue: next[idx].queue || "Now", status: "In Progress" };
-      syncUpdate("tasks", task.id, { status: "In Progress" });
+      syncUpdate("tasks", task.id, { status: "In Progress", assignee_id: target.id, priority: next[idx]?.priority || "MEDIUM", queue: next[idx]?.queue || "Now" });
       counts[target.id] = (counts[target.id] || 0) + 1;
     });
     setTasks(next);
@@ -2336,8 +2343,10 @@ function App() {
 
   function deleteMember(member) {
     if (member.id === "m1") return;
+    const affected = tasks.filter(t => t.assigneeId === member.id).map(t => t.id);
     setTeamMembers(prev => prev.filter(m => m.id !== member.id));
     setTasks(prev => prev.map(t => t.assigneeId === member.id ? { ...t, assigneeId: null } : t));
+    affected.forEach(id => syncUpdate("tasks", id, { assignee_id: null }));
     syncDelete("team_members", member.id);
     setTeamMessage(`${member.name} removed from the workspace`);
     setTimeout(() => setTeamMessage(""), 2600);
@@ -2347,8 +2356,9 @@ function App() {
     const prevTask = tasks.find(t => t.id === taskId);
     const nextTaskStatus = memberId && prevTask?.status === "Pending" ? "In Progress" : prevTask?.status;
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigneeId: memberId || null, status: memberId && t.status === "Pending" ? "In Progress" : t.status } : t));
-    // Note: assigneeId isn't in the current tasks table schema, so only the status change syncs to cloud.
-    if (nextTaskStatus && nextTaskStatus !== prevTask?.status) syncUpdate("tasks", taskId, { status: nextTaskStatus });
+    const syncPatch = { assignee_id: memberId || null };
+    if (nextTaskStatus && nextTaskStatus !== prevTask?.status) syncPatch.status = nextTaskStatus;
+    syncUpdate("tasks", taskId, syncPatch);
     const member = teamMembers.find(m => m.id === memberId);
     logAudit(member ? "Task Assigned" : "Task Unassigned", taskId, tasks.find(t=>t.id===taskId)?.projectId, member ? `Assigned to ${member.name}.` : "Assignment cleared.");
     setTeamMessage(member ? `Task assigned to ${member.name}` : "Task assignment cleared");
@@ -2376,14 +2386,18 @@ function App() {
 
   function savePlannerAssignments() {
     if (!plannerAssignmentTaskIds.length) { flashPlanner("Select at least one task"); return; }
-    // Note: assigneeId/reviewerId/priority/queue aren't in the current tasks table
-    // schema, so only the status change syncs to cloud until those columns exist.
     setTasks(prev => prev.map(task => {
       if (!plannerAssignmentTaskIds.includes(task.id)) return task;
       let status = task.status;
       if (plannerAssignmentAssignee && status === "Pending") status = "In Progress";
       if (!plannerAssignmentAssignee && status === "In Progress") status = "Pending";
-      if (status !== task.status) syncUpdate("tasks", task.id, { status });
+      syncUpdate("tasks", task.id, {
+        assignee_id: plannerAssignmentAssignee || null,
+        reviewer_id: plannerAssignmentReviewer || null,
+        priority: plannerAssignmentPriority,
+        queue: plannerAssignmentQueue,
+        ...(status !== task.status ? { status } : {})
+      });
       return {
         ...task,
         assigneeId: plannerAssignmentAssignee || null,
@@ -2614,6 +2628,7 @@ function App() {
         const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.reviewerId === m.id && ["Submitted", "QA Review"].includes(t.status)).length]));
         const target = [...pool].sort((a, b) => (counts[a.id] || 0) - (counts[b.id] || 0))[0];
         setTasks(prev => prev.map(t => t.id === task.id ? { ...t, reviewerId: target.id } : t));
+        syncUpdate("tasks", task.id, { reviewer_id: target.id });
         logAudit("Task Routed to QA", task.id, task.projectId, `Routed to reviewer ${target.name} by rule "${rule.name}".`);
         pushNotification("QA", "Routed for review", `${task.name} was routed to ${target.name} for QA by rule "${rule.name}".`, task.projectId, task.id);
         break;
