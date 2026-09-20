@@ -705,6 +705,9 @@ function App() {
     schemaVersion: 1,
     schemaHistory: [],
     automationRules: [],
+    annotatorSlaHours: 24,
+    reviewerSlaHours: 12,
+    escalateAfterHours: 24,
     requireQa: true, allowAnnotatorSubmit: true, autoSave: true, defaultReviewer: "", maxTasksPerAnnotator: 10,
     instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality.",
     color: labelPalette[0],
@@ -1881,10 +1884,10 @@ function App() {
     changeTask(1);
   }
 
-  function openWorkstation(projectId, mode = "Annotation") {
+  function openWorkstation(projectId, mode = "Annotation", taskId = null) {
     if (projectId) setWorkspaceProject(projectId);
-    const first = tasks.findIndex(t => !projectId || t.projectId === projectId);
-    if (first >= 0) setSelectedTaskIndex(first);
+    const idx = taskId ? tasks.findIndex(t => t.id === taskId) : tasks.findIndex(t => !projectId || t.projectId === projectId);
+    if (idx >= 0) setSelectedTaskIndex(idx);
     setWorkstationMode(mode);
     setSelectedAnnotationId(null);
     setDrawing(null);
@@ -2437,7 +2440,7 @@ function App() {
 
   const navItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers],
-    ["Team", Users], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
+    ["Team", Users], ["Deadlines", Calendar], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
     ["Settings", Settings]
   ];
 
@@ -2684,6 +2687,111 @@ function App() {
     return () => clearInterval(id);
   }, [tasks, projectConfigs, auditEvents]);
 
+  // ---- Build 34: SLA & Deadline Management ----
+  const OPEN_TASK_STATUSES = ["Pending", "In Progress", "Submitted", "QA Review", "Rejected", "Changes Requested"];
+  function getGroupConfig(groupId) { return projectConfigs[groupId] || makeDefaultProjectConfig({ id: groupId }); }
+  function taskSlaHours(task, config) { return ["Submitted", "QA Review"].includes(task.status) ? (config.reviewerSlaHours ?? 12) : (config.annotatorSlaHours ?? 24); }
+  function taskDeadline(task) {
+    if (!OPEN_TASK_STATUSES.includes(task.status)) return null;
+    if (task.dueDate) return new Date(task.dueDate).getTime();
+    const config = getGroupConfig(getGroupIdForTask(task));
+    const since = new Date(getTaskStatusSince(task)).getTime();
+    return since + taskSlaHours(task, config) * 3600000;
+  }
+  function taskHoursOverdue(task) { const dl = taskDeadline(task); return dl === null ? 0 : Math.max(0, (Date.now() - dl) / 3600000); }
+  function taskAgingHours(task) { return Math.max(0, (Date.now() - new Date(getTaskStatusSince(task)).getTime()) / 3600000); }
+  function setTaskDueDate(taskId, dateStr) {
+    // Note: task-level due dates aren't a column in the current tasks table schema yet, so this stays local-only for now.
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, dueDate: dateStr || null } : t));
+  }
+  function escalateTaskNow(task) {
+    const groupId = getGroupIdForTask(task);
+    const group = projectGroups.find(g => g.id === groupId);
+    const owner = teamMembers.find(m => m.id === group?.ownerId);
+    logAudit("Task Escalated", task.id, task.projectId, "Manually escalated from the Deadlines dashboard.");
+    pushNotification("Alert", "Task escalated", `${task.name} was escalated${owner ? ` to ${owner.name}` : ""}.`, task.projectId, task.id);
+  }
+
+  const slaAlertedRef = useRef(new Set());
+  const slaEscalatedRef = useRef(new Set());
+  useEffect(() => {
+    const check = () => {
+      tasks.forEach(task => {
+        if (!OPEN_TASK_STATUSES.includes(task.status)) return;
+        const groupId = getGroupIdForTask(task);
+        const config = getGroupConfig(groupId);
+        const overdueHours = taskHoursOverdue(task);
+        if (overdueHours <= 0) return;
+        const since = getTaskStatusSince(task);
+        const alertKey = `${task.id}:${since}`;
+        if (!slaAlertedRef.current.has(alertKey)) {
+          slaAlertedRef.current.add(alertKey);
+          logAudit("Task Overdue", task.id, task.projectId, `Passed its SLA deadline (${taskSlaHours(task, config)}h target).`);
+          pushNotification("Alert", "SLA breached", `${task.name} is now overdue.`, task.projectId, task.id);
+        }
+        const escalateAfter = config.escalateAfterHours ?? 24;
+        if (overdueHours >= escalateAfter) {
+          const escKey = `${alertKey}:esc`;
+          if (!slaEscalatedRef.current.has(escKey)) {
+            slaEscalatedRef.current.add(escKey);
+            const group = projectGroups.find(g => g.id === groupId);
+            const owner = teamMembers.find(m => m.id === group?.ownerId);
+            logAudit("Task Escalated", task.id, task.projectId, `Escalated — ${overdueHours.toFixed(1)}h past its SLA deadline.`);
+            pushNotification("Alert", "Task escalated (SLA)", `${task.name} is ${overdueHours.toFixed(1)}h overdue${owner ? ` — escalated to ${owner.name}` : ""}.`, task.projectId, task.id);
+          }
+        }
+      });
+      projects.forEach(p => {
+        if (!p.dueDate) return;
+        const total = Number(p.totalImages) || 0, completed = Number(p.completedImages) || 0;
+        if (total && completed >= total) return;
+        if (Date.now() <= new Date(p.dueDate).getTime()) return;
+        const key = `project:${p.id}:${p.dueDate}`;
+        if (slaAlertedRef.current.has(key)) return;
+        slaAlertedRef.current.add(key);
+        logAudit("Project Overdue", null, p.id, `Passed its due date (${p.dueDate}).`);
+        pushNotification("Alert", "Project deadline passed", `${p.name} passed its due date and isn't complete yet.`, p.id, null);
+      });
+    };
+    check();
+    const id = setInterval(check, 120000);
+    return () => clearInterval(id);
+  }, [tasks, projects, projectConfigs]);
+
+  const deadlineOverview = useMemo(() => {
+    const now = Date.now();
+    const rows = tasks.filter(t => OPEN_TASK_STATUSES.includes(t.status)).map(t => {
+      const groupId = getGroupIdForTask(t);
+      const config = getGroupConfig(groupId);
+      const deadline = taskDeadline(t);
+      const overdueHours = deadline !== null ? Math.max(0, (now - deadline) / 3600000) : 0;
+      const agingHours = taskAgingHours(t);
+      return { task: t, groupId, deadline, overdueHours, agingHours, isOverdue: deadline !== null && now > deadline, slaHours: taskSlaHours(t, config) };
+    });
+    const overdue = rows.filter(r => r.isOverdue).sort((a, b) => b.overdueHours - a.overdueHours);
+    const dueToday = rows.filter(r => !r.isOverdue && r.deadline && (r.deadline - now) <= 24 * 3600000);
+    const dueWeek = rows.filter(r => !r.isOverdue && r.deadline && (r.deadline - now) <= 7 * 24 * 3600000);
+    const agingBuckets = [
+      { label: "0–24h", count: rows.filter(r => r.agingHours < 24).length },
+      { label: "24–48h", count: rows.filter(r => r.agingHours >= 24 && r.agingHours < 48).length },
+      { label: "48–72h", count: rows.filter(r => r.agingHours >= 48 && r.agingHours < 72).length },
+      { label: "72h+", count: rows.filter(r => r.agingHours >= 72).length }
+    ];
+    let compliant = 0, measured = 0;
+    tasks.filter(t => ["Approved", "Completed"].includes(t.status)).forEach(t => {
+      const submitEvt = auditEvents.find(e => e.taskId === t.id && e.action === "Task Submitted");
+      const approveEvt = auditEvents.find(e => e.taskId === t.id && e.action === "QA Approved");
+      if (!submitEvt || !approveEvt) return;
+      measured++;
+      const config = getGroupConfig(getGroupIdForTask(t));
+      const hoursTaken = (new Date(approveEvt.timestamp) - new Date(submitEvt.timestamp)) / 3600000;
+      if (hoursTaken <= (config.reviewerSlaHours ?? 12)) compliant++;
+    });
+    const slaCompliance = measured ? Math.round((compliant / measured) * 100) : null;
+    const upcomingProjects = projects.filter(p => p.dueDate).map(p => ({ project: p, daysLeft: Math.ceil((new Date(p.dueDate).getTime() - now) / 86400000), progress: progressOf(p) })).sort((a, b) => a.daysLeft - b.daysLeft);
+    return { rows, overdue, dueToday, dueWeek, agingBuckets, slaCompliance, measured, upcomingProjects };
+  }, [tasks, projects, projectConfigs, projectGroups, auditEvents]);
+
 
   if (authLoading) {
     return <div className="auth-loading-screen"><div className="brand-mark"><Grid3X3 size={22}/></div><RefreshCw size={20} className="mig-spin"/><span>Loading AnnotatePro...</span></div>;
@@ -2816,6 +2924,7 @@ function App() {
         {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} canReview={canReview} /> }
         {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} />}
         {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
+        {activePage === "Deadlines" && <DeadlinesPage overview={deadlineOverview} projects={projects} teamMembers={teamMembers} onSetTaskDueDate={setTaskDueDate} onEscalate={escalateTaskNow} onOpenTask={(task) => openWorkstation(task.projectId, task.status === "Submitted" || task.status === "QA Review" ? "Review" : "Annotation", task.id)} />}
         {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
         {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
         {activePage === "Task Settings" && taskSettingsTask && <TaskSettingsPage
@@ -3237,7 +3346,7 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
   return <div className="page project-config-page">
     <div className="page-head"><div><button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {project?.name || "Projects"}</button><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div></div>
     <div className="config-overview"><div className="config-project-icon" style={{background:project?.color?`${project.color}22`:undefined,color:project?.color||undefined}}><GroupIcon size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{groupTaskIds.length} task{groupTaskIds.length===1?"":"s"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
-    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Automation"?"active":""} onClick={()=>setTab("Automation")}><Zap size={16}/> Automation</button></div>
+    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Automation"?"active":""} onClick={()=>setTab("Automation")}><Zap size={16}/> Automation</button><button className={tab==="SLA"?"active":""} onClick={()=>setTab("SLA")}><Calendar size={16}/> SLA & Deadlines</button></div>
 
     {tab === "General" && <section className="panel config-panel general-settings-panel">
       <div className="config-panel-head"><div><h2>General Settings</h2><p>Basic identity and task-ordering rules for this project.</p></div><SlidersHorizontal size={20}/></div>
@@ -3279,6 +3388,15 @@ function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setCo
 
     {tab === "Workflow" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Annotation workflow</h2><p>Control how tasks move from annotation to quality review.</p></div><CheckSquare size={20}/></div><div className="workflow-settings"><SettingToggle title="Require QA review" text="Every submitted task enters the QA Review queue before approval." checked={config.requireQa} onChange={v=>onUpdateConfig({requireQa:v})}/><SettingToggle title="Allow annotators to submit" text="Annotators can submit completed tasks directly for review." checked={config.allowAnnotatorSubmit} onChange={v=>onUpdateConfig({allowAnnotatorSubmit:v})}/><SettingToggle title="Auto-save annotations" text="Persist annotation changes locally while the task is being edited." checked={config.autoSave} onChange={v=>onUpdateConfig({autoSave:v})}/></div><div className="workflow-grid"><label><span>DEFAULT REVIEWER</span><select value={config.defaultReviewer||""} onChange={e=>onUpdateConfig({defaultReviewer:e.target.value})}>{reviewers.map(r=><option key={r} value={r}>{r || "No default reviewer"}</option>)}</select></label><label><span>MAX TASKS / ANNOTATOR</span><input type="number" min="1" max="1000" value={config.maxTasksPerAnnotator||10} onChange={e=>onUpdateConfig({maxTasksPerAnnotator:Number(e.target.value)||1})}/></label></div><div className="workflow-stages"><span>WORKFLOW</span><div><b>Pending</b><i>→</i><b>In Progress</b><i>→</i><b>Submitted</b><i>→</i><b>QA Review</b><i>→</i><b>Approved</b></div></div></section>}
     {tab === "Automation" && <WorkflowAutomationPanel groupId={configProject} config={config} groupTasks={(flatProjects.filter(p=>p.groupId===configProject).map(p=>p.id))} allTasks={tasks} teamMembers={teamMembers} onCreateRule={onCreateRule} onUpdateRule={onUpdateRule} onDeleteRule={onDeleteRule} onAddSuggestedRule={onAddSuggestedRule}/>}
+    {tab === "SLA" && <section className="panel config-panel">
+      <div className="config-panel-head"><div><h2>SLA & Deadlines</h2><p>Set turnaround targets for annotators and reviewers, and how long a breach waits before escalating.</p></div><Calendar size={20}/></div>
+      <div className="workflow-grid">
+        <label><span>ANNOTATOR SLA (HOURS)</span><input type="number" min="1" value={config.annotatorSlaHours ?? 24} onChange={e=>onUpdateConfig({annotatorSlaHours:Math.max(1,Number(e.target.value)||1)})}/><small className="field-hint">Target turnaround for a task from assignment to submission.</small></label>
+        <label><span>REVIEWER SLA (HOURS)</span><input type="number" min="1" value={config.reviewerSlaHours ?? 12} onChange={e=>onUpdateConfig({reviewerSlaHours:Math.max(1,Number(e.target.value)||1)})}/><small className="field-hint">Target turnaround for QA review after submission.</small></label>
+        <label><span>ESCALATE AFTER (HOURS PAST SLA)</span><input type="number" min="1" value={config.escalateAfterHours ?? 24} onChange={e=>onUpdateConfig({escalateAfterHours:Math.max(1,Number(e.target.value)||1)})}/><small className="field-hint">How long a task can stay overdue before it's automatically escalated to the project owner.</small></label>
+      </div>
+      <div className="config-empty small"><Calendar size={22}/><p>Individual task due dates can be set from the Deadlines dashboard. Project-level due dates are set when editing a project.</p></div>
+    </section>}
     {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
     {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>{setLabelEditorOpen(false); setLabelSchemaError("");}} onSave={onSaveLabel} error={labelSchemaError} allLabels={config.labels} editingLabelId={editingLabelId} labelGroups={config.labelGroups||[]}/>} 
   </div>;
@@ -4244,6 +4362,54 @@ function OperationsPage({projects,tasks,teamMembers,qaReviews,exportHistory,sear
     </div>
   </div>;
 }
+
+function DeadlinesPage({ overview, projects, teamMembers, onSetTaskDueDate, onEscalate, onOpenTask }) {
+  const { overdue, dueToday, dueWeek, agingBuckets, slaCompliance, measured, upcomingProjects } = overview;
+  const maxAging = Math.max(1, ...agingBuckets.map(b => b.count));
+  const projectName = id => projects.find(p => p.id === id)?.name || "—";
+  const memberName = id => teamMembers.find(m => m.id === id)?.name || "Unassigned";
+  return <div className="page deadlines-page">
+    <div className="page-head"><div><span className="eyebrow">SLA & DEADLINE MANAGEMENT</span><h1>Deadlines</h1><p>Track project and task deadlines, SLA compliance, aging and escalations across your workspace.</p></div></div>
+
+    <div className="stats-grid deadlines-stats">
+      <StatCard icon={AlertCircle} label="Overdue Tasks" value={overdue.length} meta="Past their SLA or due date"/>
+      <StatCard icon={Clock3} label="Due Today" value={dueToday.length} meta="Within the next 24 hours"/>
+      <StatCard icon={Calendar} label="Due This Week" value={dueWeek.length} meta="Within the next 7 days"/>
+      <StatCard icon={ShieldCheck} label="SLA Compliance" value={slaCompliance === null ? "—" : `${slaCompliance}%`} meta={measured ? `${measured} reviewed task${measured===1?"":"s"} measured` : "No reviewed tasks yet"}/>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Aging Report</h2><p>How long open tasks have sat in their current stage</p></div></div>
+        <div className="trend-chart"><div className="chart-y"><span>{maxAging}</span><span>{Math.round(maxAging*0.75)}</span><span>{Math.round(maxAging*0.5)}</span><span>{Math.round(maxAging*0.25)}</span><span>0</span></div><div className="chart-bars">{agingBuckets.map(b=><div className="chart-bar-wrap" key={b.label}><div className="chart-bar" style={{height:`${Math.max(6,(b.count/maxAging)*100)}%`}}></div><span>{b.label}</span></div>)}</div></div>
+      </section>
+      <section className="panel deadlines-upcoming-panel">
+        <div className="panel-head"><div><h2>Upcoming Project Deadlines</h2><p>Sorted by soonest due date</p></div></div>
+        <div className="upcoming-deadlines-list">
+          {upcomingProjects.length ? upcomingProjects.slice(0,6).map(u => <div className="upcoming-deadline-row" key={u.project.id}>
+            <div><b>{u.project.name}</b><span>{new Date(u.project.dueDate).toLocaleDateString()}</span></div>
+            <div className="upcoming-progress"><div className="progress-track"><i style={{width:`${u.progress}%`}}/></div><small>{u.progress}%</small></div>
+            <span className={`days-left-badge ${u.daysLeft<0?"overdue":u.daysLeft<=3?"soon":""}`}>{u.daysLeft<0?`${Math.abs(u.daysLeft)}d overdue`:`${u.daysLeft}d left`}</span>
+          </div>) : <div className="config-empty small"><Calendar size={22}/><p>No project deadlines set yet — add a due date from Project Configuration.</p></div>}
+        </div>
+      </section>
+    </div>
+
+    <section className="panel deadlines-overdue-panel">
+      <div className="panel-head"><div><h2>Overdue Tasks ({overdue.length})</h2><p>Ranked by how far past their SLA or due date they are</p></div></div>
+      {overdue.length ? <div className="overdue-task-list">
+        {overdue.slice(0,25).map(r => <div className="overdue-task-row" key={r.task.id}>
+          <div className="overdue-task-main"><b>{r.task.name}</b><span>{projectName(r.task.projectId)} · {memberName(r.task.assigneeId)} · {r.task.status}</span></div>
+          <span className="overdue-hours-badge">{r.overdueHours.toFixed(1)}h overdue</span>
+          <input type="date" className="due-date-input" value={r.task.dueDate ? r.task.dueDate.slice(0,10) : ""} onChange={e=>onSetTaskDueDate(r.task.id, e.target.value ? new Date(e.target.value).toISOString() : null)}/>
+          <button className="ghost-btn" onClick={()=>onOpenTask(r.task)}><Play size={13}/> Open</button>
+          <button className="ghost-btn" onClick={()=>onEscalate(r.task)}><AlertCircle size={13}/> Escalate</button>
+        </div>)}
+      </div> : <div className="config-empty"><CheckCircle2 size={34}/><h3>Nothing overdue</h3><p>All open tasks are within their SLA and due-date targets.</p></div>}
+    </section>
+  </div>;
+}
+
 
 function SimplePage({title,subtitle,icon:Icon,stats}) {
   return <div className="page"><div className="page-head"><div><span className="eyebrow">ANNOTATEPRO</span><h1>{title}</h1><p>{subtitle}</p></div></div><div className="stats-grid">{stats.map((s,i)=><StatCard key={s} icon={[Activity,Target,ShieldCheck,TrendingUp][i%4]} label={s.split(" ").slice(1).join(" ")} value={s.split(" ")[0]} meta="Workspace metric"/>)}</div><section className="panel placeholder-large"><Icon size={42}/><h2>{title} module</h2><p>This module is connected to the AnnotatePro application shell. The full operational workflow will use the same shared project and task data.</p></section></div>;
