@@ -552,3 +552,29 @@ body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);backgroun
   .rule-action{margin-left:0}
   .rule-name-input{width:100%}
 }
+
+/* ===== Build 34 — SLA & Deadline Management ===== */
+.deadlines-grid-top{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin:16px 0}
+@media(max-width:1000px){.deadlines-grid-top{grid-template-columns:1fr}}
+
+.deadlines-upcoming-panel .panel-head{margin-bottom:10px}
+.upcoming-deadlines-list{display:flex;flex-direction:column;gap:8px}
+.upcoming-deadline-row{display:grid;grid-template-columns:1.4fr 1fr auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.upcoming-deadline-row div:first-child b{display:block;font-size:11.5px}
+.upcoming-deadline-row div:first-child span{font-size:9.5px;color:#8b96a4}
+.upcoming-progress{display:flex;align-items:center;gap:6px}
+.upcoming-progress .progress-track{flex:1;height:5px;border-radius:20px;background:#eef1f5;overflow:hidden}
+.upcoming-progress .progress-track i{display:block;height:100%;background:#2563eb}
+.upcoming-progress small{font-size:9.5px;color:#8b96a4;width:28px;text-align:right}
+.days-left-badge{font-size:9px;font-weight:700;padding:4px 8px;border-radius:20px;background:#eef2ff;color:#4338ca;white-space:nowrap}
+.days-left-badge.soon{background:#fff7ed;color:#c2410c}
+.days-left-badge.overdue{background:#fef2f2;color:#dc2626}
+
+.deadlines-overdue-panel{margin-top:16px}
+.overdue-task-list{display:flex;flex-direction:column;gap:7px}
+.overdue-task-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px;flex-wrap:wrap}
+.overdue-task-main{display:flex;flex-direction:column;min-width:160px;flex:1}
+.overdue-task-main b{font-size:11.5px}
+.overdue-task-main span{font-size:9.5px;color:#8b96a4}
+.overdue-hours-badge{font-size:9.5px;font-weight:700;color:#dc2626;background:#fef2f2;border-radius:20px;padding:4px 9px;white-space:nowrap}
+.due-date-input{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:10.5px}
