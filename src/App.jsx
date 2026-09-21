@@ -5,7 +5,7 @@ import {
   FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
   Minus, MoreHorizontal, Move, MousePointer2, LogOut, PanelRight, Pause, Play, Plus,
   Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
-  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap, Palette, SlidersHorizontal, Layers, Workflow, CheckSquare
+  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap, Palette, SlidersHorizontal, Layers, Workflow, CheckSquare, Star
 } from "lucide-react";
 import "./App.css";
 import { supabase } from "./supabaseClient.js";
@@ -137,6 +137,32 @@ function readStorage(key, fallback) {
 
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
+  const [dashboardLayouts, setDashboardLayouts] = useState(() => readStorage("annotatepro_dashboard_layouts_v1", DASHBOARD_PRESETS));
+  const [activeDashboardLayoutId, setActiveDashboardLayoutId] = useState(() => readStorage("annotatepro_dashboard_active_layout_v1", "overview"));
+  const [dashboardEditing, setDashboardEditing] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [recentItems, setRecentItems] = useState(() => readStorage("annotatepro_recent_items_v1", []));
+  const [favoriteItems, setFavoriteItems] = useState(() => readStorage("annotatepro_favorite_items_v1", []));
+  useEffect(() => { localStorage.setItem("annotatepro_recent_items_v1", JSON.stringify(recentItems)); }, [recentItems]);
+  useEffect(() => { localStorage.setItem("annotatepro_favorite_items_v1", JSON.stringify(favoriteItems)); }, [favoriteItems]);
+  const [apiTokens, setApiTokens] = useState(() => readStorage("annotatepro_api_tokens_v1", []));
+  const [webhooks, setWebhooks] = useState(() => readStorage("annotatepro_webhooks_v1", []));
+  useEffect(() => { localStorage.setItem("annotatepro_api_tokens_v1", JSON.stringify(apiTokens)); }, [apiTokens]);
+  useEffect(() => { localStorage.setItem("annotatepro_webhooks_v1", JSON.stringify(webhooks)); }, [webhooks]);
+  useEffect(() => {
+    function onGlobalKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandOpen(v => !v);
+      } else if (e.key === "Escape") {
+        setCommandOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onGlobalKey);
+    return () => window.removeEventListener("keydown", onGlobalKey);
+  }, []);
+  useEffect(() => { localStorage.setItem("annotatepro_dashboard_layouts_v1", JSON.stringify(dashboardLayouts)); }, [dashboardLayouts]);
+  useEffect(() => { localStorage.setItem("annotatepro_dashboard_active_layout_v1", JSON.stringify(activeDashboardLayoutId)); }, [activeDashboardLayoutId]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
 
@@ -1409,6 +1435,234 @@ function App() {
     setSidebarOpen(false);
   }
 
+  // ---- Build 38: Customizable Dashboard ----
+  const activeDashboardLayout = dashboardLayouts[activeDashboardLayoutId] || dashboardLayouts.overview || Object.values(dashboardLayouts)[0];
+  function toggleDashboardWidget(widgetId) {
+    setDashboardLayouts(prev => {
+      const layout = prev[activeDashboardLayoutId];
+      if (!layout) return prev;
+      const has = layout.widgets.includes(widgetId);
+      const widgets = has ? layout.widgets.filter(w => w !== widgetId) : [...layout.widgets, widgetId];
+      return { ...prev, [activeDashboardLayoutId]: { ...layout, widgets } };
+    });
+  }
+  function moveDashboardWidget(widgetId, direction) {
+    setDashboardLayouts(prev => {
+      const layout = prev[activeDashboardLayoutId];
+      if (!layout) return prev;
+      const idx = layout.widgets.indexOf(widgetId);
+      const next = idx + direction;
+      if (idx < 0 || next < 0 || next >= layout.widgets.length) return prev;
+      const widgets = [...layout.widgets];
+      [widgets[idx], widgets[next]] = [widgets[next], widgets[idx]];
+      return { ...prev, [activeDashboardLayoutId]: { ...layout, widgets } };
+    });
+  }
+  function saveDashboardLayoutAs(name) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    const id = `layout-${Date.now()}`;
+    setDashboardLayouts(prev => ({ ...prev, [id]: { name: trimmed, widgets: [...(activeDashboardLayout?.widgets || [])], builtIn: false } }));
+    setActiveDashboardLayoutId(id);
+  }
+  function deleteDashboardLayout(id) {
+    if (Object.keys(dashboardLayouts).length <= 1) return;
+    setDashboardLayouts(prev => { const next = { ...prev }; delete next[id]; return next; });
+    if (activeDashboardLayoutId === id) setActiveDashboardLayoutId(Object.keys(dashboardLayouts).find(k => k !== id) || "overview");
+  }
+  function renameDashboardLayout(id, name) {
+    setDashboardLayouts(prev => ({ ...prev, [id]: { ...prev[id], name } }));
+  }
+
+  // ---- Build 40: API & Integrations ----
+  function generateApiToken(name, scopes) {
+    const token = `apk_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    const entry = { id: `tok-${Date.now()}`, name: (name || "").trim() || "Unnamed token", token, scopes: scopes || ["read"], createdBy: currentUserName, createdAt: new Date().toISOString(), lastUsedAt: null, revoked: false };
+    setApiTokens(prev => [entry, ...prev]);
+    if (session) supabase.from("api_tokens").upsert({ id: entry.id, name: entry.name, token: entry.token, scopes: entry.scopes, created_by: entry.createdBy, created_at: entry.createdAt, revoked: false }).then(({ error }) => { if (error) console.warn("[Cloud] api_tokens upsert failed:", error.message); });
+    logAudit("API Token Created", null, null, `Token "${entry.name}" generated by ${currentUserName}.`);
+    return entry;
+  }
+  function revokeApiToken(id) {
+    setApiTokens(prev => prev.map(t => t.id === id ? { ...t, revoked: true } : t));
+    if (session) supabase.from("api_tokens").update({ revoked: true }).eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] token revoke failed:", error.message); });
+    logAudit("API Token Revoked", null, null, "A token was revoked.");
+  }
+  function deleteApiToken(id) {
+    setApiTokens(prev => prev.filter(t => t.id !== id));
+    if (session) supabase.from("api_tokens").delete().eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] token delete failed:", error.message); });
+  }
+
+  function createWebhook(webhook) {
+    const entry = { id: `wh-${Date.now()}`, name: (webhook.name || "").trim() || "Webhook", url: webhook.url, events: webhook.events || [], enabled: true, createdAt: new Date().toISOString(), lastTriggeredAt: null, lastStatus: null };
+    setWebhooks(prev => [entry, ...prev]);
+    if (session) supabase.from("webhooks").upsert({ id: entry.id, name: entry.name, url: entry.url, events: entry.events, enabled: true, created_at: entry.createdAt }).then(({ error }) => { if (error) console.warn("[Cloud] webhooks upsert failed:", error.message); });
+    logAudit("Webhook Created", null, null, `Webhook "${entry.name}" registered for ${entry.events.join(", ") || "no events"}.`);
+    return entry;
+  }
+  function updateWebhook(id, patch) {
+    setWebhooks(prev => prev.map(w => w.id === id ? { ...w, ...patch } : w));
+    if (session) supabase.from("webhooks").update({ name: patch.name, url: patch.url, events: patch.events, enabled: patch.enabled }).eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] webhook update failed:", error.message); });
+  }
+  function deleteWebhook(id) {
+    setWebhooks(prev => prev.filter(w => w.id !== id));
+    if (session) supabase.from("webhooks").delete().eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] webhook delete failed:", error.message); });
+  }
+  async function sendWebhookPayload(webhook, eventType, payload) {
+    try {
+      const res = await fetch(webhook.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: eventType, timestamp: new Date().toISOString(), workspace: appSettings?.workspaceName || "AnnotatePro", data: payload }) });
+      setWebhooks(prev => prev.map(w => w.id === webhook.id ? { ...w, lastTriggeredAt: new Date().toISOString(), lastStatus: res.ok ? "Success" : `Error ${res.status}` } : w));
+    } catch (err) {
+      setWebhooks(prev => prev.map(w => w.id === webhook.id ? { ...w, lastTriggeredAt: new Date().toISOString(), lastStatus: `Failed: ${err.message}` } : w));
+    }
+  }
+  function fireWebhooks(eventType, payload) {
+    webhooks.filter(w => w.enabled && (w.events || []).includes(eventType)).forEach(w => sendWebhookPayload(w, eventType, payload));
+  }
+  function testWebhook(id) {
+    const wh = webhooks.find(w => w.id === id);
+    if (wh) sendWebhookPayload(wh, "test", { message: "Test payload from AnnotatePro", sentBy: currentUserName });
+  }
+
+  function importMlPredictions(groupId, targetProjectId, predictions) {
+    let matchedTasks = 0, importedAnnotations = 0, unmatched = [];
+    predictions.forEach(entry => {
+      const task = tasks.find(t => t.projectId === targetProjectId && t.name === entry.fileName);
+      if (!task) { unmatched.push(entry.fileName); return; }
+      matchedTasks++;
+      const shapes = (entry.predictions || []).map((p, i) => {
+        const labelId = ensureLabelForClass(groupId, p.label);
+        importedAnnotations++;
+        return { id: `${task.id}-model-${Date.now()}-${i}`, type: "rectangle", labelId, x: p.bbox[0], y: p.bbox[1], w: p.bbox[2], h: p.bbox[3], source: "model", confidence: p.confidence ?? null, reviewState: "pending" };
+      });
+      if (shapes.length) setAnnotationsByTask(prev => ({ ...prev, [task.id]: [...(prev[task.id] || []), ...shapes] }));
+    });
+    logAudit("ML Predictions Imported", null, targetProjectId, `${importedAnnotations} prediction${importedAnnotations===1?"":"s"} imported across ${matchedTasks} task${matchedTasks===1?"":"s"}${unmatched.length ? ` · ${unmatched.length} file${unmatched.length===1?"":"s"} unmatched` : ""}.`);
+    return { matchedTasks, importedAnnotations, unmatched };
+  }
+
+  function exportProjectJson(projectId) {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+    const projectTasks = tasks.filter(t => t.projectId === projectId);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      project,
+      tasks: projectTasks.map(t => ({ ...t, annotations: annotationsByTask[t.id] || [], qaReview: qaReviews[t.id] || null }))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${project.name.toLowerCase().replace(/\s+/g,"-")}-export.json`; a.click();
+    logAudit("Project JSON Exported", null, projectId, `Full data export for ${project.name}.`);
+  }
+
+  // ---- Build 41: AI-Assisted Annotation ----
+  function acceptPrediction(taskId, annotationId) {
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).map(a => a.id === annotationId ? { ...a, reviewState: "accepted" } : a) }));
+  }
+  function rejectPrediction(taskId, annotationId) {
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).filter(a => a.id !== annotationId) }));
+  }
+  function acceptAllPredictions(taskId) {
+    const pendingCount = (annotationsByTask[taskId] || []).filter(a => a.reviewState === "pending").length;
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).map(a => a.reviewState === "pending" ? { ...a, reviewState: "accepted" } : a) }));
+    if (pendingCount) logAudit("AI Predictions Accepted", taskId, tasks.find(t => t.id === taskId)?.projectId, `${pendingCount} pre-labeled region${pendingCount===1?"":"s"} accepted.`);
+  }
+  function rejectAllPredictions(taskId) {
+    const pendingCount = (annotationsByTask[taskId] || []).filter(a => a.reviewState === "pending").length;
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).filter(a => a.reviewState !== "pending") }));
+    if (pendingCount) logAudit("AI Predictions Rejected", taskId, tasks.find(t => t.id === taskId)?.projectId, `${pendingCount} pre-labeled region${pendingCount===1?"":"s"} rejected.`);
+  }
+
+  // Suggested labels: a frequency-based heuristic (not a real model) — the labels
+  // most used so far in this task's dataset, surfaced first in the label picker.
+  function suggestedLabelIds(datasetId, labels) {
+    const counts = {};
+    tasks.filter(t => t.datasetId === datasetId).forEach(t => (annotationsByTask[t.id] || []).forEach(a => { counts[a.labelId] = (counts[a.labelId] || 0) + 1; }));
+    return [...labels].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0)).filter(l => counts[l.id]).slice(0, 3).map(l => l.id);
+  }
+
+  // ---- Build 39: Global Search & Command Center ----
+  function labelNameFor(labelId) {
+    for (const cfg of Object.values(projectConfigs)) {
+      const l = (cfg.labels || []).find(x => x.id === labelId);
+      if (l) return l.name;
+    }
+    return labelId;
+  }
+
+  function getSearchResults(query) {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return null;
+    const match = (s) => (s || "").toLowerCase().includes(q);
+    const projectResults = projectGroups.filter(g => match(g.name) || match(g.description)).slice(0, 6)
+      .map(g => ({ type: "project", id: g.id, title: g.name, subtitle: `Project · ${g.status}`, icon: FolderKanban }));
+    const taskResults = tasks.filter(t => match(t.name)).slice(0, 6)
+      .map(t => ({ type: "task", id: t.id, projectId: t.projectId, title: t.name, subtitle: `Task · ${t.status}`, icon: ImageIcon }));
+    const userResults = teamMembers.filter(m => match(m.name) || match(m.email)).slice(0, 6)
+      .map(m => ({ type: "user", id: m.id, title: m.name, subtitle: `${m.role} · ${m.email}`, icon: Users }));
+    const datasetResults = datasets.filter(d => match(d.name)).slice(0, 6)
+      .map(d => ({ type: "dataset", id: d.id, title: d.name, subtitle: `Dataset · v${d.version || 1}`, icon: Database }));
+    const reviewResults = Object.entries(qaReviews).filter(([taskId, r]) => { const t = tasks.find(x => x.id === taskId); return match(t?.name) || match(r.reviewer) || match(r.decision); }).slice(0, 6)
+      .map(([taskId, r]) => { const t = tasks.find(x => x.id === taskId); return { type: "review", id: taskId, projectId: t?.projectId, title: `Review: ${t?.name || taskId}`, subtitle: `${r.decision || "Pending"} · ${r.reviewer || "Unassigned"}`, icon: ClipboardCheck }; });
+    const annotationResults = [];
+    outer: for (const [taskId, list] of Object.entries(annotationsByTask)) {
+      for (const a of (list || [])) {
+        const name = labelNameFor(a.labelId);
+        if (match(name)) {
+          const t = tasks.find(x => x.id === taskId);
+          annotationResults.push({ type: "annotation", id: `${taskId}-${a.id}`, taskId, projectId: t?.projectId, title: `${name} — in ${t?.name || taskId}`, subtitle: "Annotation", icon: Brush });
+          if (annotationResults.length >= 6) break outer;
+        }
+      }
+    }
+    const auditResults = auditEvents.filter(e => match(e.action) || match(e.details) || match(e.actor)).slice(0, 6)
+      .map(e => ({ type: "audit", id: e.id, title: e.action, subtitle: `${e.actor} · ${timeAgo(e.timestamp)}`, icon: FileText }));
+    const notificationResults = notifications.filter(n => match(n.title) || match(n.message)).slice(0, 6)
+      .map(n => ({ type: "notification", id: n.id, title: n.title, subtitle: n.message, icon: Bell }));
+    return { project: projectResults, task: taskResults, user: userResults, dataset: datasetResults, review: reviewResults, annotation: annotationResults, audit: auditResults, notification: notificationResults };
+  }
+
+  const quickActions = [
+    { type: "action", id: "create-project", title: "Create Project", subtitle: "Quick action", icon: Plus, run: () => { navigate("Projects"); openCreateGroup(); } },
+    { type: "action", id: "start-annotating", title: "Start Annotating", subtitle: "Quick action", icon: Play, run: () => openWorkstation(null, "Annotation") },
+    { type: "action", id: "pending-reviews", title: "Pending Reviews", subtitle: "Quick action", icon: ClipboardCheck, run: () => openWorkstation(null, "Review") },
+    { type: "action", id: "task-planner", title: "Task Planner", subtitle: "Quick action", icon: Target, run: () => navigate("Task Planner") },
+    { type: "action", id: "deadlines", title: "Deadlines", subtitle: "Quick action", icon: Calendar, run: () => navigate("Deadlines") },
+    { type: "action", id: "qa-quality", title: "QA & Quality", subtitle: "Quick action", icon: ShieldCheck, run: () => navigate("QA & Quality") },
+    { type: "action", id: "reports", title: "Reports", subtitle: "Quick action", icon: TrendingUp, run: () => navigate("Reports") },
+    { type: "action", id: "analytics", title: "Analytics", subtitle: "Quick action", icon: BarChart3, run: () => navigate("Analytics") },
+    { type: "action", id: "workload", title: "Workload", subtitle: "Quick action", icon: Layers, run: () => navigate("Workload") },
+    { type: "action", id: "team", title: "Team", subtitle: "Quick action", icon: Users, run: () => navigate("Team") },
+    { type: "action", id: "audit-trail", title: "Audit Trail", subtitle: "Quick action", icon: FileText, run: () => navigate("Audit Trail") },
+    { type: "action", id: "settings", title: "Settings", subtitle: "Quick action", icon: Settings, run: () => navigate("Settings") }
+  ];
+
+  function recordRecentItem(item) {
+    if (item.type === "action") return;
+    const entry = { type: item.type, id: item.id, title: item.title, subtitle: item.subtitle, projectId: item.projectId, taskId: item.taskId, visitedAt: new Date().toISOString() };
+    setRecentItems(prev => [entry, ...prev.filter(i => !(i.type === item.type && i.id === item.id))].slice(0, 12));
+  }
+  function isFavorite(item) { return favoriteItems.some(f => f.type === item.type && f.id === item.id); }
+  function toggleFavorite(item) {
+    setFavoriteItems(prev => isFavorite(item) ? prev.filter(f => !(f.type === item.type && f.id === item.id)) : [{ type: item.type, id: item.id, title: item.title, subtitle: item.subtitle, projectId: item.projectId, taskId: item.taskId }, ...prev].slice(0, 30));
+  }
+  function openSearchResult(item) {
+    if (item.type === "action") { item.run(); setCommandOpen(false); return; }
+    recordRecentItem(item);
+    setCommandOpen(false);
+    switch (item.type) {
+      case "project": navigate("Projects"); break;
+      case "task": openWorkstation(item.projectId, "Annotation", item.id); break;
+      case "annotation": openWorkstation(item.projectId, "Annotation", item.taskId); break;
+      case "user": navigate("Team"); break;
+      case "dataset": navigate("Projects"); break;
+      case "review": { const t = tasks.find(x => x.id === item.id); openWorkstation(t?.projectId, "Review", item.id); break; }
+      case "audit": navigate("Audit Trail"); break;
+      case "notification": navigate("Notifications"); break;
+      default: break;
+    }
+  }
+
   function openCreateProject(groupId) {
     setEditingProjectId(null);
     setProjectForm(groupId ? { ...emptyProject, groupId } : emptyProject);
@@ -1802,7 +2056,21 @@ function App() {
       }
       return;
     }
-    if (editRef.current) { editRef.current = null; return; }
+    if (editRef.current) {
+      const { originals } = editRef.current;
+      const changedModelIds = originals.filter(o => {
+        if (o.source !== "model" || o.corrected) return false;
+        const live = currentAnnotations.find(a => a.id === o.id);
+        if (!live) return false;
+        const key = (a) => JSON.stringify({ x: a.x, y: a.y, w: a.w, h: a.h, points: a.points, labelId: a.labelId });
+        return key(live) !== key(o);
+      }).map(o => o.id);
+      if (changedModelIds.length && currentTask) {
+        setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(a => changedModelIds.includes(a.id) ? { ...a, corrected: true } : a) }));
+      }
+      editRef.current = null;
+      return;
+    }
     if (drawing && drawing.type === "eraser") { setDrawing(null); return; }
     if (!drawing) return;
     if (drawing.type === "brush") {
@@ -1910,6 +2178,7 @@ function App() {
     setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: "Submitted" } : t));
     syncUpdate("tasks", currentTask.id, { status: "Submitted" });
     logAudit("Task Submitted", currentTask.id, currentTask.projectId, "Task submitted for QA review.");
+    fireWebhooks("task.submitted", { taskId: currentTask.id, taskName: currentTask.name, projectId: currentTask.projectId });
     setWorkspaceMessage("Task submitted for QA review");
     setTimeout(() => setWorkspaceMessage(""), 1800);
   }
@@ -1976,6 +2245,7 @@ function App() {
     if (decision === "Rejected") {
       pushNotification("qa", "QA Rejected", `${currentTask.name} was rejected by ${currentUserName}${review.reason ? ` — ${review.reason}` : ""}`, currentTask.projectId, currentTask.id);
     }
+    fireWebhooks(decision === "Approved" ? "qa.approved" : "qa.rejected", { taskId: currentTask.id, taskName: currentTask.name, projectId: currentTask.projectId, score: review.score, reviewer: review.reviewer, reason: review.reason });
     setQaCriteriaScores({});
     setQaErrors([]);
     setWorkspaceMessage(`${currentTask.name} ${decision.toLowerCase()}`);
@@ -2770,6 +3040,7 @@ function App() {
     const owner = teamMembers.find(m => m.id === group?.ownerId);
     logAudit("Task Escalated", task.id, task.projectId, "Manually escalated from the Deadlines dashboard.");
     pushNotification("Alert", "Task escalated", `${task.name} was escalated${owner ? ` to ${owner.name}` : ""}.`, task.projectId, task.id);
+    fireWebhooks("task.escalated", { taskId: task.id, taskName: task.name, projectId: task.projectId, escalatedTo: owner?.name || null, manual: true });
   }
 
   const slaAlertedRef = useRef(new Set());
@@ -2788,6 +3059,7 @@ function App() {
           slaAlertedRef.current.add(alertKey);
           logAudit("Task Overdue", task.id, task.projectId, `Passed its SLA deadline (${taskSlaHours(task, config)}h target).`);
           pushNotification("Alert", "SLA breached", `${task.name} is now overdue.`, task.projectId, task.id);
+          fireWebhooks("sla.breach", { taskId: task.id, taskName: task.name, projectId: task.projectId, status: task.status });
         }
         const escalateAfter = config.escalateAfterHours ?? 24;
         if (overdueHours >= escalateAfter) {
@@ -2798,6 +3070,7 @@ function App() {
             const owner = teamMembers.find(m => m.id === group?.ownerId);
             logAudit("Task Escalated", task.id, task.projectId, `Escalated — ${overdueHours.toFixed(1)}h past its SLA deadline.`);
             pushNotification("Alert", "Task escalated (SLA)", `${task.name} is ${overdueHours.toFixed(1)}h overdue${owner ? ` — escalated to ${owner.name}` : ""}.`, task.projectId, task.id);
+            fireWebhooks("task.escalated", { taskId: task.id, taskName: task.name, projectId: task.projectId, escalatedTo: owner?.name || null, overdueHours, manual: false });
           }
         }
       });
@@ -3168,7 +3441,7 @@ function App() {
               : <><span>AnnotatePro</span><b>/</b><strong>{activePage}</strong></>}
           </div>
           <div className="top-actions">
-            <div className="global-search"><Search size={17} /><input placeholder="Search..." /></div>
+            <button className="global-search" onClick={() => setCommandOpen(true)}><Search size={17} /><span>Search…</span><kbd>{navigator.platform?.toLowerCase().includes("mac") ? "⌘K" : "Ctrl K"}</kbd></button>
             {onlineUsers.length > 0 && <div className="presence-stack" title={onlineUsers.map(u=>u.name).join(", ")}>
               {onlineUsers.slice(0,4).map(u => <div key={u.user_id} className="member-avatar small presence-avatar">{initials(u.name)}</div>)}
               {onlineUsers.length > 4 && <div className="member-avatar small presence-avatar">+{onlineUsers.length-4}</div>}
@@ -3182,7 +3455,10 @@ function App() {
           </div>
         </header>
 
-        {activePage === "Dashboard" && <Dashboard projects={projects} stats={dashboardStats} onCreate={openCreateGroup} onNavigate={navigate} onOpenWorkstation={openWorkstation} userName={currentUserName} />}
+        {activePage === "Dashboard" && <Dashboard projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} auditEvents={auditEvents} stats={dashboardStats} reporting={reportingAnalytics} quality={qualityAnalytics} deadlines={deadlineOverview} onCreate={openCreateGroup} onNavigate={navigate} onOpenWorkstation={openWorkstation} userName={currentUserName}
+          layouts={dashboardLayouts} activeLayoutId={activeDashboardLayoutId} setActiveLayoutId={setActiveDashboardLayoutId} editing={dashboardEditing} setEditing={setDashboardEditing}
+          onToggleWidget={toggleDashboardWidget} onMoveWidget={moveDashboardWidget} onSaveLayoutAs={saveDashboardLayoutAs} onDeleteLayout={deleteDashboardLayout} onRenameLayout={renameDashboardLayout}
+        />}
         {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => openWorkstation(id, "Annotation")} onReview={(id) => openWorkstation(id, "Review")} onPlanner={openTaskPlanner} onTaskSettings={(id) => { setTaskSettingsId(id); setImportTaskId(id); setExportProject(id); setTaskSettingsTab("General"); navigate("Task Settings"); }} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
         {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} labelSchemaError={labelSchemaError} setLabelSchemaError={setLabelSchemaError}
           onCreateLabelGroup={createLabelGroup} onRenameLabelGroup={renameLabelGroup} onDeleteLabelGroup={deleteLabelGroup}
@@ -3235,6 +3511,8 @@ function App() {
             qaCriteriaScores={qaCriteriaScores} setQaCriteriaScores={setQaCriteriaScores}
             qaErrors={qaErrors} setQaErrors={setQaErrors}
             qaScorecardOpen={qaScorecardOpen} setQaScorecardOpen={setQaScorecardOpen}
+            onAcceptPrediction={acceptPrediction} onRejectPrediction={rejectPrediction} onAcceptAllPredictions={acceptAllPredictions} onRejectAllPredictions={rejectAllPredictions}
+            suggestedIds={currentTask ? suggestedLabelIds(currentTask.datasetId, (projectConfigs[getGroupIdForTask(currentTask)]||{}).labels || []) : []}
             updateAnnotation={updateAnnotation} startAnnotationEdit={startAnnotationEdit} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
             onImport={() => imageInputRef.current?.click()}
             imageInputRef={imageInputRef} importImages={importImages}
@@ -3274,12 +3552,16 @@ function App() {
           imageMigration={imageMigration} onMigrateImages={migrateImagesToStorage}
           base64ImageCount={tasks.filter(t => t.image && t.image.startsWith("data:")).length}
           userName={currentUserName} userEmail={currentUserEmail} userInitial={currentUserInitial} onSignOut={signOut}
-          isAdmin={isAdmin} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole} />}
+          isAdmin={isAdmin} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole}
+          apiTokens={apiTokens} onGenerateToken={generateApiToken} onRevokeToken={revokeApiToken} onDeleteToken={deleteApiToken}
+          webhooks={webhooks} onCreateWebhook={createWebhook} onUpdateWebhook={updateWebhook} onDeleteWebhook={deleteWebhook} onTestWebhook={testWebhook}
+          projects={projects} projectGroups={projectGroups} onImportMlPredictions={importMlPredictions} onExportProjectJson={exportProjectJson} />}
 
         <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
         {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
       </main>
 
+      {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} getResults={getSearchResults} quickActions={quickActions} recentItems={recentItems} favoriteItems={favoriteItems} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} onSelect={openSearchResult} />}
       {projectModalOpen && <ProjectModal form={projectForm} setForm={setProjectForm} editing={!!editingProjectId} onClose={() => setProjectModalOpen(false)} onSave={saveProject} />}
       {groupModalOpen && <GroupModal form={groupForm} setForm={setGroupForm} editing={!!editingGroupId} onClose={() => setGroupModalOpen(false)} onSave={saveGroup} teamMembers={teamMembers} />}
       {datasetModalOpen && <DatasetModal form={datasetForm} setForm={setDatasetForm} editing={!!editingDatasetId} onClose={() => setDatasetModalOpen(false)} onSave={saveDataset} />}
@@ -3290,31 +3572,150 @@ function App() {
   );
 }
 
-function Dashboard({ projects, stats, onCreate, onNavigate, onOpenWorkstation, userName }) {
+function timeAgo(timestamp) {
+  const diffMs = Date.now() - new Date(timestamp).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs===1?"":"s"} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days===1?"":"s"} ago`;
+}
+
+const ACTIVITY_ICONS = { "QA Approved": CheckCircle2, "QA Rejected": AlertCircle, "Task Submitted": Upload, "Annotation Saved": Edit3, "Task Assigned": Users, "Task Escalated": AlertCircle, "Task Completed": ShieldCheck };
+
+const WIDGET_REGISTRY = [
+  { id: "kpi-active-projects", title: "Active Projects", category: "Overview", size: "kpi", icon: FolderKanban,
+    render: (d) => <StatCard icon={FolderKanban} label="Active Projects" value={d.stats.active} meta={`${d.projects.length} total projects`} /> },
+  { id: "kpi-images-remaining", title: "Images to Annotate", category: "Project", size: "kpi", icon: ImageIcon,
+    render: (d) => <StatCard icon={ImageIcon} label="Images to Annotate" value={d.stats.remaining.toLocaleString()} meta={`${d.stats.completed.toLocaleString()} completed`} /> },
+  { id: "kpi-team-members", title: "Team Members", category: "Team", size: "kpi", icon: Users,
+    render: (d) => <StatCard icon={Users} label="Team Members" value={d.teamMembers.length} meta={`${d.teamMembers.filter(m=>m.status==="Active").length} active`} /> },
+  { id: "kpi-quality-score", title: "Quality Score", category: "QA", size: "kpi", icon: ShieldCheck,
+    render: (d) => { const scored = Object.values(d.qaReviews).filter(r=>r.score!==null&&r.score!==undefined); const avg = scored.length?Math.round(scored.reduce((s,r)=>s+r.score,0)/scored.length):null; return <StatCard icon={ShieldCheck} label="Quality Score" value={avg===null?"—":`${avg}%`} meta={`${scored.length} scored review${scored.length===1?"":"s"}`} />; } },
+  { id: "kpi-throughput", title: "Throughput (7d)", category: "Project", size: "kpi", icon: TrendingUp,
+    render: (d) => <StatCard icon={TrendingUp} label="Throughput (7d)" value={d.reporting.last7} meta={d.reporting.throughputTrendPct===null?"vs prior week: —":`${d.reporting.throughputTrendPct>=0?"+":""}${d.reporting.throughputTrendPct}% vs prior week`} /> },
+  { id: "kpi-sla-compliance", title: "SLA Compliance", category: "SLA", size: "kpi", icon: Calendar,
+    render: (d) => <StatCard icon={Calendar} label="SLA Compliance" value={d.deadlines.slaCompliance===null?"—":`${d.deadlines.slaCompliance}%`} meta={`${d.deadlines.overdue.length} overdue now`} /> },
+  { id: "kpi-overdue", title: "Overdue Tasks", category: "SLA", size: "kpi", icon: AlertCircle,
+    render: (d) => <StatCard icon={AlertCircle} label="Overdue Tasks" value={d.deadlines.overdue.length} meta={`${d.deadlines.dueToday.length} due today`} /> },
+  { id: "kpi-pending-reviews", title: "Pending Reviews", category: "QA", size: "kpi", icon: ClipboardCheck,
+    render: (d) => <StatCard icon={ClipboardCheck} label="Pending Reviews" value={d.tasks.filter(t=>["Submitted","QA Review"].includes(t.status)).length} meta="Awaiting QA" /> },
+
+  { id: "panel-active-projects", title: "Active Projects", category: "Project", size: "large", icon: FolderKanban,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Active Projects</h2><p>Current annotation workload</p></div><button className="text-btn" onClick={() => d.onNavigate("Projects")}>View all <span>→</span></button></div><div className="table-wrap"><table><thead><tr><th>PROJECT</th><th>TYPE</th><th>TOTAL</th><th>PROGRESS</th><th>STATUS</th></tr></thead><tbody>
+      {d.projects.slice(0, 5).map(p => <tr key={p.id}><td><b>{p.name}</b><small>{p.client}</small></td><td>{p.annotationType}</td><td>{Number(p.totalImages).toLocaleString()}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><StatusBadge status={p.status}/></td></tr>)}
+    </tbody></table></div></section> },
+
+  { id: "panel-recent-activity", title: "Recent Activity", category: "Overview", size: "medium", icon: Activity,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Recent Activity</h2><p>Latest workspace events</p></div></div><div className="activity-list">
+      {d.auditEvents.length ? d.auditEvents.slice(0, 6).map(e => <ActivityRow key={e.id} icon={ACTIVITY_ICONS[e.action] || Activity} title={e.action} text={e.details || e.actor} time={timeAgo(e.timestamp)}/>) : <div className="analytics-empty">No activity yet.</div>}
+    </div></section> },
+
+  { id: "panel-quick-actions", title: "Quick Actions", category: "Overview", size: "medium", icon: Zap,
+    render: (d) => <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => d.onOpenWorkstation(null, "Annotation")}/><Quick icon={Target} title="Task Planner" onClick={() => d.onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => d.onOpenWorkstation(null, "Review")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => d.onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => d.onNavigate("Projects")}/></div></section> },
+
+  { id: "panel-team-utilization", title: "Team Utilization", category: "Team", size: "medium", icon: Users,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Team Utilization</h2><p>Workload against capacity</p></div></div>{d.reporting.teamUtilization.length ? <div className="utilization-list">{d.reporting.teamUtilization.slice(0,5).map(u => <div className="utilization-row" key={u.member.id}><div className="utilization-main"><b>{u.member.name}</b><span>{u.member.role} · {u.assigned}/{u.capacity}</span></div><div className="utilization-track"><i className={u.utilization>=100?"over":u.utilization>=75?"high":""} style={{width:`${Math.min(100,u.utilization)}%`}}/></div><span className="utilization-pct">{u.utilization}%</span></div>)}</div> : <div className="analytics-empty">No active team members.</div>}</section> },
+
+  { id: "panel-qa-distribution", title: "QA Distribution", category: "QA", size: "medium", icon: ClipboardCheck,
+    render: (d) => { const reviewed = Object.values(d.qaReviews); const approved = reviewed.filter(r=>r.decision==="Approved").length; const rejected = reviewed.filter(r=>r.decision==="Rejected").length; const changes = reviewed.filter(r=>r.decision==="Changes Requested").length; const scored = reviewed.filter(r=>r.score!==null&&r.score!==undefined); const avg = scored.length?Math.round(scored.reduce((s,r)=>s+r.score,0)/scored.length):null; return <section className="panel quality-panel"><div className="panel-head"><div><h2>QA Distribution</h2><p>Current review decisions</p></div><ClipboardCheck size={17}/></div><div className="quality-ring"><div><strong>{avg===null?"—":`${avg}%`}</strong><span>avg score</span></div></div><div className="quality-legend"><div><i className="approved-dot"></i><span>Approved</span><b>{approved}</b></div><div><i className="changes-dot"></i><span>Changes requested</span><b>{changes}</b></div><div><i className="rejected-dot"></i><span>Rejected</span><b>{rejected}</b></div></div></section>; } },
+
+  { id: "panel-upcoming-deadlines", title: "Upcoming Deadlines", category: "SLA", size: "medium", icon: Calendar,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Upcoming Deadlines</h2><p>Soonest project due dates</p></div></div>{d.deadlines.upcomingProjects.length ? <div className="upcoming-deadlines-list">{d.deadlines.upcomingProjects.slice(0,5).map(u => <div className="upcoming-deadline-row" key={u.project.id}><div><b>{u.project.name}</b><span>{new Date(u.project.dueDate).toLocaleDateString()}</span></div><div className="upcoming-progress"><div className="progress-track"><i style={{width:`${u.progress}%`}}/></div><small>{u.progress}%</small></div><span className={`days-left-badge ${u.daysLeft<0?"overdue":u.daysLeft<=3?"soon":""}`}>{u.daysLeft<0?`${Math.abs(u.daysLeft)}d overdue`:`${u.daysLeft}d left`}</span></div>)}</div> : <div className="analytics-empty">No project deadlines set.</div>}</section> },
+
+  { id: "panel-overdue-tasks", title: "Overdue Tasks", category: "SLA", size: "medium", icon: AlertCircle,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Overdue Tasks</h2><p>Past their SLA or due date</p></div></div>{d.deadlines.overdue.length ? <div className="overdue-task-list">{d.deadlines.overdue.slice(0,5).map(r => <div className="overdue-task-row" key={r.task.id}><div className="overdue-task-main"><b>{r.task.name}</b><span>{r.task.status}</span></div><span className="overdue-hours-badge">{r.overdueHours.toFixed(1)}h overdue</span></div>)}</div> : <div className="analytics-empty">Nothing overdue.</div>}</section> },
+
+  { id: "panel-quality-trend", title: "Quality Trend", category: "QA", size: "large", icon: TrendingUp,
+    render: (d) => { const weeks = d.quality.weeks; const maxAvg = Math.max(1, ...weeks.map(w=>w.avg||0)); return <section className="panel analytics-chart-panel"><div className="panel-head"><div><h2>Quality Trend</h2><p>Average QA score by week</p></div></div><div className="trend-chart"><div className="chart-y"><span>100</span><span>50</span><span>0</span></div><div className="chart-bars">{weeks.map((w,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${w.avg?Math.max(6,w.avg):3}%`}}></div><span>{w.label}</span></div>)}</div></div></section>; } },
+
+  { id: "panel-forecast", title: "Project Forecast", category: "Project", size: "large", icon: Target,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Project Forecast</h2><p>Projected completion at current velocity</p></div></div>{d.reporting.forecasts.length ? <div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>REMAINING</th><th>DAYS LEFT</th><th>PROJECTED</th></tr></thead><tbody>{d.reporting.forecasts.slice(0,5).map(f => <tr key={f.project.id}><td><b>{f.project.name}</b></td><td>{f.remaining.toLocaleString()}</td><td>{f.daysLeft??"—"}</td><td>{f.projectedDate?f.projectedDate.toLocaleDateString():<span className="forecast-stalled">Stalled</span>}</td></tr>)}</tbody></table></div> : <div className="analytics-empty">All projects complete.</div>}</section> }
+];
+
+const DASHBOARD_PRESETS = {
+  overview: { name: "Overview", builtIn: true, widgets: ["kpi-active-projects", "kpi-images-remaining", "kpi-team-members", "kpi-quality-score", "panel-active-projects", "panel-recent-activity", "panel-quick-actions"] },
+  team: { name: "Team Dashboard", builtIn: true, widgets: ["kpi-team-members", "kpi-pending-reviews", "panel-team-utilization", "panel-quick-actions"] },
+  project: { name: "Project Dashboard", builtIn: true, widgets: ["kpi-active-projects", "kpi-images-remaining", "kpi-throughput", "panel-active-projects", "panel-forecast"] },
+  qa: { name: "QA Dashboard", builtIn: true, widgets: ["kpi-quality-score", "kpi-pending-reviews", "panel-qa-distribution", "panel-quality-trend"] },
+  sla: { name: "SLA Dashboard", builtIn: true, widgets: ["kpi-sla-compliance", "kpi-overdue", "panel-upcoming-deadlines", "panel-overdue-tasks"] }
+};
+
+function Dashboard({ projects, tasks, teamMembers, qaReviews, auditEvents, stats, reporting, quality, deadlines, onCreate, onNavigate, onOpenWorkstation, userName,
+  layouts, activeLayoutId, setActiveLayoutId, editing, setEditing, onToggleWidget, onMoveWidget, onSaveLayoutAs, onDeleteLayout, onRenameLayout }) {
+  const [newLayoutName, setNewLayoutName] = useState("");
+  const layout = layouts[activeLayoutId] || Object.values(layouts)[0];
+  const data = { projects, tasks, teamMembers, qaReviews, auditEvents, stats, reporting, quality, deadlines, onNavigate, onOpenWorkstation };
+  const placed = layout.widgets.map(id => WIDGET_REGISTRY.find(w => w.id === id)).filter(Boolean);
+  const available = WIDGET_REGISTRY.filter(w => !layout.widgets.includes(w.id));
+
   return (
     <div className="page">
       <div className="page-head">
-        <div><span className="eyebrow">OVERVIEW</span><h1>Good afternoon, {userName}</h1><p>Here’s what’s happening across your annotation workspace.</p></div>
-        <button className="primary-btn" onClick={()=>onCreate()}><Plus size={17}/> Create Project</button>
+        <div><span className="eyebrow">OVERVIEW</span><h1>Good afternoon, {userName}</h1><p>Here's what's happening across your annotation workspace.</p></div>
+        <div className="dashboard-head-actions">
+          <select className="layout-switcher" value={activeLayoutId} onChange={e=>setActiveLayoutId(e.target.value)}>{Object.entries(layouts).map(([id,l])=><option key={id} value={id}>{l.name}</option>)}</select>
+          <button className={`secondary-btn ${editing?"active-toggle":""}`} onClick={()=>setEditing(v=>!v)}><SlidersHorizontal size={16}/> {editing?"Done":"Customize"}</button>
+          <button className="primary-btn" onClick={()=>onCreate()}><Plus size={17}/> Create Project</button>
+        </div>
       </div>
-      <div className="stats-grid">
-        <StatCard icon={FolderKanban} label="Active Projects" value={stats.active} meta="+2 this month" />
-        <StatCard icon={ImageIcon} label="Images to Annotate" value={stats.remaining.toLocaleString()} meta={`${stats.completed.toLocaleString()} completed`} />
-        <StatCard icon={Users} label="Team Members" value="28" meta="22 annotators" />
-        <StatCard icon={ShieldCheck} label="Quality Score" value="96.8%" meta="+1.4% this week" />
-      </div>
-      <section className="panel">
-        <div className="panel-head"><div><h2>Active Projects</h2><p>Current annotation workload</p></div><button className="text-btn" onClick={() => onNavigate("Projects")}>View all <span>→</span></button></div>
-        <div className="table-wrap"><table><thead><tr><th>PROJECT</th><th>TYPE</th><th>TOTAL</th><th>PROGRESS</th><th>STATUS</th></tr></thead><tbody>
-          {projects.slice(0, 5).map(p => <tr key={p.id}><td><b>{p.name}</b><small>{p.client}</small></td><td>{p.annotationType}</td><td>{Number(p.totalImages).toLocaleString()}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><StatusBadge status={p.status}/></td></tr>)}
-        </tbody></table></div>
-      </section>
-      <div className="dashboard-bottom">
-        <section className="panel"><div className="panel-head"><div><h2>Recent Activity</h2><p>Latest workspace events</p></div></div><div className="activity-list"><ActivityRow icon={CheckCircle2} title="Road Object Detection" text="Task batch completed" time="8 min ago"/><ActivityRow icon={ShieldCheck} title="QA Review" text="18 annotations approved" time="31 min ago"/><ActivityRow icon={Users} title="Team activity" text="3 annotators started work" time="1 hr ago"/><ActivityRow icon={Upload} title="Dataset import" text="120 images added" time="2 hrs ago"/></div></section>
-        <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => onOpenWorkstation(null, "Annotation")}/><Quick icon={Target} title="Task Planner" onClick={() => onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => onOpenWorkstation(null, "Review")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => onNavigate("Projects")}/></div></section>
+
+      {editing && <section className="panel dashboard-editor">
+        <div className="panel-head"><div><h2>Customize this layout</h2><p>Add, remove and reorder widgets, or save your own layout</p></div></div>
+        <div className="dashboard-editor-row">
+          <span className="section-label">ON THIS DASHBOARD ({placed.length})</span>
+          <div className="placed-widget-list">{placed.map((w,i) => <div className="placed-widget-chip" key={w.id}>
+            <w.icon size={13}/><span>{w.title}</span>
+            <button disabled={i===0} onClick={()=>onMoveWidget(w.id,-1)} title="Move earlier"><ChevronDown size={12} style={{transform:"rotate(90deg)"}}/></button>
+            <button disabled={i===placed.length-1} onClick={()=>onMoveWidget(w.id,1)} title="Move later"><ChevronDown size={12} style={{transform:"rotate(-90deg)"}}/></button>
+            <button className="chip-x" onClick={()=>onToggleWidget(w.id)} title="Remove"><X size={12}/></button>
+          </div>)}</div>
+        </div>
+        {!!available.length && <div className="dashboard-editor-row">
+          <span className="section-label">WIDGET LIBRARY</span>
+          <div className="widget-library-grid">{available.map(w => <button key={w.id} className="widget-library-card" onClick={()=>onToggleWidget(w.id)}><w.icon size={16}/><span>{w.title}</span><Plus size={13}/></button>)}</div>
+        </div>}
+        <div className="dashboard-editor-row layout-save-row">
+          <input value={newLayoutName} onChange={e=>setNewLayoutName(e.target.value)} placeholder="Save current arrangement as..."/>
+          <button className="ghost-btn" onClick={()=>{ onSaveLayoutAs(newLayoutName); setNewLayoutName(""); }}><Save size={13}/> Save as new layout</button>
+          {!layout.builtIn && <button className="ghost-btn" onClick={()=>{ const name = window.prompt("Rename layout", layout.name); if (name) onRenameLayout(activeLayoutId, name); }}><Edit3 size={13}/> Rename</button>}
+          {Object.keys(layouts).length > 1 && <button className="danger-icon" onClick={()=>onDeleteLayout(activeLayoutId)} title="Delete this layout"><Trash2 size={14}/></button>}
+        </div>
+      </section>}
+
+      <div className="widget-grid">
+        {placed.filter(w=>w.size==="kpi").length > 0 && <div className="stats-grid">{placed.filter(w=>w.size==="kpi").map(w => <React.Fragment key={w.id}>{w.render(data)}</React.Fragment>)}</div>}
+        {placed.filter(w=>w.size!=="kpi").map(w => <div className={`widget-slot widget-${w.size}`} key={w.id}>{w.render(data)}</div>)}
+        {!placed.length && <div className="config-empty"><LayoutDashboard size={34}/><h3>This layout is empty</h3><p>Click Customize to add widgets.</p></div>}
       </div>
     </div>
   );
+}
+
+function AiQaInsightPanel({ annotations, labels }) {
+  const [open, setOpen] = useState(true);
+  const withConfidence = annotations.filter(a => a.confidence != null);
+  const avgConfidence = withConfidence.length ? Math.round((withConfidence.reduce((s, a) => s + a.confidence, 0) / withConfidence.length) * 100) : null;
+  const correctedCount = annotations.filter(a => a.corrected).length;
+  const lowConfidence = annotations.filter(a => a.confidence != null && a.confidence < 0.6);
+  return <div className="qa-scorecard-panel ai-qa-panel">
+    <button type="button" className="qa-scorecard-toggle" onClick={() => setOpen(v => !v)}>
+      <Zap size={14}/> AI-Assisted QA
+      <b className="qa-live-score">{annotations.length}</b>
+      <ChevronDown size={14} style={{ marginLeft: "auto", transform: open ? "rotate(180deg)" : "none" }}/>
+    </button>
+    {open && <div className="qa-scorecard-body">
+      <div className="ai-qa-stat-row"><span>Regions from AI</span><b>{annotations.length}</b></div>
+      <div className="ai-qa-stat-row"><span>Avg. confidence</span><b>{avgConfidence===null?"—":`${avgConfidence}%`}</b></div>
+      <div className="ai-qa-stat-row"><span>Corrected by annotator</span><b>{correctedCount}</b></div>
+      {lowConfidence.length > 0 && <div className="ai-qa-lowconf">
+        <span className="section-label">LOW CONFIDENCE — REVIEW CLOSELY</span>
+        {lowConfidence.map(a => <div key={a.id} className="ai-qa-lowconf-row"><span>{labels.find(l=>l.id===a.labelId)?.name || "Object"}</span><b>{Math.round(a.confidence*100)}%</b></div>)}
+      </div>}
+    </div>}
+  </div>;
 }
 
 function QaScorecardPanel({ criteria, categories, scores, setScores, errors, setErrors, open, setOpen }) {
@@ -3363,9 +3764,12 @@ function Workspace({
   updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport,
   insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee, coEditors,
   mode = "Annotation", setMode, onSkip, onAccept, onReject, currentReview, canReview = true, onBackToTasks,
-  qaCriteria, errorCategories, qaCriteriaScores, setQaCriteriaScores, qaErrors, setQaErrors, qaScorecardOpen, setQaScorecardOpen
+  qaCriteria, errorCategories, qaCriteriaScores, setQaCriteriaScores, qaErrors, setQaErrors, qaScorecardOpen, setQaScorecardOpen,
+  onAcceptPrediction, onRejectPrediction, onAcceptAllPredictions, onRejectAllPredictions, suggestedIds
 }) {
   const isReview = mode === "Review";
+  const pendingPredictions = currentAnnotations.filter(a => a.reviewState === "pending");
+  const modelAnnotations = currentAnnotations.filter(a => a.source === "model");
   const [taskSearch, setTaskSearch] = useState("");
   const [rightTab, setRightTab] = useState("Labels");
   const [infoTab, setInfoTab] = useState("Info");
@@ -3480,12 +3884,15 @@ function Workspace({
             {rightTab === "Labels" ? <div className="right-section label-section-build8">
               <div className="right-section-head"><div><b>LABELS</b><small>{labels.length} configured</small></div><button onClick={onImport} title="Import images"><Plus size={15}/></button></div>
               <div className="label-search-build8"><Search size={13}/><input value={labelSearch} onChange={e=>setLabelSearch(e.target.value)} placeholder="Filter labels..."/></div>
-              <div className="label-list build8-label-list">{filteredLabels.map(label=><button key={label.id} className={`label-item build8-label-item ${selectedLabel===label.id?"selected":""}`} onClick={()=>setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span><b>{objectCountByLabel[label.id] || 0}</b><kbd>{label.type}</kbd></button>)}</div>
+              <div className="label-list build8-label-list">{filteredLabels.map(label=><button key={label.id} className={`label-item build8-label-item ${selectedLabel===label.id?"selected":""}`} onClick={()=>setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span>{suggestedIds?.includes(label.id) && <i className="ai-suggested-badge" title="AI-suggested: frequently used in this dataset"><Zap size={10}/></i>}<b>{objectCountByLabel[label.id] || 0}</b><kbd>{label.type}</kbd></button>)}</div>
               {!filteredLabels.length && <div className="empty-objects"><Target size={24}/><p>No labels found</p></div>}
-            </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>{currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}</small></div><div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div></div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
+            </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>
+            {pendingPredictions.length > 0 && <div className="ai-review-banner"><Zap size={14}/><span>{pendingPredictions.length} AI-suggested region{pendingPredictions.length===1?"":"s"} need review</span><div className="ai-review-banner-actions"><button onClick={()=>onAcceptAllPredictions(currentTask.id)}><Check size={12}/> Accept All</button><button onClick={()=>onRejectAllPredictions(currentTask.id)}><X size={12}/> Reject All</button></div></div>}
+            {currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);const pending=a.reviewState==="pending";return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""} ${pending?"is-pending-ai":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}{a.source==="model" && <span className="ai-source-tag"> · AI{a.confidence!=null?` ${Math.round(a.confidence*100)}%`:""}{a.corrected?" · corrected":""}</span>}</small></div>{pending ? <div className="object-item-actions"><button title="Accept" className="accept-btn" onClick={e=>{e.stopPropagation();onAcceptPrediction(currentTask.id,a.id);}}><Check size={13}/></button><button title="Reject" className="danger" onClick={e=>{e.stopPropagation();onRejectPrediction(currentTask.id,a.id);}}><X size={13}/></button></div> : <div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div>}</div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
             {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
           </div>
           {isReview && <QaScorecardPanel criteria={qaCriteria} categories={errorCategories} scores={qaCriteriaScores} setScores={setQaCriteriaScores} errors={qaErrors} setErrors={setQaErrors} open={qaScorecardOpen} setOpen={setQaScorecardOpen}/>}
+          {isReview && modelAnnotations.length > 0 && <AiQaInsightPanel annotations={modelAnnotations} labels={labels}/>}
           <div className="right-footer build8-right-footer"><div><span>{isReview ? "Review decision" : "Task status"}</span><StatusBadge status={isReview ? (currentReview?.decision || "Pending Review") : (currentTask?.status || "Pending")}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
         </aside>
       </div>
@@ -3505,8 +3912,8 @@ function AnnotationShape({ a, index, selected, onSelect, onEditStart, labels, on
   if (a.type === "rectangle") {
     const rotation = a.rotation || 0;
     const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
-    return <div className={`annotation-box build8-annotation-box ${selected?"selected":""} ${lockClass}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,transform:rotation?`rotate(${rotation}deg)`:undefined,transformOrigin:"center center"}} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}>
-      <span>{index+1}</span><b>{label?.name || "Object"}{a.locked && " 🔒"}</b>
+    return <div className={`annotation-box build8-annotation-box ${selected?"selected":""} ${lockClass} ${a.reviewState==="pending"?"pending-ai-box":""}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,transform:rotation?`rotate(${rotation}deg)`:undefined,transformOrigin:"center center"}} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}>
+      <span>{index+1}</span><b>{label?.name || "Object"}{a.locked && " 🔒"}{a.reviewState==="pending" && a.confidence!=null && ` · ${Math.round(a.confidence*100)}%`}</b>
       {selected && !a.locked && <div className="resize-handles">{["nw","n","ne","e","se","s","sw","w"].map(pos=><i key={pos} className={`handle-${pos}`} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,pos);}}/>)}<i className="handle-rotate" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"rotate");}}/></div>}
     </div>;
   }
@@ -4173,6 +4580,67 @@ function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner
     <div className="task-workflow-row"><button className="workflow-btn annotate" onClick={onWorkspace}><Play size={13}/> Annotation</button><button className="workflow-btn review" onClick={onReview}><ClipboardCheck size={13}/> Review</button></div>
     <div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div>
   </article>;
+}
+
+const SEARCH_CATEGORY_META = [
+  ["project", "Projects"], ["task", "Tasks"], ["user", "Users"], ["dataset", "Datasets"],
+  ["annotation", "Annotations"], ["review", "Reviews"], ["audit", "Audit Events"], ["notification", "Notifications"]
+];
+
+function CommandPalette({ onClose, getResults, quickActions, recentItems, favoriteItems, isFavorite, onToggleFavorite, onSelect }) {
+  const [query, setQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const results = getResults(query);
+  const sections = [];
+  if (!results) {
+    if (favoriteItems.length) sections.push(["Favorites", favoriteItems]);
+    if (recentItems.length) sections.push(["Recent", recentItems]);
+    sections.push(["Quick Actions", quickActions]);
+  } else {
+    SEARCH_CATEGORY_META.forEach(([key, label]) => { if (results[key]?.length) sections.push([label, results[key]]); });
+    const matchedActions = quickActions.filter(a => a.title.toLowerCase().includes(query.trim().toLowerCase()));
+    if (matchedActions.length) sections.push(["Quick Actions", matchedActions]);
+    if (!sections.length) sections.push(["No results", []]);
+  }
+  const flat = sections.flatMap(([, items]) => items);
+
+  useEffect(() => { setActiveIndex(0); }, [query]);
+
+  function handleKeyDown(e) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIndex(i => Math.min(flat.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIndex(i => Math.max(0, i - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (flat[activeIndex]) onSelect(flat[activeIndex]); }
+  }
+
+  let runningIndex = -1;
+  return <div className="command-backdrop" onClick={onClose}>
+    <div className="command-palette" onClick={e => e.stopPropagation()}>
+      <div className="command-input-row">
+        <Search size={18}/>
+        <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKeyDown} placeholder="Search projects, tasks, users, datasets, reviews…"/>
+        <button className="command-close" onClick={onClose}><X size={16}/></button>
+      </div>
+      <div className="command-results">
+        {sections.map(([label, items]) => <div className="command-section" key={label}>
+          <span className="command-section-label">{label.toUpperCase()}</span>
+          {items.length ? items.map(item => {
+            runningIndex++;
+            const idx = runningIndex;
+            const Icon = item.icon || Star;
+            return <div key={`${item.type}-${item.id}`} className={`command-row ${idx === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(idx)} onClick={() => onSelect(item)}>
+              <Icon size={15}/>
+              <div className="command-row-main"><b>{item.title}</b>{item.subtitle && <span>{item.subtitle}</span>}</div>
+              {item.type !== "action" && <button className={`command-star ${isFavorite(item) ? "starred" : ""}`} onClick={e => { e.stopPropagation(); onToggleFavorite(item); }} title="Toggle favorite"><Star size={13}/></button>}
+            </div>;
+          }) : <div className="command-empty">Nothing matched "{query}"</div>}
+        </div>)}
+      </div>
+      <div className="command-footer"><span><ChevronDown size={11} style={{transform:"rotate(180deg)"}}/><ChevronDown size={11}/> Navigate</span><span>↵ Select</span><span>Esc Close</span></div>
+    </div>
+  </div>;
 }
 
 function ProjectModal({form,setForm,editing,onClose,onSave}) {
@@ -4994,13 +5462,14 @@ function Quick({icon:Icon,title,onClick}){return <button className="quick-action
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
 
 
-function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole }) {
+function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole,
+  apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson }) {
   const tabs = [
     ["Workspace", SlidersHorizontal, "Workspace"],
     ["Annotation", Grid3X3, "Annotation"],
     ["Notifications", Bell, "Notifications"],
     ["Preferences", Settings, "Preferences"],
-    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Cloud Migration", Database, "Cloud"]] : [])
+    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Integrations", Zap, "Integrations"], ["Cloud Migration", Database, "Cloud"]] : [])
   ];
   const Toggle = ({ label, description, value, onChange }) => (
     <label className="settings-toggle-row">
@@ -5052,6 +5521,7 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
             <div className="settings-danger"><div><h3>Restore default settings</h3><p>Reset only AnnotatePro settings. Projects, tasks, annotations, team and audit data are not deleted.</p></div><button className="btn secondary" onClick={onReset}><RotateCcw size={15}/> Restore defaults</button></div>
           </div>}
           {tab === "Roles" && isAdmin && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
+          {tab === "Integrations" && isAdmin && <IntegrationsSettingsTab apiTokens={apiTokens} onGenerateToken={onGenerateToken} onRevokeToken={onRevokeToken} onDeleteToken={onDeleteToken} webhooks={webhooks} onCreateWebhook={onCreateWebhook} onUpdateWebhook={onUpdateWebhook} onDeleteWebhook={onDeleteWebhook} onTestWebhook={onTestWebhook} projects={projects} projectGroups={projectGroups} onImportMlPredictions={onImportMlPredictions} onExportProjectJson={onExportProjectJson} />}
           {tab === "Cloud" && isAdmin && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
         </section>
       </div>
@@ -5077,6 +5547,114 @@ function RolesAccessPanel({profiles, loading, onLoad, onUpdateRole, currentUserE
       </div>
     }
     <div className="guide-note"><ShieldCheck size={14}/><span>Admin can do everything. Team Lead can manage projects, datasets, team and configuration. Reviewer can approve/reject QA. Annotator can work on tasks and annotations only.</span></div>
+  </div>;
+}
+
+const WEBHOOK_EVENT_TYPES = [
+  { id: "task.submitted", label: "Task Submitted" },
+  { id: "qa.approved", label: "QA Approved" },
+  { id: "qa.rejected", label: "QA Rejected" },
+  { id: "task.escalated", label: "Task Escalated" },
+  { id: "sla.breach", label: "SLA Breach" }
+];
+
+function IntegrationsSettingsTab({ apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson }) {
+  const [newTokenName, setNewTokenName] = useState("");
+  const [revealedToken, setRevealedToken] = useState(null);
+  const [newWebhookName, setNewWebhookName] = useState("");
+  const [newWebhookUrl, setNewWebhookUrl] = useState("");
+  const [newWebhookEvents, setNewWebhookEvents] = useState([]);
+  const [mlProjectId, setMlProjectId] = useState(projects[0]?.id || "");
+  const [mlResult, setMlResult] = useState(null);
+  const [mlError, setMlError] = useState("");
+  const mlFileRef = useRef(null);
+  const [exportProjectId, setExportProjectId] = useState(projects[0]?.id || "");
+
+  function toggleNewWebhookEvent(id) { setNewWebhookEvents(prev => prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]); }
+  function handleMlFile(file) {
+    if (!file) return;
+    setMlError(""); setMlResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!Array.isArray(parsed)) throw new Error("Expected a JSON array");
+        const project = projects.find(p => p.id === mlProjectId);
+        const groupId = project?.groupId;
+        if (!groupId) throw new Error("Select a target project first");
+        const result = onImportMlPredictions(groupId, mlProjectId, parsed);
+        setMlResult(result);
+      } catch (err) {
+        setMlError(`Import failed: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  return <div className="settings-card panel integrations-tab">
+    <div className="settings-card-title"><div><h2>Integrations</h2><p>API access, outbound webhooks, model prediction import and data export.</p></div><Zap size={20}/></div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>API Tokens</h3></div>
+      <p className="field-hint">Tokens authenticate external tools reading your Supabase data directly. Generating a token here creates the record; enforcing it requires a one-time database function — see note below.</p>
+      <form className="token-create-form" onSubmit={e => { e.preventDefault(); if (!newTokenName.trim()) return; const t = onGenerateToken(newTokenName, ["read"]); setRevealedToken(t.token); setNewTokenName(""); }}>
+        <input value={newTokenName} onChange={e => setNewTokenName(e.target.value)} placeholder="Token name (e.g. Zapier integration)"/>
+        <button type="submit" className="ghost-btn"><Plus size={13}/> Generate Token</button>
+      </form>
+      {revealedToken && <div className="token-reveal"><code>{revealedToken}</code><button className="ghost-btn" onClick={() => { navigator.clipboard?.writeText(revealedToken); }}><Copy size={12}/> Copy</button><button className="chip-x" onClick={() => setRevealedToken(null)}><X size={12}/></button></div>}
+      {apiTokens.length ? <div className="token-list">{apiTokens.map(t => <div className={`token-row ${t.revoked?"revoked":""}`} key={t.id}>
+        <div><b>{t.name}</b><span>{t.token.slice(0,10)}••••••••• · {new Date(t.createdAt).toLocaleDateString()}</span></div>
+        <span className={`token-status ${t.revoked?"revoked":"active"}`}>{t.revoked?"Revoked":"Active"}</span>
+        {!t.revoked && <button className="ghost-btn" onClick={()=>onRevokeToken(t.id)}>Revoke</button>}
+        <button className="danger-icon" onClick={()=>onDeleteToken(t.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><Zap size={22}/><p>No API tokens yet.</p></div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Webhooks</h3></div>
+      <p className="field-hint">Fires a POST request with a JSON payload to the URL you provide when a selected event happens — works with Slack Incoming Webhooks, Zapier, Make, or any endpoint that accepts JSON.</p>
+      <form className="webhook-create-form" onSubmit={e => { e.preventDefault(); if (!newWebhookUrl.trim()) return; onCreateWebhook({ name: newWebhookName, url: newWebhookUrl.trim(), events: newWebhookEvents }); setNewWebhookName(""); setNewWebhookUrl(""); setNewWebhookEvents([]); }}>
+        <input value={newWebhookName} onChange={e => setNewWebhookName(e.target.value)} placeholder="Webhook name"/>
+        <input value={newWebhookUrl} onChange={e => setNewWebhookUrl(e.target.value)} placeholder="https://hooks.example.com/..." className="webhook-url-input"/>
+        <div className="webhook-event-toggles">{WEBHOOK_EVENT_TYPES.map(ev => <label key={ev.id} className="report-toggle-chip"><input type="checkbox" checked={newWebhookEvents.includes(ev.id)} onChange={()=>toggleNewWebhookEvent(ev.id)}/> {ev.label}</label>)}</div>
+        <button type="submit" className="ghost-btn"><Plus size={13}/> Add Webhook</button>
+      </form>
+      {webhooks.length ? <div className="webhook-list">{webhooks.map(w => <div className="webhook-row" key={w.id}>
+        <button type="button" className={`switch-btn ${w.enabled?"on":""}`} onClick={()=>onUpdateWebhook(w.id,{enabled:!w.enabled})}><i/></button>
+        <div className="webhook-main"><b>{w.name}</b><span>{w.url}</span><div className="webhook-events">{(w.events||[]).map(e=><span key={e} className="webhook-event-tag">{WEBHOOK_EVENT_TYPES.find(x=>x.id===e)?.label || e}</span>)}</div></div>
+        <span className={`token-status ${w.lastStatus==="Success"||w.lastStatus==="Success (test)"?"active":w.lastStatus?"revoked":""}`}>{w.lastStatus || "Not triggered yet"}</span>
+        <button className="ghost-btn" onClick={()=>onTestWebhook(w.id)}>Test</button>
+        <button className="danger-icon" onClick={()=>onDeleteWebhook(w.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><Zap size={22}/><p>No webhooks configured yet.</p></div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>ML Prediction Import</h3></div>
+      <p className="field-hint">Import model predictions as pre-annotations on existing tasks. Expected JSON: <code>{"[{fileName, predictions:[{label, confidence, bbox:[x,y,w,h]}]}]"}</code> — bbox values are percent of image width/height, matching filenames to existing task names in the selected project.</p>
+      <div className="ml-import-row">
+        <select value={mlProjectId} onChange={e=>setMlProjectId(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        <button className="ghost-btn" onClick={()=>mlFileRef.current?.click()}><Upload size={13}/> Choose JSON File</button>
+        <input ref={mlFileRef} type="file" accept="application/json" style={{display:"none"}} onChange={e=>{ const f=e.target.files?.[0]; if(f) handleMlFile(f); e.target.value=""; }}/>
+      </div>
+      {mlError && <div className="form-error"><AlertCircle size={14}/> {mlError}</div>}
+      {mlResult && <div className="ml-import-result"><CheckCircle2 size={14}/> {mlResult.importedAnnotations} prediction{mlResult.importedAnnotations===1?"":"s"} imported across {mlResult.matchedTasks} task{mlResult.matchedTasks===1?"":"s"}{mlResult.unmatched.length ? ` · ${mlResult.unmatched.length} filename${mlResult.unmatched.length===1?"":"s"} unmatched` : ""}</div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Data Export</h3></div>
+      <p className="field-hint">CSV exports are available throughout the app (Tasks, Reports, Label Schema). For a full machine-readable snapshot of one project — tasks, annotations and QA reviews — export as JSON here.</p>
+      <div className="ml-import-row">
+        <select value={exportProjectId} onChange={e=>setExportProjectId(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        <button className="ghost-btn" onClick={()=>onExportProjectJson(exportProjectId)}><Download size={13}/> Export Project JSON</button>
+      </div>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Database setup</h3></div>
+      <p className="field-hint">Tokens and webhooks sync to Supabase once these tables exist (safe to add anytime — everything above already works locally without them):</p>
+      <pre className="sql-snippet">{`create table api_tokens (id text primary key, name text, token text, scopes jsonb, created_by text, created_at timestamptz, revoked boolean default false);
+create table webhooks (id text primary key, name text, url text, events jsonb, enabled boolean default true, created_at timestamptz);`}</pre>
+    </div>
   </div>;
 }
 
