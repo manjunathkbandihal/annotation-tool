@@ -294,22 +294,17 @@ function App() {
     return () => events.forEach(evt => window.removeEventListener(evt, mark));
   }, []);
   useEffect(() => {
-    const [appSettings, setAppSettings] = useState(() => readStorage(SETTINGS_KEY, {
-  ...
-  sessionIdleMinutes: 30
-}));
-
-// Build 42: Session security — idle timeout
-const lastActivityRef = useRef(Date.now());
-
-useEffect(() => {
-  ...
-}, []);
-
-useEffect(() => {
-  const minutes = appSettings.sessionIdleMinutes;
-  ...
-}, [appSettings.sessionIdleMinutes, session]);
+    const minutes = appSettings.sessionIdleMinutes;
+    if (!minutes || minutes <= 0 || !session) return;
+    const id = setInterval(() => {
+      const idleMs = Date.now() - lastActivityRef.current;
+      if (idleMs >= minutes * 60000) {
+        logAudit("Session Auto-Locked", null, null, `Signed out after ${minutes} minutes of inactivity.`, currentUserName, "System");
+        supabase.auth.signOut();
+      }
+    }, 30000);
+    return () => clearInterval(id);
+  }, [appSettings.sessionIdleMinutes, session]);
 
   const [accountActionStatus, setAccountActionStatus] = useState({ loading: false, forEmail: null, message: "", error: false });
 
