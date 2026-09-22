@@ -1,844 +1,6301 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap");
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Activity, AlertCircle, Archive, ArrowUpDown, BarChart3, Bell, Brush, Calendar, CheckCircle2, ChevronDown,
+  ClipboardCheck, Clock3, Copy, Database, Download, Edit3, Eraser, Eye, EyeOff, FileText,
+  FolderKanban, Grid3X3, Image as ImageIcon, LayoutDashboard, ListFilter, Menu,
+  Minus, MoreHorizontal, Move, MousePointer2, LogOut, PanelRight, Pause, Play, Plus,
+  Redo2, RotateCcw, Save, Search, Settings, ShieldCheck, Square, Target, Trash2,
+  TrendingUp, Undo2, Upload, Users, X, ZoomIn, ZoomOut, FileArchive, FileJson, FileSpreadsheet, Check, Filter, RefreshCw, UserPlus, BriefcaseBusiness, Zap, Palette, SlidersHorizontal, Layers, Workflow, CheckSquare, Star
+} from "lucide-react";
+import "./App.css";
+import { supabase } from "./supabaseClient.js";
+import JSZip from "jszip";
 
-:root{
-  --green:#2563eb;--green-dark:#1d4ed8;--navy:#07111f;--navy2:#0c1828;
-  --text:#17202b;--muted:#687584;--line:#e5e9ef;--soft:#f6f8fb;
-  --white:#fff;--shadow:0 10px 30px rgba(15,23,42,.07);--radius:12px;
+// ---- Build 42: Error Monitoring ----
+// Bulletproof by design: this capture path never depends on React state or a
+// live session, so it keeps working even if the app itself has crashed.
+const ERROR_LOG_KEY = "annotatepro_error_log_v1";
+function logClientError(message, stack, context) {
+  try {
+    const raw = localStorage.getItem(ERROR_LOG_KEY);
+    const log = raw ? JSON.parse(raw) : [];
+    log.unshift({ id: `err-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, message: String(message || "Unknown error").slice(0, 500), stack: String(stack || "").slice(0, 2000), context: context || "", timestamp: new Date().toISOString(), synced: false });
+    localStorage.setItem(ERROR_LOG_KEY, JSON.stringify(log.slice(0, 100)));
+  } catch { /* localStorage unavailable — nothing more we can do */ }
 }
-*{box-sizing:border-box}
-button,input,select,textarea{font:inherit}
-button{cursor:pointer}
-body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);background:#f4f6f9}
-.app-shell{min-height:100vh;display:flex}
-.sidebar{width:252px;background:linear-gradient(180deg,#07111f,#0a1727);color:#dbe5ef;position:fixed;inset:0 auto 0 0;z-index:50;display:flex;flex-direction:column;border-right:1px solid rgba(255,255,255,.05)}
-.brand{height:76px;padding:0 20px;display:flex;align-items:center;gap:11px;border-bottom:1px solid rgba(255,255,255,.06)}
-.brand-mark{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;background:#2563eb;color:white;box-shadow:0 5px 16px rgba(37,99,235,.3)}
-.brand strong{display:block;font-size:15px;color:#fff}.brand span{display:block;font-size:10px;color:#8391a1;margin-top:3px}
-.workspace-switcher{padding:19px 16px 13px}.workspace-switcher>span,.nav-label{font-size:9px;font-weight:700;letter-spacing:1.2px;color:#647488;margin:0 4px 9px;display:block}
-.workspace-switcher button{width:100%;border:1px solid rgba(255,255,255,.08);background:#101e2f;border-radius:9px;color:white;padding:9px;display:flex;align-items:center;gap:9px;text-align:left}
-.workspace-avatar{width:29px;height:29px;border-radius:7px;background:#17304d;display:grid;place-items:center;color:#75a8ff;font-weight:700;font-size:12px}
-.workspace-switcher b{font-size:11px;display:block}.workspace-switcher small{display:block;font-size:9px;color:#7f8da0;margin-top:2px;white-space:nowrap}.workspace-switcher button svg{margin-left:auto;color:#77879a}
-.sidebar-nav{padding:8px 12px;flex:1;overflow:auto}.nav-label{margin:10px 8px 8px}
-.nav-item{width:100%;height:41px;border:0;background:transparent;color:#8998aa;border-radius:8px;display:flex;align-items:center;gap:11px;padding:0 11px;text-align:left;margin:2px 0;font-size:11px;font-weight:500}
-.nav-item:hover{background:rgba(255,255,255,.045);color:#fff}.nav-item.active{background:#162942;color:#fff;box-shadow:inset 3px 0 #3b82f6}.nav-item.active svg{color:#5e9aff}.nav-item em{margin-left:auto;background:#26394f;color:#aab9ca;font-size:9px;font-style:normal;border-radius:10px;padding:3px 6px}
-.sidebar-bottom{padding:12px 14px;border-top:1px solid rgba(255,255,255,.06)}.online-status{font-size:9px;color:#7e8d9f;display:flex;align-items:center;gap:7px;margin:0 4px 12px}.online-status span{width:6px;height:6px;background:#35c878;border-radius:50%;box-shadow:0 0 0 3px rgba(53,200,120,.1)}
-.user-card{background:#101e2e;border-radius:9px;padding:9px;display:flex;align-items:center;gap:9px}.user-avatar,.tiny-avatar{border-radius:50%;display:grid;place-items:center;background:#dbeafe;color:#1d4ed8;font-weight:700}.user-avatar{width:31px;height:31px;font-size:11px}.user-card b{display:block;font-size:10px;color:white}.user-card span{display:block;color:#718197;font-size:9px;margin-top:2px}.user-card svg{margin-left:auto;color:#64748b}
-.main-area{margin-left:252px;width:calc(100% - 252px);min-width:0}.topbar{height:64px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 28px;position:sticky;top:0;z-index:30}.breadcrumb{display:flex;align-items:center;gap:10px;font-size:11px}.breadcrumb span{color:#8b96a4}.breadcrumb b{color:#c1c7cf}.breadcrumb strong{color:#293443}
-.top-actions{margin-left:auto;display:flex;align-items:center;gap:10px}.global-search{width:210px;height:34px;border:1px solid var(--line);border-radius:7px;display:flex;align-items:center;padding:0 9px;gap:7px;color:#9aa4b0;background:#fff;cursor:pointer}.global-search span{flex:1;text-align:left;font-size:10.5px;color:#9aa4b0}.global-search kbd{font-size:9px;font-family:inherit;background:#f1f4f8;color:#8b96a4;border-radius:5px;padding:2px 6px}.global-search:hover{border-color:#c7d2e0;color:#5b6675}.icon-btn,.profile-button{border:0;background:transparent}.icon-btn{width:34px;height:34px;border:1px solid var(--line);border-radius:7px;color:#697789;display:grid;place-items:center;position:relative}.icon-btn i{position:absolute;width:6px;height:6px;background:#ef4444;border:2px solid white;border-radius:50%;top:6px;right:6px}.profile-wrap{position:relative}.profile-button{display:flex;align-items:center;gap:7px;font-size:10px;color:#3d4855;padding:4px 5px}.tiny-avatar{width:27px;height:27px;font-size:10px}.profile-menu{position:absolute;right:0;top:42px;background:#fff;border:1px solid var(--line);box-shadow:var(--shadow);border-radius:9px;width:170px;padding:11px;z-index:80}.profile-menu b,.profile-menu>span{display:block;font-size:10px}.profile-menu>span{color:#8792a0;margin-top:3px}.profile-menu hr{border:0;border-top:1px solid var(--line);margin:9px 0}.profile-menu button{border:0;background:transparent;width:100%;padding:7px;display:flex;gap:7px;font-size:10px;text-align:left}.mobile-menu{display:none}
-
-.page{padding:30px;max-width:1500px;margin:auto}.page-head{display:flex;align-items:flex-end;justify-content:space-between;margin-bottom:25px}.eyebrow{font-size:9px;font-weight:700;letter-spacing:1.3px;color:#718096;display:block;margin-bottom:6px}.page-head h1{font-size:25px;letter-spacing:-.7px;margin:0 0 6px}.page-head p{font-size:11px;color:var(--muted);margin:0}.primary-btn,.secondary-btn{height:36px;border-radius:7px;padding:0 13px;border:1px solid;display:inline-flex;align-items:center;justify-content:center;gap:7px;font-size:10px;font-weight:600}.primary-btn{background:var(--green);border-color:var(--green);color:white}.primary-btn:hover{background:var(--green-dark)}.secondary-btn{background:white;border-color:var(--line);color:#3e4a58}.secondary-btn:hover{background:#f8fafc}.text-btn{border:0;background:transparent;color:#2563eb;font-size:10px;font-weight:600}.text-btn span{margin-left:4px}.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:20px}.stat-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:17px;display:flex;gap:13px;box-shadow:0 2px 6px rgba(15,23,42,.025)}.stat-icon{width:36px;height:36px;border-radius:8px;background:#eff6ff;color:#2563eb;display:grid;place-items:center;flex:none}.stat-card span{display:block;color:#748091;font-size:9px;font-weight:500}.stat-card strong{display:block;font-size:22px;margin:4px 0 4px;letter-spacing:-.5px}.stat-card small{font-size:8px;color:#1f9d62;display:flex;gap:4px;align-items:center}.panel{background:#fff;border:1px solid var(--line);border-radius:11px;box-shadow:0 2px 7px rgba(15,23,42,.025);overflow:hidden}.panel-head{padding:17px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line)}.panel-head h2{font-size:13px;margin:0 0 4px}.panel-head p{font-size:9px;color:#8994a2;margin:0}.table-wrap{overflow:auto}table{width:100%;border-collapse:collapse;min-width:700px}th{text-align:left;font-size:8px;letter-spacing:.8px;color:#8a96a4;background:#fafbfc;padding:10px 18px;border-bottom:1px solid var(--line)}td{padding:12px 18px;border-bottom:1px solid #edf0f3;font-size:10px;color:#5c6877}td>b{display:block;color:#263241;font-size:10px}td small{display:block;font-size:8px;color:#9aa3ae;margin-top:3px}.table-progress{display:flex;align-items:center;gap:8px}.table-progress>span{width:95px;height:5px;background:#edf0f4;border-radius:5px;overflow:hidden}.table-progress i,.progress-track i{display:block;height:100%;background:#2563eb;border-radius:inherit}.table-progress b{font-size:9px;color:#4c5867}.status-badge{display:inline-flex;align-items:center;gap:5px;font-size:8px;font-weight:600;padding:5px 7px;border-radius:20px;white-space:nowrap}.status-badge i{width:5px;height:5px;border-radius:50%;background:currentColor}.status-badge.completed{color:#15803d;background:#ecfdf3}.status-badge.progressing{color:#2563eb;background:#eff6ff}.status-badge.pending{color:#a16207;background:#fff8e7}.dashboard-bottom{display:grid;grid-template-columns:1.1fr .9fr;gap:20px;margin-top:20px}.activity-list{padding:5px 18px}.activity-row{display:flex;align-items:center;gap:10px;padding:12px 0;border-bottom:1px solid #eef1f4}.activity-row:last-child{border-bottom:0}.activity-icon{width:30px;height:30px;border-radius:7px;background:#f1f5f9;color:#64748b;display:grid;place-items:center}.activity-row b{font-size:9px;display:block}.activity-row span{font-size:8px;color:#8b95a2;display:block;margin-top:3px}.activity-row time{margin-left:auto;font-size:8px;color:#a1aab5}.quick-panel{min-height:260px}.quick-grid{padding:13px;display:grid;grid-template-columns:1fr 1fr;gap:8px}.quick-action{background:#f8fafc;border:1px solid #edf0f4;border-radius:8px;min-height:73px;padding:11px;text-align:left;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px}.quick-action:hover{border-color:#bfdbfe;background:#f8fbff}.quick-action span{width:29px;height:29px;border-radius:7px;background:white;display:grid;place-items:center;color:#2563eb}.quick-action b{font-size:9px}.quick-action em{font-style:normal;color:#9aa4af}
-
-.project-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:17px}.mini-stat{background:white;border:1px solid var(--line);border-radius:9px;padding:13px 15px}.mini-stat span{font-size:9px;color:#7b8795;display:block}.mini-stat b{font-size:20px;display:block;margin-top:5px}.project-filters{display:flex;gap:10px;padding:14px;border-bottom:1px solid var(--line)}.filter-search{height:35px;border:1px solid var(--line);border-radius:7px;display:flex;align-items:center;padding:0 9px;gap:7px;color:#9aa3ae;max-width:320px;flex:1}.filter-search input{border:0;outline:0;width:100%;font-size:10px}.select-wrap{height:35px;border:1px solid var(--line);border-radius:7px;display:flex;align-items:center;padding:0 9px;gap:7px;color:#7a8794}.select-wrap select{border:0;outline:0;font-size:10px;color:#4b5664;background:white}.project-grid{padding:16px;display:grid;grid-template-columns:repeat(3,1fr);gap:13px}.project-card{border:1px solid var(--line);border-radius:10px;padding:15px;background:#fff}.project-card:hover{box-shadow:var(--shadow);border-color:#d8e0ea}.project-card-head{display:flex;justify-content:space-between}.project-icon{width:34px;height:34px;border-radius:8px;background:#eff6ff;color:#2563eb;display:grid;place-items:center}.more-btn,.danger-icon{border:0;background:transparent;color:#8792a0}.project-card-title h3{font-size:12px;margin:14px 0 4px}.project-card-title span,.project-meta{font-size:8px;color:#8994a1}.project-meta{display:flex;align-items:center;gap:6px;margin-top:10px;flex-wrap:wrap}.card-progress{margin-top:17px}.card-progress>div:first-child{display:flex;justify-content:space-between;align-items:center}.card-progress b{font-size:12px}.card-progress span{font-size:8px;color:#8b95a1}.progress-track{height:5px;background:#edf0f4;border-radius:5px;overflow:hidden;margin-top:7px}.project-card-foot{margin-top:15px;padding-top:11px;border-top:1px solid #eef1f4;display:flex;justify-content:space-between;align-items:center}.card-actions{display:flex;align-items:center;gap:5px}.card-actions button{border:0;background:transparent;font-size:8px;color:#64748b;padding:4px}.card-actions .start-link{color:#2563eb;display:flex;align-items:center;gap:3px}.danger-icon{color:#dc2626!important}.empty-state{text-align:center;padding:60px;color:#9aa4b0}.empty-state h3{color:#4b5663;font-size:13px}.empty-state p{font-size:9px}
-.project-filters.standalone{background:#fff;border:1px solid var(--line);border-radius:11px;margin-bottom:17px;box-shadow:0 2px 7px rgba(15,23,42,.025)}
-.category-tile-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
-.category-tile{background:#fff;border:1px solid var(--line);border-radius:13px;padding:20px;text-align:left;cursor:pointer;box-shadow:0 2px 7px rgba(15,23,42,.025);display:flex;flex-direction:column;align-items:flex-start;gap:11px}
-.category-tile:hover{box-shadow:var(--shadow);border-color:#d8e0ea}
-.category-tile-icon{width:40px;height:40px;border-radius:11px;display:grid;place-items:center}
-.category-tile b{font-size:14px;color:#1c2632}
-.category-tile-count{font-size:9px;color:#8994a1}
-.category-drill-head{align-items:flex-start}
-.category-back-btn{border:0;background:transparent;display:flex;align-items:center;gap:5px;font-size:9px;font-weight:700;color:#64717c;padding:0;margin-bottom:9px;cursor:pointer}
-.category-back-btn:hover{color:#2563eb}
-.category-drill-title{display:flex;align-items:center;gap:9px}
-.category-drill-title h1{margin:0}
-.category-dot{width:9px;height:9px;border-radius:50%;flex:none}
-.category-count-pill{font-size:9px;font-weight:700;color:#5c6877;background:#f2f4f6;border:1px solid var(--line);border-radius:20px;padding:4px 9px}
-.category-tile-wrap{position:relative}
-.category-tile-wrap .category-tile{width:100%}
-.category-tile-actions{position:absolute;top:12px;right:12px;display:flex;gap:4px;opacity:0;transition:.15s}
-.category-tile-wrap:hover .category-tile-actions{opacity:1}
-.category-tile-actions button{width:26px;height:26px;border-radius:7px;border:1px solid var(--line);background:#fff;display:grid;place-items:center;color:#69747f}
-.category-tile-actions button:hover{background:#f4f6f8}
-.category-tile-actions button.danger-icon:hover{color:#dc2626;border-color:#fecaca;background:#fef2f2}
-.category-drill-desc{font-size:9px;color:var(--muted);margin:6px 0 0;max-width:480px}
-.category-drill-actions{display:flex;gap:8px}
-.icon-picker-row .icon-choice{width:32px;height:32px;border-radius:8px;display:grid;place-items:center;color:#5c6a78;padding:0;background:#fff;border:1px solid var(--line);box-shadow:none}
-.icon-picker-row .icon-choice.selected{background:#eff6ff;border-color:#93c5fd;color:#2563eb}
-@media(max-width:620px){.category-drill-actions{flex-direction:column;width:100%}}
-@media(max-width:900px){.category-tile-grid{grid-template-columns:1fr 1fr}}
-@media(max-width:620px){.category-tile-grid{grid-template-columns:1fr}.category-drill-head{flex-direction:column;gap:12px;align-items:stretch}}
-.archived-pill{background:#f1f5f9;color:#64748b}
-.category-tile-wrap.archived .category-tile{opacity:.6}
-.archived-badge{position:absolute;top:12px;right:12px;font-size:7px;font-weight:800;color:#64748b;background:#f1f5f9;border-radius:20px;padding:3px 8px;z-index:1;text-transform:uppercase;letter-spacing:.03em}
-.tile-avatars{margin-top:2px}
-.member-avatar.small{width:22px;height:22px;font-size:7px;border-radius:6px}
-.overview-avatar-stack{display:flex}
-.overview-avatar-stack .member-avatar{margin-left:-6px;border:1.5px solid #fff}
-.overview-avatar-stack .member-avatar:first-child{margin-left:0}
-.project-overview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
-.overview-card{min-height:0}
-.overview-team-body{padding:15px 18px}
-.overview-owner-row{display:flex;flex-direction:column;gap:7px;margin-bottom:14px}
-.overview-owner-row:last-child{margin-bottom:0}
-.overview-label{font-size:7px;font-weight:800;color:#8994a1;letter-spacing:.04em}
-.overview-person{display:flex;align-items:center;gap:8px;font-size:9px}
-.overview-summary-list{padding:12px 18px 16px;display:flex;flex-direction:column;gap:10px}
-.overview-summary-list>div{display:flex;align-items:center;justify-content:space-between;font-size:9px;color:#697686;padding-bottom:9px;border-bottom:1px solid #f0f2f5}
-.overview-summary-list>div:last-child{border-bottom:0;padding-bottom:0}
-.overview-summary-list b{color:#263241;font-size:9px}
-.overview-activity-list{padding:10px 18px 16px;display:flex;flex-direction:column;gap:10px}
-.overview-activity-row{padding-bottom:9px;border-bottom:1px solid #f0f2f5}
-.overview-activity-row:last-child{border-bottom:0;padding-bottom:0}
-.overview-activity-row b{display:block;font-size:9px;color:#263241}
-.overview-activity-row span{display:block;font-size:7px;color:#929ca8;margin-top:3px}
-@media(max-width:1050px){.project-overview-grid{grid-template-columns:1fr}}
-
-.modal-backdrop{position:fixed;inset:0;background:rgba(7,17,31,.56);z-index:100;display:grid;place-items:center;padding:20px}.modal{background:white;border-radius:13px;width:min(760px,100%);box-shadow:0 25px 70px rgba(0,0,0,.2);overflow:hidden}.modal-head{padding:20px 22px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between}.modal-head h2{margin:0;font-size:18px}.modal-head p{margin:5px 0 0;font-size:9px;color:#8b96a3}.modal-close{border:0;background:#f5f7f9;width:30px;height:30px;border-radius:7px;display:grid;place-items:center;color:#697584}.form-grid{padding:20px;display:grid;grid-template-columns:1fr 1fr;gap:15px}.form-grid label{font-size:9px;font-weight:600;color:#4b5663}.form-grid input,.form-grid select,.form-grid textarea{display:block;width:100%;height:35px;border:1px solid var(--line);border-radius:7px;outline:0;padding:0 10px;font-size:10px;margin-top:6px;color:#293443;background:#fff}.form-grid textarea{height:75px;padding:9px;resize:vertical}.form-grid .full{grid-column:1/-1}.modal-foot{display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--line);background:#fafbfc}.details-modal{width:min(650px,100%)}.detail-progress{display:grid;grid-template-columns:80px 1fr;gap:17px;padding:20px;border-bottom:1px solid var(--line);align-items:center}.big-progress{font-size:26px;font-weight:800;color:#2563eb;text-align:center}.detail-progress b{font-size:10px}.detail-progress p{font-size:9px;color:#8994a1;margin:5px 0 10px}.detail-grid{padding:18px 20px;display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.detail-box{background:#f8fafc;border:1px solid #edf0f4;border-radius:8px;padding:11px}.detail-box span{display:block;font-size:8px;color:#8793a0}.detail-box b{display:block;font-size:10px;margin-top:4px}.description-box{margin:0 20px 20px;padding:12px;background:#f8fafc;border-radius:8px}.description-box b{font-size:9px}.description-box p{font-size:9px;color:#7c8794;line-height:1.5;margin:5px 0 0}.small-modal{width:min(500px,100%)}.guide{text-align:center;padding:30px}.guide svg{color:#2563eb}.guide h3{font-size:13px}.guide p{font-size:9px;line-height:1.6;color:#7d8996}.code-sample{text-align:left;background:#0b1726;color:#b9d0e8;border-radius:7px;padding:12px;font:10px monospace}.shortcuts-modal{width:min(430px,100%)}.shortcut-list{padding:12px 20px 20px}.shortcut-list div{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid #edf0f3;font-size:10px}.shortcut-list kbd,.tool-button kbd,.label-item kbd{background:#f1f4f7;border:1px solid #e1e6eb;border-radius:4px;padding:3px 5px;font:8px monospace;color:#75808e}
-
-.annotation-shell{height:calc(100vh - 64px);min-height:620px;background:#0c1420;display:grid;grid-template-columns:160px minmax(0,1fr) 270px;overflow:hidden}.workspace-page{height:calc(100vh - 64px);min-height:680px}.workspace-top{height:60px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 18px;gap:25px}.workspace-project{display:flex;align-items:center;gap:8px}.workspace-project>span{font-size:8px;color:#8a95a1;letter-spacing:.8px}.workspace-project select{border:0;outline:0;font-size:10px;font-weight:600;max-width:210px}.workspace-task-title{border-left:1px solid var(--line);padding-left:22px;min-width:0}.workspace-task-title b{font-size:10px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:350px}.workspace-task-title span{font-size:8px;color:#8b95a1;display:block;margin-top:3px}.workspace-actions{margin-left:auto;display:flex;gap:7px}
-.tool-panel{background:#0a1421;border-right:1px solid #1b2a3b;padding:14px 10px;display:flex;flex-direction:column}.panel-section-title{font-size:8px;font-weight:700;letter-spacing:1.1px;color:#66788d;padding:4px 7px 10px}.tool-button{height:40px;width:100%;border:0;background:transparent;color:#8594a6;border-radius:7px;display:grid;grid-template-columns:23px 1fr auto;align-items:center;gap:5px;padding:0 7px;font-size:9px;text-align:left}.tool-button:hover{background:#122236;color:#dbe6f0}.tool-button.active{background:#18365b;color:#fff;box-shadow:inset 2px 0 #3b82f6}.tool-button kbd{background:#132033;border-color:#24364a;color:#6f8094}.tool-button:disabled{opacity:.5}.tool-divider{height:1px;background:#1b2938;margin:9px 4px}.tool-bottom{margin-top:auto}
-.canvas-area{min-width:0;display:grid;grid-template-rows:45px 1fr 42px;background:#111b29}.canvas-toolbar{background:#101b2a;border-bottom:1px solid #223044;display:flex;align-items:center;justify-content:space-between;padding:0 14px;color:#a7b5c5}.canvas-tool-status{font-size:9px;display:flex;align-items:center;gap:7px}.canvas-tool-status small{color:#617287;margin-left:7px}.tool-dot{width:6px;height:6px;background:#3b82f6;border-radius:50%}.canvas-controls{display:flex;align-items:center;gap:4px}.canvas-controls button{height:27px;min-width:27px;border:1px solid #293a4f;background:#152235;color:#9eacbd;border-radius:5px;font-size:8px}.canvas-controls b{font-size:8px;min-width:37px;text-align:center}.canvas-stage{position:relative;overflow:hidden;display:grid;place-items:center;background-color:#0e1724;background-image:linear-gradient(rgba(255,255,255,.025) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.025) 1px,transparent 1px);background-size:24px 24px}
-.canvas-stage.pan-mode .annotation-canvas{cursor:grab}
-.canvas-stage.eraser-mode .annotation-canvas{cursor:cell}.annotation-canvas{width:min(82%,1000px);aspect-ratio:16/10;position:relative;transform-origin:center center;touch-action:none;user-select:none;box-shadow:0 12px 50px rgba(0,0,0,.35)}.annotation-canvas>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block;border-radius:3px}.annotation-overlay{position:absolute;inset:0}.annotation-box{position:absolute;border:2px solid var(--annotation-color);background:color-mix(in srgb,var(--annotation-color) 9%,transparent);box-shadow:0 0 0 1px rgba(0,0,0,.12);cursor:pointer}.annotation-box.selected{border-width:3px;box-shadow:0 0 0 2px rgba(255,255,255,.75)}.annotation-box>span{position:absolute;top:-19px;left:-2px;background:var(--annotation-color);color:#fff;font-size:8px;padding:3px 5px;border-radius:3px 3px 0 0}.annotation-box>b{position:absolute;left:2px;bottom:2px;font-size:7px;color:#fff;background:rgba(0,0,0,.55);padding:2px 4px;border-radius:2px}.resize-handle{position:absolute;width:8px;height:8px;background:#fff;border:2px solid var(--annotation-color);right:-5px;bottom:-5px;border-radius:2px}.annotation-svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible;cursor:pointer}.annotation-svg.selected{filter:drop-shadow(0 0 2px #fff)}.drawing-box{position:absolute;border:2px dashed;pointer-events:none}.canvas-bottom{background:#101b2a;border-top:1px solid #223044;color:#7d8ca0;display:flex;align-items:center;padding:0 13px;gap:7px;font-size:8px}.canvas-bottom button{height:27px;border:1px solid #293a4f;background:#152235;color:#9eacbd;border-radius:5px;font-size:8px;padding:0 9px}.canvas-bottom button:disabled{opacity:.4}.task-counter{padding:0 7px}.bottom-spacer{flex:1}.canvas-bottom span:not(.bottom-spacer){margin-left:7px}.empty-canvas{color:#718196;text-align:center}.empty-canvas svg{opacity:.5}.empty-canvas h3{color:#aebccc;font-size:13px;margin:12px 0 5px}.empty-canvas p{font-size:9px;margin:0 0 13px}
-.right-panel{background:#fff;display:flex;flex-direction:column;min-width:0}.right-tabs{height:45px;border-bottom:1px solid var(--line);display:flex}.right-tabs button{flex:1;border:0;background:white;font-size:9px;color:#84909d;position:relative}.right-tabs button.active{color:#2563eb;font-weight:700}.right-tabs button.active:after{content:"";position:absolute;height:2px;background:#2563eb;bottom:0;left:14px;right:14px}.right-tabs em{font-style:normal;background:#eef2f6;padding:2px 5px;border-radius:9px;margin-left:3px;font-size:7px}.right-content{flex:1;overflow:auto}.right-section{padding:15px 13px;border-bottom:1px solid var(--line)}.right-section-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:9px}.right-section-head b{font-size:8px;letter-spacing:1px;color:#778493}.right-section-head button,.right-section-head>span{border:0;background:transparent;color:#8995a2;font-size:8px}.label-list{display:flex;flex-direction:column;gap:3px}.label-item{height:34px;border:1px solid transparent;background:#fff;border-radius:6px;display:flex;align-items:center;gap:8px;padding:0 8px;text-align:left;font-size:9px;color:#4b5765}.label-item:hover{background:#f7f9fb}.label-item.selected{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}.label-color{width:9px;height:9px;border-radius:3px;flex:none}.label-item kbd{margin-left:auto;font-size:6px;background:#f4f6f8;color:#8c96a1}.object-list{display:flex;flex-direction:column;gap:3px}.object-item{display:flex;align-items:center;gap:8px;width:100%;border:1px solid transparent;background:#fff;border-radius:6px;padding:7px;text-align:left}.object-item:hover,.object-item.selected{background:#f7faff;border-color:#dbeafe}.object-number{width:19px;height:19px;border-radius:5px;color:#fff;display:grid;place-items:center;font-size:7px;font-weight:700}.object-item div{flex:1}.object-item b{display:block;font-size:9px}.object-item small{display:block;font-size:7px;color:#8c97a3;margin-top:2px}.object-item svg{color:#a2acb7}.empty-objects{text-align:center;padding:28px 10px;color:#a1abb7}.empty-objects p{font-size:9px;margin:7px 0 3px;color:#7d8997}.empty-objects small{font-size:7px;line-height:1.5}.selected-card{margin:12px;border:1px solid #dbeafe;background:#f8fbff;border-radius:8px;padding:10px}.selected-card>div:first-child b{font-size:8px;display:block;color:#657486}.selected-card>div:first-child span{font-size:9px;display:block;margin-top:4px}.selected-actions{display:flex;gap:4px;margin-top:9px}.selected-actions button{border:1px solid #dce3eb;background:white;border-radius:5px;padding:5px 7px;font-size:7px;display:flex;align-items:center;gap:4px;color:#586574}.selected-actions .danger{color:#dc2626}.right-footer{padding:12px 13px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}.right-footer>div:first-child{display:flex;align-items:center;gap:6px}.right-footer span{font-size:7px;color:#8b96a2}.right-footer>b{font-size:9px}.workspace-toast{position:fixed;bottom:55px;left:50%;transform:translateX(-50%);background:#07111f;color:white;border:1px solid #24344a;border-radius:8px;padding:9px 13px;display:flex;align-items:center;gap:7px;font-size:9px;z-index:120;box-shadow:0 12px 30px rgba(0,0,0,.25)}
-
-.import-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:15px}.import-card{background:white;border:1px solid var(--line);border-radius:11px;padding:24px;min-height:230px;cursor:pointer}.import-card:hover{box-shadow:var(--shadow);border-color:#d6e2f0}.import-icon{width:42px;height:42px;border-radius:9px;background:#eff6ff;color:#2563eb;display:grid;place-items:center}.import-card h3{font-size:13px;margin:18px 0 7px}.import-card p{font-size:9px;line-height:1.6;color:#82909e;min-height:45px}.export-card{background:#fff;border:1px solid var(--line);border-radius:11px;padding:25px;display:flex;align-items:center;gap:18px}.export-icon{width:50px;height:50px;background:#eff6ff;color:#2563eb;border-radius:10px;display:grid;place-items:center}.export-card h2{font-size:15px;margin:0 0 5px}.export-card p{font-size:9px;color:#84909d}.export-card>.primary-btn{margin-left:auto}.export-stats{display:flex;gap:15px;font-size:8px;color:#7f8a97}.export-stats b{color:#293443}.placeholder-large{min-height:380px;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#94a0ad;padding:30px}.placeholder-large h2{color:#3d4957;font-size:16px}.placeholder-large p{max-width:500px;font-size:9px;line-height:1.6}
-
-@media(max-width:1100px){
-  .sidebar{width:220px}.main-area{margin-left:220px;width:calc(100% - 220px)}.stats-grid,.project-summary{grid-template-columns:repeat(2,1fr)}.project-grid{grid-template-columns:repeat(2,1fr)}.annotation-shell{grid-template-columns:130px minmax(0,1fr) 240px}.tool-button span{display:none}.tool-button{grid-template-columns:1fr;justify-items:center}.tool-button kbd{display:none}
-}
-@media(max-width:850px){
-  .sidebar{transform:translateX(-100%);transition:.2s}.sidebar.sidebar-open{transform:translateX(0)}.main-area{margin-left:0;width:100%}.mobile-menu{display:grid;border:0;background:transparent;color:#556273;margin-right:10px}.global-search{display:none}.page{padding:20px}.dashboard-bottom{grid-template-columns:1fr}.annotation-shell{grid-template-columns:54px minmax(0,1fr);height:calc(100vh - 124px)}.right-panel{display:none}.workspace-top{height:60px}.workspace-task-title{display:none}.tool-panel{padding:12px 6px}.annotation-canvas{width:92%}.canvas-bottom span:not(.bottom-spacer){display:none}.project-grid{grid-template-columns:1fr}.import-grid{grid-template-columns:1fr}
-}
-@media(max-width:560px){
-  .page-head{align-items:flex-start;flex-direction:column;gap:15px}.stats-grid,.project-summary{grid-template-columns:1fr 1fr}.stat-card{padding:12px}.stat-card strong{font-size:18px}.form-grid,.detail-grid{grid-template-columns:1fr}.form-grid .full{grid-column:auto}.workspace-actions .secondary-btn{font-size:0;padding:0 10px}.workspace-actions .secondary-btn svg{margin:0}.workspace-actions .primary-btn{font-size:9px}.canvas-controls button:nth-child(4),.canvas-controls button:nth-child(5){display:none}.annotation-shell{height:calc(100vh - 124px)}.canvas-bottom{padding:0 6px}.canvas-bottom button{padding:0 6px}.workspace-project select{max-width:150px}
+if (typeof window !== "undefined" && !window.__annotateProErrorHooksInstalled) {
+  window.__annotateProErrorHooksInstalled = true;
+  window.addEventListener("error", (e) => logClientError(e.message, e.error?.stack, "window.onerror"));
+  window.addEventListener("unhandledrejection", (e) => logClientError(e.reason?.message || String(e.reason), e.reason?.stack, "unhandledrejection"));
 }
 
-/* Build 2 — Dataset & Import Engine */
-.dataset-head-actions{display:flex;gap:8px}.dataset-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px}.dataset-info{padding:16px 18px;display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}.dataset-info-main{display:flex;align-items:center;gap:12px}.dataset-logo{width:42px;height:42px;border-radius:9px;background:#eff6ff;color:#2563eb;display:grid;place-items:center}.dataset-name-input{border:0;outline:0;font-size:13px;font-weight:700;width:280px;padding:2px 0;background:transparent}.dataset-description-input{border:0;outline:0;display:block;font-size:9px;color:#7f8b98;width:360px;margin-top:3px;background:transparent}.dataset-meta-line{display:flex;gap:7px;color:#9aa4af;font-size:8px;margin-top:7px}.dataset-info-actions{display:flex;gap:7px}.danger-outline{height:36px;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:7px;padding:0 11px;display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:600}.task-library-head{display:flex;justify-content:space-between;align-items:center;padding:17px 18px;border-bottom:1px solid var(--line)}.task-library-head h2{font-size:13px;margin:0 0 4px}.task-library-head p{font-size:9px;color:#8994a1;margin:0}.view-toggle{display:flex;border:1px solid var(--line);border-radius:7px;padding:2px}.view-toggle button{height:27px;border:0;background:transparent;border-radius:5px;padding:0 9px;color:#8994a1;font-size:8px;display:flex;align-items:center;gap:5px}.view-toggle button.active{background:#eff6ff;color:#2563eb;font-weight:600}.task-filters{padding:12px 15px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--line);background:#fcfdfe}.task-filters .filter-search{max-width:360px}.result-count{font-size:8px;color:#9aa4ae;margin-left:auto}.task-table-wrap{overflow:auto}.task-table{min-width:780px}.task-table td{vertical-align:middle}.task-thumb{width:54px;height:36px;object-fit:cover;border-radius:5px;border:1px solid #e3e7ec}.task-status-select{border:1px solid var(--line);background:white;border-radius:5px;padding:5px 7px;font-size:8px;color:#536070;outline:0}.annotation-count{font-size:9px;color:#8c97a4}.source-pill{font-size:7px;padding:4px 6px;background:#f1f5f9;color:#758293;border-radius:10px}.task-row-actions{display:flex;justify-content:flex-end;gap:3px}.task-row-actions button{width:28px;height:28px;border:1px solid var(--line);background:white;color:#718092;border-radius:5px;display:grid;place-items:center}.task-row-actions button:hover{color:#2563eb;background:#f8fbff}.task-row-actions button:last-child:hover{color:#dc2626}.dataset-empty{text-align:center;padding:55px 20px;color:#9ba6b1}.dataset-empty h3{font-size:13px;color:#4e5a68;margin:10px 0 5px}.dataset-empty p{font-size:9px;margin:0 0 14px}.task-grid{padding:15px;display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.task-tile{border:1px solid var(--line);border-radius:9px;overflow:hidden;background:white}.task-tile>img{width:100%;aspect-ratio:1.5;object-fit:cover;display:block}.task-tile-body{padding:9px}.task-tile-body>b{font-size:9px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-tile-body>small{font-size:7px;color:#9aa4ae;display:block;margin:3px 0 8px}.task-tile-body>div{display:flex;align-items:center;justify-content:space-between}.task-tile-body button{border:0;background:transparent;color:#8995a2}.dataset-help{margin-top:13px;border:1px solid #dbeafe;background:#f8fbff;border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between}.dataset-help>div{display:flex;gap:9px;color:#2563eb}.dataset-help b{display:block;font-size:9px;color:#405066}.dataset-help p{font-size:8px;color:#8290a0;margin:4px 0 0;line-height:1.5}.dataset-help>span{font-size:8px;color:#2563eb;background:#eff6ff;padding:5px 7px;border-radius:5px}.import-format-tabs{display:flex;justify-content:center;gap:3px;margin-bottom:18px}.import-format-tabs button{border:1px solid var(--line);background:white;border-radius:5px;padding:5px 13px;font-size:8px;color:#7d8997}.import-format-tabs button.active{background:#eff6ff;border-color:#bfdbfe;color:#2563eb;font-weight:600}.guide-note{margin-top:13px;padding:8px;text-align:left;background:#fff8e7;color:#8b6a1c;border-radius:6px;display:flex;gap:6px;align-items:flex-start;font-size:8px;line-height:1.45}
-.dataset-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
-.dataset-card{position:relative;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
-.dataset-card.archived{opacity:.6}
-.dataset-card-main{display:block;width:100%;text-align:left;border:0;background:transparent;padding:14px}
-.dataset-card-thumbs{display:grid;grid-template-columns:repeat(4,1fr);gap:3px;height:64px;margin-bottom:10px;border-radius:7px;overflow:hidden;background:#f1f5f9}
-.dataset-card-thumbs img{width:100%;height:64px;object-fit:cover}
-.dataset-card-thumb-empty{grid-column:1/-1;display:grid;place-items:center;color:#a7b1bc}
-.dataset-card b{display:block;font-size:11px;margin-bottom:4px}
-.dataset-card-meta{font-size:8px;color:#8994a1}
-.dataset-card .category-tile-actions{position:absolute;top:10px;right:10px}
-.dataset-card:hover .category-tile-actions{opacity:1}
-.valid-pill{background:#ecfdf3;color:#15803d}
-.invalid-pill{background:#fef2f2;color:#dc2626}
-@media(max-width:900px){.dataset-grid{grid-template-columns:1fr 1fr}}
-@media(max-width:620px){.dataset-grid{grid-template-columns:1fr}}
-.import-wizard-modal{max-width:640px;width:100%}
-.import-steps{display:flex;gap:6px;padding:14px 20px;border-bottom:1px solid var(--line)}
-.import-step{flex:1;display:flex;align-items:center;gap:7px;font-size:9px;font-weight:600;color:#9aa4ae}
-.import-step span{width:20px;height:20px;border-radius:50%;background:#f1f5f9;color:#9aa4ae;display:grid;place-items:center;font-size:8px;flex:none}
-.import-step.active{color:#2563eb}.import-step.active span{background:#2563eb;color:#fff}
-.import-step.done{color:#15803d}.import-step.done span{background:#dcfce7;color:#15803d}
-.import-body{padding:18px 20px;max-height:56vh;overflow:auto}
-.import-dropzone{width:100%;border:2px dashed #cbd5e1;border-radius:11px;background:#fbfdff;padding:28px;display:flex;flex-direction:column;align-items:center;gap:8px;color:#2563eb;cursor:pointer}
-.import-dropzone:hover{border-color:#93c5fd;background:#f5faff}
-.import-dropzone b{font-size:11px;color:#334155}
-.import-dropzone span{font-size:8px;color:#8994a1;text-align:center}
-.import-format-help{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:14px 0}
-.import-format-help>div{display:flex;gap:8px;border:1px solid var(--line);border-radius:8px;padding:10px;color:#2563eb}
-.import-format-help b{display:block;font-size:9px;color:#334155;margin-bottom:4px}
-.import-format-help code{font-size:7px;color:#64748b;background:#f8fafc;padding:3px 5px;border-radius:4px;display:block;word-break:break-all}
-.import-error{margin-top:12px;display:flex;align-items:center;gap:7px;background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-radius:7px;padding:9px 11px;font-size:9px}
-.import-file-row{display:flex;align-items:center;gap:9px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:16px;color:#2563eb}
-.import-file-row b{font-size:9px;color:#334155}
-.import-file-row span{font-size:8px;color:#8994a1;margin-left:auto}
-.import-mapping-list{display:flex;flex-direction:column;gap:9px}
-.import-mapping-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:8px;padding:11px 12px}
-.import-mapping-row b{display:block;font-size:9px}
-.import-mapping-row small{font-size:7px;color:#8994a1}
-.import-mapping-row select{border:1px solid var(--line);border-radius:6px;padding:6px 8px;font-size:8px;background:#fff;color:#475569;min-width:150px}
-.import-validation-cards{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:14px}
-.import-validation-cards>div{border-radius:9px;padding:12px;text-align:center}
-.import-validation-cards b{display:block;font-size:17px;margin-bottom:3px}
-.import-validation-cards span{font-size:7px}
-.import-valid-card{background:#ecfdf3;color:#15803d}
-.import-dupe-card{background:#fff8e7;color:#a16207}
-.import-invalid-card{background:#fef2f2;color:#dc2626}
-.import-dupe-choice{display:flex;align-items:center;justify-content:space-between;border:1px solid #fde68a;background:#fffbeb;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:9px;color:#92400e}
-.import-dupe-choice>div{display:flex;gap:4px}
-.import-dupe-choice button{border:1px solid #fde68a;background:#fff;border-radius:6px;padding:5px 10px;font-size:8px;color:#92400e}
-.import-dupe-choice button.active{background:#f59e0b;border-color:#f59e0b;color:#fff;font-weight:600}
-.import-preview-table{border:1px solid var(--line);border-radius:8px;overflow:auto;margin-top:8px}
-.import-url-cell{font-size:7px;color:#8994a1;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.import-problem-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.import-problem-list>div{display:flex;align-items:center;gap:8px;border:1px solid var(--line);border-radius:7px;padding:8px 10px}
-.import-problem-list b{font-size:9px}
-.import-problem-list small{font-size:7px;color:#dc2626;margin-left:auto}
-.import-history-panel{margin-top:16px}
-.cloud-migration-panel .settings-card-title p{max-width:520px}
-.cloud-detected-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;padding:0 20px 16px}
-.cloud-detected-card{background:#f8fafc;border:1px solid var(--line);border-radius:9px;padding:10px;text-align:center}
-.cloud-detected-card b{display:block;font-size:16px;color:#1e293b}
-.cloud-detected-card span{font-size:8px;color:#8994a1}
-.cloud-migration-actions{display:flex;align-items:center;gap:10px;padding:0 20px 16px;flex-wrap:wrap}
-.cloud-last-run{font-size:8px;color:#8994a1}
-.cloud-status-list{padding:0 20px 12px;display:flex;flex-direction:column;gap:6px}
-.cloud-status-row{display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:9px}
-.cloud-status-row.state-done{border-color:#bbf7d0;background:#f0fdf4}
-.cloud-status-row.state-error{border-color:#fecaca;background:#fef2f2}
-.cloud-status-label{font-weight:600;color:#334155;min-width:150px}
-.cloud-status-detail{color:#8994a1;margin-left:auto;text-align:right}
-.mig-ok{color:#15803d}.mig-err{color:#dc2626}.mig-pending{color:#94a3b8}
-.mig-spin{color:#2563eb;animation:mig-spin-anim 1s linear infinite}
-@keyframes mig-spin-anim{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
-.cloud-verify-list{padding:0 20px 16px}
-.cloud-verify-list h3{font-size:10px;margin:0 0 8px}
-.cloud-verify-row{display:flex;align-items:center;gap:9px;font-size:8px;color:#697686;padding:7px 0;border-bottom:1px solid #f0f2f5}
-.cloud-verify-row span:first-child{font-weight:600;color:#334155;min-width:150px}
-.cloud-verify-row.ok svg{color:#15803d}
-.cloud-verify-row.mismatch svg{color:#dc2626}
-.cloud-migration-panel .guide-note{margin:0 20px 18px}
-.sidebar-signout{border:0;background:transparent;color:#64748b;width:28px;height:28px;border-radius:7px;display:grid;place-items:center;flex:none;margin-left:auto}
-.sidebar-signout:hover{background:rgba(255,255,255,.08);color:#fff}
-.auth-loading-screen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:#64748b;font-size:11px;background:#f6f8fa}
-.auth-loading-screen .brand-mark{width:44px;height:44px;border-radius:11px;background:#2563eb;color:#fff;display:grid;place-items:center;margin-bottom:4px}
-.auth-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f6f8fa;padding:24px}
-.auth-card{width:100%;max-width:380px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:32px 28px;box-shadow:0 10px 40px rgba(15,23,42,.06)}
-.auth-brand{display:flex;align-items:center;gap:10px;margin-bottom:26px}
-.auth-brand .brand-mark{width:36px;height:36px;border-radius:9px;background:#2563eb;color:#fff;display:grid;place-items:center;flex:none}
-.auth-brand strong{display:block;font-size:13px}
-.auth-brand span{display:block;font-size:8px;color:#8994a1}
-.auth-form h1{font-size:17px;margin:0 0 4px}
-.auth-form>p{font-size:9px;color:#8994a1;margin:0 0 20px}
-.auth-form label{display:block;font-size:9px;font-weight:600;color:#475569;margin-bottom:14px}
-.auth-form label>input{width:100%;height:38px;border:1px solid var(--line);border-radius:8px;padding:0 12px;margin-top:6px;font-size:10px;outline:0;color:#1e293b}
-.auth-form label>input:focus{border-color:#93c5fd;box-shadow:0 0 0 3px #dbeafe}
-.auth-password-field{position:relative;margin-top:6px}
-.auth-password-field input{width:100%;height:38px;border:1px solid var(--line);border-radius:8px;padding:0 38px 0 12px;font-size:10px;outline:0;color:#1e293b}
-.auth-password-field input:focus{border-color:#93c5fd;box-shadow:0 0 0 3px #dbeafe}
-.auth-password-field button{position:absolute;right:6px;top:50%;transform:translateY(-50%);border:0;background:transparent;color:#94a3b8;width:26px;height:26px;display:grid;place-items:center}
-.auth-error{display:flex;align-items:center;gap:7px;background:#fef2f2;border:1px solid #fecaca;color:#dc2626;border-radius:8px;padding:9px 11px;font-size:9px;margin-bottom:14px}
-.auth-message{display:flex;align-items:center;gap:7px;background:#ecfdf3;border:1px solid #bbf7d0;color:#15803d;border-radius:8px;padding:9px 11px;font-size:9px;margin-bottom:14px}
-.auth-submit{width:100%;justify-content:center;height:40px;font-size:10px}
-.auth-links{display:flex;flex-direction:column;gap:9px;align-items:center;margin-top:16px}
-.auth-links button{border:0;background:transparent;color:#2563eb;font-size:9px;font-weight:600}
-.auth-links button:hover{text-decoration:underline}
-.auth-footnote{font-size:8px;color:#8994a1;text-align:center;margin:16px 0 0;line-height:1.5}
-.account-access-row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:2px 0 8px}
-.account-access-row>span{font-size:9px;color:#475569;font-weight:600}
-.account-access-actions{display:flex;gap:8px;flex-wrap:wrap}
-.account-access-note{display:flex;align-items:center;gap:7px;font-size:8px;padding:8px 10px;border-radius:7px;margin-bottom:8px}
-.account-access-note.ok{background:#ecfdf3;color:#15803d;border:1px solid #bbf7d0}
-.account-access-note.error{background:#fef2f2;color:#dc2626;border:1px solid #fecaca}
-.account-access-hint{font-size:7px;color:#a1acb8;margin:0}
-.roles-list{padding:0 20px 12px;display:flex;flex-direction:column;gap:8px}
-.roles-row{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:9px;padding:10px 12px}
-.roles-row-main{flex:1;min-width:0}
-.roles-row-main b{display:block;font-size:9px;color:#1e293b}
-.roles-row-main span{display:block;font-size:8px;color:#8994a1;margin-top:2px}
-.roles-row select{border:1px solid var(--line);border-radius:7px;padding:6px 10px;font-size:9px;background:#fff;color:#334155;font-weight:600}
-.presence-stack{display:flex;align-items:center;gap:6px;padding:0 10px;border-left:1px solid var(--line);border-right:1px solid var(--line);margin:0 4px}
-.presence-avatar{margin-left:-6px;border:1.5px solid #fff}
-.presence-avatar:first-child{margin-left:0}
-.presence-count{font-size:8px;color:#8994a1;margin-left:4px;white-space:nowrap}
-.co-edit-banner{display:flex;align-items:center;gap:8px;background:#fffbeb;border-bottom:1px solid #fde68a;color:#92400e;font-size:9px;padding:8px 20px}
-.stage-pill{background:#eff6ff;color:#2563eb}
-.health-pill{display:flex;align-items:center;gap:5px}
-.health-pill::before{content:"";width:7px;height:7px;border-radius:50%}
-.health-healthy{background:#ecfdf3;color:#15803d}.health-healthy::before{background:#22c55e}
-.health-at-risk{background:#fffbeb;color:#a16207}.health-at-risk::before{background:#f59e0b}
-.health-critical{background:#fef2f2;color:#dc2626}.health-critical::before{background:#ef4444}
-.health-no-data{background:#f1f5f9;color:#64748b}.health-no-data::before{background:#94a3b8}
-.category-tile-title-row{display:flex;align-items:center;gap:6px}
-.health-dot{width:8px;height:8px;border-radius:50%;flex:none}
-.health-dot.health-healthy{background:#22c55e}
-.health-dot.health-at-risk{background:#f59e0b}
-.health-dot.health-critical{background:#ef4444}
-.health-dot.health-no-data{background:#94a3b8}
-.validation-panel{display:flex;gap:10px;background:#fffbeb;border:1px solid #fde68a;color:#92400e;border-radius:10px;padding:12px 14px;margin-bottom:14px}
-.validation-panel b{font-size:9px;display:block;margin-bottom:4px}
-.validation-panel ul{margin:0;padding-left:16px;font-size:8px;line-height:1.6}
-.version-history-panel{margin-bottom:16px}
-.version-history-list{padding:0 20px 8px;display:flex;flex-direction:column;gap:6px}
-.version-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:8px;padding:9px 12px;cursor:pointer;font-size:9px}
-.version-row:hover{background:#f8fafc}
-.version-row.active{border-color:#93c5fd;background:#eff6ff}
-.version-row span{color:#8994a1;font-size:8px}
-.version-compare-tag{margin-left:auto;background:#2563eb;color:#fff;border-radius:20px;padding:2px 8px;font-size:7px;font-weight:700}
-.version-diff{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:4px 20px 16px}
-.version-diff>div{border:1px solid var(--line);border-radius:8px;padding:10px 12px}
-.version-diff b{font-size:14px;display:block}
-.version-diff span{font-size:8px;color:#8994a1}
-.version-diff ul{margin:8px 0 0;padding-left:14px;font-size:7px;color:#475569;max-height:110px;overflow:auto}
-.cloud-storage-section{margin:0 20px 16px;padding-top:16px;border-top:1px solid var(--line)}
-.cloud-storage-section h3{font-size:10px;margin:0 0 4px}
-.cloud-storage-section>p{font-size:8px;color:#8994a1;margin:0 0 12px;max-width:520px}
-.cloud-storage-section .cloud-migration-actions{padding:0 0 10px}
-@media(max-width:620px){.import-format-help{grid-template-columns:1fr}.import-mapping-row{flex-direction:column;align-items:stretch;gap:8px}.import-mapping-row select{min-width:0;width:100%}}
-@media(max-width:1000px){.dataset-cards{grid-template-columns:repeat(2,1fr)}.task-grid{grid-template-columns:repeat(3,1fr)}.dataset-info{align-items:flex-start;gap:12px}.dataset-info-actions{flex-direction:column}.dataset-description-input{width:280px}}
-@media(max-width:700px){.dataset-head-actions{width:100%}.dataset-head-actions button{flex:1}.dataset-info{flex-direction:column}.dataset-info-actions{flex-direction:row;width:100%}.dataset-info-actions button{flex:1}.task-filters{flex-wrap:wrap}.result-count{width:100%;margin-left:0}.task-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:480px){.dataset-cards{grid-template-columns:1fr 1fr}.dataset-name-input{width:220px}.dataset-description-input{width:220px}.task-grid{grid-template-columns:1fr}.dataset-help{align-items:flex-start}.dataset-help>span{display:none}}
-
-/* Build 4 - Analytics & Productivity Engine */
-.analytics-controls{display:flex;gap:8px}.analytics-controls select{height:36px;border:1px solid var(--line);border-radius:7px;background:#fff;color:#4b5664;padding:0 10px;font-size:9px;outline:0;min-width:110px}.analytics-grid-top{display:grid;grid-template-columns:1.55fr .75fr;gap:18px;margin-bottom:18px}.analytics-chart-panel,.quality-panel,.analytics-table-panel,.team-performance{min-height:0}.chart-value{font-size:17px;font-weight:800;color:#2563eb}.chart-value small{font-size:8px;font-weight:500;color:#8b96a3}.trend-chart{height:240px;padding:18px 20px 12px;display:flex;gap:12px}.chart-y{width:28px;display:flex;flex-direction:column;justify-content:space-between;color:#9aa4af;font-size:7px;padding-bottom:22px}.chart-bars{flex:1;display:flex;align-items:stretch;gap:10px;border-left:1px solid #eef1f4;border-bottom:1px solid #eef1f4;padding:10px 8px 0}.chart-bar-wrap{flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:7px;min-width:20px}.chart-bar{width:55%;min-width:8px;max-width:24px;border-radius:4px 4px 0 0;background:linear-gradient(180deg,#3b82f6,#2563eb);box-shadow:0 5px 12px rgba(37,99,235,.15)}.chart-bar-wrap span{font-size:7px;color:#9aa4af;height:12px}.quality-panel .panel-head>svg{color:#2563eb}.quality-ring{width:130px;height:130px;border-radius:50%;margin:24px auto 18px;background:conic-gradient(#2563eb 0 76%,#e8eef6 76% 100%);display:grid;place-items:center;position:relative}.quality-ring:after{content:"";position:absolute;width:92px;height:92px;background:#fff;border-radius:50%}.quality-ring>div{position:relative;z-index:1;text-align:center}.quality-ring strong{display:block;font-size:22px}.quality-ring span{font-size:8px;color:#8994a1}.quality-legend{padding:0 22px 20px}.quality-legend>div{display:flex;align-items:center;gap:7px;padding:8px 0;border-bottom:1px solid #f0f2f5;font-size:8px}.quality-legend>div:last-child{border-bottom:0}.quality-legend i{width:7px;height:7px;border-radius:50%}.approved-dot{background:#22c55e}.changes-dot{background:#f59e0b}.rejected-dot{background:#ef4444}.quality-legend span{color:#697686;flex:1}.quality-legend b{font-size:9px}.analytics-grid-bottom{display:grid;grid-template-columns:1.45fr .85fr;gap:18px}.analytics-table th,.analytics-table td{padding-left:16px;padding-right:16px}.quality-number{font-size:9px;color:#15803d}.health-pill{display:inline-flex;align-items:center;gap:5px;font-size:8px;font-weight:600;padding:5px 7px;border-radius:20px}.health-pill i{width:5px;height:5px;border-radius:50%;background:currentColor}.health-pill.healthy{color:#15803d;background:#ecfdf3}.health-pill.watch{color:#a16207;background:#fff8e7}.health-pill.risk{color:#dc2626;background:#fef2f2}.team-list{padding:7px 16px 12px}.team-row{display:flex;align-items:center;gap:9px;padding:12px 2px;border-bottom:1px solid #eef1f4}.team-row:last-child{border-bottom:0}.team-avatar{width:29px;height:29px;border-radius:8px;background:#eff6ff;color:#2563eb;display:grid;place-items:center;font-size:9px;font-weight:700;flex:none}.team-main{flex:1;min-width:0}.team-main>b{font-size:9px;display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.team-main>span{font-size:7px;color:#919ba7;display:block;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.team-meter{height:4px;background:#edf0f4;border-radius:4px;margin-top:7px;overflow:hidden}.team-meter i{display:block;height:100%;background:#2563eb;border-radius:4px}.team-metrics{text-align:right;min-width:45px}.team-metrics strong{display:block;font-size:9px;color:#15803d}.team-metrics span{font-size:7px;color:#9aa4af}.analytics-insight{margin-top:18px;border:1px solid #dbeafe;background:#f8fbff;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:10px}.insight-icon{width:32px;height:32px;border-radius:8px;background:#eff6ff;color:#2563eb;display:grid;place-items:center;flex:none}.analytics-insight b{font-size:9px}.analytics-insight p{font-size:8px;color:#7c8998;line-height:1.5;margin:3px 0 0}.analytics-insight>span{margin-left:auto;font-size:7px;color:#2563eb;background:#eff6ff;padding:5px 7px;border-radius:5px;font-weight:700}.analytics-empty{padding:30px;text-align:center;color:#9aa4af;font-size:9px}
-@media(max-width:1100px){.analytics-grid-top,.analytics-grid-bottom{grid-template-columns:1fr}.quality-panel{max-width:none}.quality-ring{margin:18px auto 12px}.quality-legend{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.quality-legend>div{border:1px solid #eef1f4;border-radius:7px;padding:8px}.analytics-controls select{min-width:100px}}
-@media(max-width:700px){.analytics-controls{width:100%}.analytics-controls select{flex:1}.analytics-page .page-head{align-items:stretch}.trend-chart{height:200px;padding-left:10px;padding-right:10px}.chart-bars{gap:5px}.analytics-table-panel{overflow:hidden}.analytics-insight{align-items:flex-start}.analytics-insight>span{display:none}}
-
-/* Build 5 - Export & Delivery Engine */
-.export-page .page-head{align-items:center}.export-head-status{font-size:8px;color:#15803d;background:#ecfdf3;border:1px solid #bbf7d0;border-radius:20px;padding:7px 10px}.export-head-status i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#22c55e;margin-right:5px}.export-summary-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.export-summary-grid .mini-stat{min-height:75px}.export-layout{display:grid;grid-template-columns:1.35fr .75fr;gap:18px}.export-builder,.export-history{min-width:0}.export-builder>.panel-head>svg{color:#2563eb}.export-body{padding:19px}.export-label{display:block;font-size:8px;letter-spacing:1px;font-weight:700;color:#7c8998;margin:0 0 8px}.format-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}.format-card{position:relative;text-align:left;border:1px solid var(--line);background:#fff;border-radius:9px;padding:12px;display:flex;align-items:flex-start;gap:9px;min-height:84px}.format-card:hover{border-color:#bfdbfe;background:#f8fbff}.format-card.active{border-color:#93c5fd;background:#f8fbff;box-shadow:0 0 0 1px #dbeafe}.format-card>span{width:32px;height:32px;border-radius:7px;background:#eff6ff;color:#2563eb;display:grid;place-items:center;flex:none}.format-card b{display:block;font-size:9px;color:#273343}.format-card small{display:block;font-size:7px;line-height:1.45;color:#8995a3;margin-top:4px}.format-card>svg{margin-left:auto;color:#2563eb;flex:none}.export-filter-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:18px}.export-select,.export-search{height:36px;border:1px solid var(--line);border-radius:7px;background:#fff;display:flex;align-items:center;gap:7px;padding:0 10px;color:#8995a2}.export-select select,.export-search input{border:0;outline:0;background:transparent;width:100%;font-size:9px;color:#465363}.export-search{margin-bottom:16px}.export-ready{border-top:1px solid #eef1f4;margin-top:18px;padding-top:16px;display:flex;align-items:center;gap:14px}.export-ready>div{flex:1;min-width:0}.export-ready b{display:block;font-size:10px}.export-ready span{display:block;font-size:8px;color:#8a95a2;margin-top:3px}.export-ready button{white-space:nowrap}.export-message{margin-top:11px;padding:9px 11px;border-radius:7px;background:#ecfdf3;color:#15803d;font-size:8px;display:flex;align-items:center;gap:6px}.history-list{padding:5px 16px 12px;max-height:520px;overflow:auto}.export-history-row{padding:12px 2px;border-bottom:1px solid #eef1f4;display:flex;align-items:center;gap:10px}.export-history-row:last-child{border-bottom:0}.history-format{display:flex;align-items:center;gap:8px;min-width:0;flex:1}.history-format>span{width:28px;height:28px;border-radius:7px;background:#f1f5f9;color:#64748b;display:grid;place-items:center;flex:none}.history-format b{display:block;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.history-format small{display:block;font-size:7px;color:#929ca8;margin-top:3px}.history-time{font-size:7px;color:#9aa4af;text-align:right;white-space:nowrap}.export-history-empty{text-align:center;padding:55px 15px;color:#9aa4af}.export-history-empty svg{color:#c5ced8}.export-history-empty h3{font-size:12px;color:#4d5967;margin:10px 0 4px}.export-history-empty p{font-size:8px;margin:0}.export-info{margin-top:18px;border:1px solid #dbeafe;background:#f8fbff;border-radius:10px;padding:12px 14px;display:flex;align-items:center;gap:10px}.export-info-icon{width:32px;height:32px;border-radius:8px;background:#eff6ff;color:#2563eb;display:grid;place-items:center;flex:none}.export-info b{font-size:9px}.export-info p{font-size:8px;color:#7d8997;line-height:1.5;margin:3px 0 0}.export-info>span{margin-left:auto;font-size:7px;color:#2563eb;background:#eff6ff;padding:5px 7px;border-radius:5px;font-weight:700}.export-history .icon-btn{border:0;width:28px;height:28px}.export-history .icon-btn:hover{background:#f1f5f9;color:#2563eb}
-@media(max-width:1050px){.export-layout{grid-template-columns:1fr}.export-history{min-height:200px}.history-list{max-height:360px}}
-@media(max-width:700px){.export-page .page-head{align-items:stretch}.export-head-status{align-self:flex-start}.export-summary-grid{grid-template-columns:1fr 1fr}.format-grid,.export-filter-grid{grid-template-columns:1fr}.export-ready{align-items:stretch;flex-direction:column}.export-ready button{width:100%}.export-info{align-items:flex-start}.export-info>span{display:none}}
-@media(max-width:480px){.export-summary-grid{gap:8px}.export-summary-grid .mini-stat{padding:11px}.export-body{padding:14px}.format-card{min-height:76px}.history-time{display:none}}
-
-
-/* Build 6 - Team & User Management */
-.team-page .page-head{align-items:center}.team-count{font-size:8px;color:#7c8997;background:#f5f7fa;border:1px solid var(--line);padding:6px 8px;border-radius:20px}.team-layout{display:grid;grid-template-columns:.95fr 1.35fr;gap:18px}.team-members-panel,.team-detail-panel{min-width:0}.team-toolbar{display:grid;grid-template-columns:1fr 112px 112px;gap:8px;padding:13px 16px;border-bottom:1px solid var(--line)}.team-search{height:34px;border:1px solid var(--line);border-radius:7px;display:flex;align-items:center;gap:7px;padding:0 9px;color:#8994a1}.team-search input{border:0;outline:0;width:100%;font-size:9px}.team-toolbar select{height:34px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:0 7px;font-size:8px;color:#4c5967;outline:0}.member-list{padding:4px 8px 10px;max-height:650px;overflow:auto}.member-row{width:100%;display:flex;align-items:center;gap:10px;border:0;background:#fff;text-align:left;border-bottom:1px solid #eef1f4;padding:12px 8px;border-radius:8px;transition:.15s}.member-row:hover{background:#f8fbff}.member-row.selected{background:#f5f9ff;box-shadow:inset 3px 0 #2563eb}.member-avatar,.detail-avatar{display:grid;place-items:center;border-radius:10px;background:#eff6ff;color:#2563eb;font-weight:800;flex:none}.member-avatar{width:36px;height:36px;font-size:9px}.member-info{flex:1;min-width:0}.member-info>b{display:block;font-size:10px;color:#273343}.member-info>span{display:block;font-size:7px;color:#929ca8;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.member-tags{display:flex;align-items:center;gap:5px;margin-top:6px;flex-wrap:wrap}.role-pill,.member-status{font-style:normal;font-size:7px;font-weight:600;padding:4px 6px;border-radius:12px}.role-pill{background:#f1f5f9;color:#64748b}.member-status{display:inline-flex;align-items:center;gap:4px}.member-status i{width:5px;height:5px;border-radius:50%;background:currentColor}.member-status.active{color:#15803d;background:#ecfdf3}.member-status.inactive{color:#94a3b8;background:#f1f5f9}.member-load{text-align:right;min-width:47px}.member-load>b{display:block;font-size:10px;color:#263241}.member-load>span{display:block;font-size:7px;color:#9aa4af}.load-track{height:4px;width:47px;background:#edf0f4;border-radius:4px;overflow:hidden;margin-top:5px}.load-track i{display:block;height:100%;background:#2563eb;border-radius:4px}.member-chevron{color:#b0bac5}.team-detail-head{padding:19px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.detail-profile{display:flex;align-items:center;gap:12px;min-width:0}.detail-avatar{width:48px;height:48px;font-size:12px}.detail-profile h2{margin:0;font-size:15px}.detail-profile p{margin:4px 0 0;font-size:8px;color:#8b96a3}.detail-actions{display:flex;gap:6px}.detail-actions .icon-btn.danger{color:#dc2626}.detail-metrics{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--line)}.detail-metrics>div{padding:14px 16px;border-right:1px solid #eef1f4}.detail-metrics>div:last-child{border-right:0}.detail-metrics span{display:block;font-size:7px;color:#8c97a4;text-transform:uppercase;letter-spacing:.7px}.detail-metrics b{display:block;font-size:17px;margin-top:5px}.team-detail-section{padding:17px 19px;border-bottom:1px solid #eef1f4}.team-detail-section:last-child{border-bottom:0}.section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:11px}.section-title h3{margin:0;font-size:10px}.section-title p{margin:3px 0 0;font-size:7px;color:#929ca8}.section-title>svg,.section-title>span{color:#2563eb}.section-title>span{font-size:8px;font-weight:700;background:#eff6ff;border-radius:12px;padding:4px 7px}.project-access-list{display:grid;grid-template-columns:1fr 1fr;gap:7px}.project-access-list>div{border:1px solid #eef1f4;border-radius:7px;padding:9px;display:flex;align-items:center;gap:7px;font-size:8px;color:#4c5866}.project-access-list svg{color:#2563eb;flex:none}.project-access-list div svg:last-child{margin-left:auto;color:#16a34a}.no-access{font-size:8px;color:#9aa4af;padding:9px;background:#f8fafc;border-radius:7px}.assignment-list,.assignable-list{display:flex;flex-direction:column}.assignment-row,.assignable-row{display:flex;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid #f0f2f5}.assignment-row:last-child,.assignable-row:last-child{border-bottom:0}.assignment-thumb{width:35px;height:35px;border-radius:6px;background:#f1f5f9;overflow:hidden;display:grid;place-items:center;color:#8d98a4;flex:none}.assignment-thumb img{width:100%;height:100%;object-fit:cover}.assignment-row>div:nth-child(2),.assignable-row>div{flex:1;min-width:0}.assignment-row b,.assignable-row b{display:block;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.assignment-row span,.assignable-row span{display:block;font-size:7px;color:#929ca8;margin-top:3px}.assignment-row .status-badge{margin-left:auto}.assignment-row .icon-btn{border:0}.assignable-row .secondary-btn{height:29px;font-size:8px}.team-empty{text-align:center;padding:65px 20px;color:#a0aab5}.team-empty svg{color:#c3ccd5}.team-empty h3{font-size:11px;color:#4f5b68;margin:10px 0 4px}.team-empty p{font-size:8px;margin:0}.team-empty.compact{padding:20px}.team-stats{margin-bottom:18px}.team-modal{width:min(680px,calc(100vw - 30px));max-height:90vh;overflow:auto}.team-modal .modal-head{display:flex;align-items:flex-start;justify-content:space-between}.team-modal form{padding:0 20px 20px}.team-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.team-form-grid label,.team-project-form>span{display:block}.team-form-grid label>span,.team-project-form>span{font-size:7px;font-weight:700;letter-spacing:.8px;color:#7d8997;margin-bottom:7px}.team-form-grid input,.team-form-grid select{width:100%;height:36px;border:1px solid var(--line);border-radius:7px;padding:0 9px;outline:0;font-size:9px;color:#465363;background:#fff}.team-project-form{margin-top:17px}.team-project-form>div{display:grid;grid-template-columns:1fr 1fr;gap:7px}.project-check{display:flex;align-items:center;gap:8px;text-align:left;border:1px solid var(--line);background:#fff;border-radius:7px;padding:9px}.project-check.active{border-color:#93c5fd;background:#f8fbff}.project-check>span{width:22px;height:22px;border-radius:5px;background:#f1f5f9;display:grid;place-items:center;color:#2563eb;flex:none}.project-check.active>span{background:#dbeafe}.project-check b{display:block;font-size:8px}.project-check small{display:block;font-size:7px;color:#929ca8;margin-top:2px}.modal-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:19px;padding-top:14px;border-top:1px solid #eef1f4}.team-page .workspace-toast{position:fixed;right:25px;bottom:25px;z-index:100}.role-pill.team-lead{color:#7c3aed;background:#f5f3ff}.role-pill.reviewer{color:#0369a1;background:#e0f2fe}.role-pill.annotator{color:#166534;background:#ecfdf5}
-@media(max-width:1100px){.team-layout{grid-template-columns:1fr}.member-list{max-height:440px}.team-detail-panel{min-height:400px}}
-@media(max-width:700px){.team-page .page-head{align-items:stretch}.team-toolbar{grid-template-columns:1fr 1fr}.team-search{grid-column:1/-1}.detail-metrics{grid-template-columns:1fr 1fr}.detail-metrics>div:nth-child(2){border-right:0}.detail-metrics>div{border-bottom:1px solid #eef1f4}.project-access-list,.team-project-form>div{grid-template-columns:1fr}.team-form-grid{grid-template-columns:1fr}.team-detail-head{align-items:flex-start;flex-direction:column}.detail-actions{width:100%}.detail-actions .secondary-btn{flex:1}.team-page .workspace-toast{right:14px;left:14px;bottom:14px}}
-@media(max-width:480px){.team-toolbar{grid-template-columns:1fr}.team-search{grid-column:auto}.member-load,.member-chevron{display:none}.member-row{padding:11px 6px}.team-detail-head{padding:15px}.team-detail-section{padding:14px}.detail-profile h2{font-size:13px}.assignment-row .status-badge{display:none}}
-
-
-/* Build 7 - Project Configuration & Label Schema */
-.project-config-page .page-head{align-items:flex-end}
-.config-project-picker{display:flex;align-items:center;gap:10px;background:#fff;border:1px solid var(--line);border-radius:12px;padding:8px 10px;min-width:270px;box-shadow:0 4px 14px rgba(15,23,42,.04)}
-.config-project-picker span{font-size:10px;font-weight:800;letter-spacing:.12em;color:var(--muted)}
-.config-project-picker select{border:0;outline:0;background:transparent;font-weight:700;color:var(--text);width:100%;font-size:13px}
-.config-overview{display:flex;align-items:center;gap:16px;background:linear-gradient(135deg,#fff,#f8fbfa);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin-bottom:16px;box-shadow:0 5px 18px rgba(15,23,42,.035)}
-.config-project-icon{width:48px;height:48px;border-radius:13px;display:grid;place-items:center;background:#eafaf1;color:#20a85f;flex:none}
-.config-overview h2{margin:0 0 4px;font-size:18px}.config-overview p{margin:0;color:var(--muted);font-size:12px}
-.config-overview-stats{margin-left:auto;display:flex;gap:8px}.config-overview-stats .mini-stat{min-width:92px}
-.config-tabs{display:flex;gap:4px;background:#eef2f4;border:1px solid #e1e6e9;border-radius:12px;padding:4px;margin-bottom:14px;width:max-content}
-.import-export-subtabs{display:flex;gap:4px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:14px;width:max-content}
-.import-export-subtabs button{display:flex;align-items:center;gap:6px;border:0;background:transparent;padding:7px 14px;border-radius:7px;font-size:9px;font-weight:600;color:#697686}
-.import-export-subtabs button.active{background:#2563eb;color:#fff}
-.import-progress{margin-top:14px}
-.import-progress-bar{height:6px;background:#eef2f4;border-radius:4px;overflow:hidden;margin-bottom:6px}
-.import-progress-bar i{display:block;height:100%;background:#2563eb;transition:width .2s}
-.import-progress span{font-size:8px;color:#8994a1}
-.config-tabs button{border:0;background:transparent;border-radius:9px;padding:9px 14px;display:flex;align-items:center;gap:7px;font-weight:700;color:#65717b;cursor:pointer}.config-tabs button.active{background:#fff;color:#17222d;box-shadow:0 2px 8px rgba(15,23,42,.08)}
-.config-panel{padding:0;overflow:hidden}.config-panel-head{display:flex;justify-content:space-between;align-items:center;padding:20px;border-bottom:1px solid var(--line)}.config-panel-head h2{margin:0 0 4px;font-size:17px}.config-panel-head p{margin:0;color:var(--muted);font-size:12px}.config-panel-head>svg{color:#20a85f}
-.label-schema-list{padding:8px 16px 16px}.schema-row{display:grid;grid-template-columns:34px 12px minmax(0,1fr) 100px auto;align-items:center;gap:12px;padding:13px 8px;border-bottom:1px solid #edf0f2}.schema-row:last-child{border-bottom:0}.schema-number{font-size:11px;font-weight:800;color:#98a2aa;text-align:center}.schema-color{width:11px;height:11px;border-radius:50%;box-shadow:0 0 0 3px rgba(0,0,0,.035)}.schema-main{display:flex;flex-direction:column;gap:3px}.schema-main b{font-size:13px}.schema-main span{font-size:11px;color:var(--muted)}.schema-shortcut{font-size:9px;font-weight:800;color:#75818a;text-align:center;background:#f1f4f5;border-radius:6px;padding:5px 6px}.schema-actions{display:flex;gap:5px}.schema-actions button{width:31px;height:31px;border:1px solid var(--line);border-radius:8px;background:#fff;display:grid;place-items:center;color:#64707a;cursor:pointer}.schema-actions button:hover{background:#f6f8f9}.schema-actions .danger-icon{color:#c03d3d}.config-empty{text-align:center;padding:50px 20px;color:#89949c}.config-empty h3{margin:12px 0 5px;color:#27323b}.config-empty p{margin:0;font-size:12px}
-.workflow-settings{padding:16px 20px 6px}.setting-toggle{width:100%;display:flex;align-items:center;justify-content:space-between;text-align:left;background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px 15px;margin-bottom:10px;cursor:pointer}.setting-toggle.active{border-color:#bde8cf;background:#fbfffc}.toggle-copy{display:flex;flex-direction:column;gap:4px}.toggle-copy b{font-size:13px}.toggle-copy small{font-size:11px;color:var(--muted)}.switch{width:38px;height:22px;border-radius:99px;background:#cfd6da;padding:3px;transition:.18s;flex:none}.switch i{display:block;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.18);transition:.18s}.setting-toggle.active .switch{background:#20a85f}.setting-toggle.active .switch i{transform:translateX(16px)}
-.section-label{display:block;font-size:11px;font-weight:800;color:#475561;text-transform:uppercase;letter-spacing:.04em;margin-bottom:9px}
-.general-settings-panel{padding:20px}.general-settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin-bottom:22px}.general-settings-grid .full{grid-column:1/-1}.general-settings-grid label{display:flex;flex-direction:column;gap:7px}.general-settings-grid label>span{font-size:11px;font-weight:800;color:#475561;text-transform:uppercase;letter-spacing:.04em}.general-settings-grid input,.general-settings-grid select,.general-settings-grid textarea{border:1px solid #dce2e7;border-radius:9px;padding:10px 11px;background:#fff;color:#24313b;outline:none;font:inherit}.general-settings-grid input:focus,.general-settings-grid select:focus,.general-settings-grid textarea:focus{border-color:#37c878;box-shadow:0 0 0 3px rgba(55,200,120,.1)}
-.general-settings-section{margin-top:22px;padding-top:20px;border-top:1px solid var(--line)}
-.general-color-row button{width:28px;height:28px}
-.sampling-options{display:flex;flex-direction:column;gap:9px}.sampling-option{display:flex;align-items:flex-start;gap:11px;padding:13px 14px;border:1px solid var(--line);border-radius:11px;cursor:pointer}.sampling-option.active{border-color:#bde8cf;background:#fbfffc}.sampling-option input{margin-top:3px;accent-color:#20a85f}.sampling-option b{font-size:13px;display:flex;align-items:center;gap:8px}.sampling-option span{display:block;font-size:11px;color:var(--muted);margin-top:3px}
-.pro-badge{font-size:8px;font-weight:800;color:#a1552f;background:#fdece0;border-radius:5px;padding:2px 6px;letter-spacing:.03em}
-.labeling-interface-panel{padding:0}.labeling-interface-panel .config-panel-head{padding:20px}
-.labeling-interface-grid{display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:0}.labeling-interface-grid .label-schema-list{padding:8px 16px 20px;border-right:1px solid var(--line)}
-.ui-preview-panel{padding:16px}.ui-preview-image{background:#111b29;border-radius:10px;overflow:hidden;aspect-ratio:16/10;display:grid;place-items:center;margin-bottom:14px}.ui-preview-image img{width:100%;height:100%;object-fit:cover;display:block}.ui-preview-empty{display:flex;flex-direction:column;align-items:center;gap:8px;color:#5f6f82;font-size:11px}
-.ui-preview-labels{margin-bottom:16px}.ui-preview-label-chips{display:flex;flex-wrap:wrap;gap:6px}.preview-chip{font-size:10px;font-weight:700;border:1px solid;border-radius:6px;padding:4px 8px}.preview-chip-empty{font-size:11px;color:var(--muted)}
-.ui-preview-regions-empty{display:flex;align-items:flex-start;gap:8px;color:var(--muted);font-size:11px;line-height:1.5;background:#f6f8f9;border:1px solid #e8ecef;border-radius:9px;padding:11px}
-.annotation-settings-panel{padding:20px}.annotation-settings-block{margin-bottom:26px}.annotation-settings-block h3{margin:0 0 4px;font-size:14px}.settings-subtext{margin:0 0 14px;color:var(--muted);font-size:12px}
-.guideline-editor-textarea{width:100%;margin-top:12px;border:1px solid #dce2e7;border-radius:10px;padding:12px;font:inherit;color:#24313b;outline:none;resize:vertical}.guideline-editor-textarea:focus{border-color:#37c878;box-shadow:0 0 0 3px rgba(55,200,120,.1)}
-.prelabel-select{display:flex;flex-direction:column;gap:7px;margin-top:12px;max-width:420px}.prelabel-select>span{font-size:10px;font-weight:800;color:#475561;text-transform:uppercase;letter-spacing:.03em}.prelabel-select select{height:40px;border:1px solid #dce2e7;border-radius:9px;padding:0 11px;background:#fff;color:#24313b}
-@media(max-width:900px){.labeling-interface-grid{grid-template-columns:1fr}.labeling-interface-grid .label-schema-list{border-right:0;border-bottom:1px solid var(--line)}}
-@media(max-width:620px){.general-settings-grid{grid-template-columns:1fr}}
-.workflow-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:12px 20px 20px}.workflow-grid label,.label-editor-form label,.guideline-editor{display:flex;flex-direction:column;gap:7px}.workflow-grid label span,.label-editor-form label span,.guideline-editor span{font-size:10px;font-weight:800;letter-spacing:.08em;color:#69757e}.workflow-grid select,.workflow-grid input,.label-editor-form input,.label-editor-form select,.guideline-editor textarea{border:1px solid var(--line);border-radius:9px;background:#fff;padding:10px 11px;outline:none;font:inherit;font-size:13px;color:var(--text)}.workflow-grid select:focus,.workflow-grid input:focus,.label-editor-form input:focus,.label-editor-form select:focus,.guideline-editor textarea:focus{border-color:#8bd6ad;box-shadow:0 0 0 3px rgba(55,200,120,.1)}
-.workflow-stages{margin:0 20px 20px;padding:14px;border:1px dashed #d6dfe3;border-radius:11px}.workflow-stages>span{font-size:10px;font-weight:800;color:#75818a;letter-spacing:.08em}.workflow-stages>div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}.workflow-stages b{font-size:11px;background:#f4f6f7;border:1px solid #e3e7e9;border-radius:7px;padding:7px 9px}.workflow-stages i{font-style:normal;color:#9aa4aa}
-.guideline-editor{padding:20px}.guideline-editor textarea{resize:vertical;line-height:1.55;min-height:190px}.guideline-tip{display:flex;gap:11px;margin:0 20px 20px;padding:13px 14px;background:#f5fbf7;border:1px solid #d7eee0;border-radius:10px;color:#246342}.guideline-tip svg{flex:none}.guideline-tip b{font-size:12px}.guideline-tip p{margin:3px 0 0;font-size:11px;color:#60756a;line-height:1.5}
-.label-editor-modal{max-width:520px}.label-editor-form{padding:4px 20px 20px;display:grid;gap:16px}.color-picker-row{display:flex;gap:8px;flex-wrap:wrap}.color-picker-row button{width:27px;height:27px;border-radius:50%;border:2px solid transparent;cursor:pointer;box-shadow:0 0 0 1px rgba(0,0,0,.08)}.color-picker-row button.selected{outline:2px solid #17222d;outline-offset:2px}
-@media(max-width:900px){.config-overview{align-items:flex-start;flex-wrap:wrap}.config-overview-stats{width:100%;margin-left:64px}.config-project-picker{min-width:220px}.schema-row{grid-template-columns:28px 11px minmax(0,1fr) 65px auto}.schema-shortcut{display:none}}
-@media(max-width:620px){.project-config-page .page-head{align-items:stretch}.config-project-picker{width:100%;min-width:0}.config-overview-stats{margin-left:0;overflow:auto}.config-overview-stats .mini-stat{min-width:82px}.config-tabs{width:100%}.config-tabs button{flex:1;justify-content:center;padding:9px 8px}.config-tabs button svg{display:none}.config-panel-head{align-items:flex-start;gap:10px}.config-panel-head .primary-btn{white-space:nowrap}.schema-row{grid-template-columns:24px 10px minmax(0,1fr) auto;gap:8px}.schema-actions button{width:29px;height:29px}.workflow-grid{grid-template-columns:1fr;padding-top:6px}.workflow-stages>div{gap:5px}.workflow-stages b{padding:6px 7px}.workflow-stages i{display:none}}
-
-/* Build 8 - Professional Label Studio-style Annotation Workstation */
-.build8-workspace{height:calc(100vh - 64px);min-height:720px;background:#0c1420;overflow:hidden;display:flex;flex-direction:column}
-.build8-workspace .workspace-top{flex:none}
-.build8-shell{height:calc(100% - 60px);min-height:0;display:grid;grid-template-columns:220px minmax(420px,1fr) 300px;overflow:hidden;background:#0c1420}
-.floating-tool-dock{position:absolute;top:14px;right:14px;bottom:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;z-index:8;pointer-events:none}
-.floating-tool-dock>*{pointer-events:auto}
-.floating-zoom-slider{width:26px;flex:0 1 96px;min-height:70px;background:rgba(8,14,22,.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08);border-radius:13px;display:flex;align-items:center;justify-content:center;padding:10px 0}
-.floating-zoom-slider input[type=range]{writing-mode:vertical-lr;direction:rtl;-webkit-appearance:slider-vertical;width:4px;height:100%;accent-color:#3b82f6;background:transparent;cursor:pointer}
-.floating-tool-group{background:rgba(8,14,22,.6);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:4px;display:flex;flex-direction:column;gap:2px}
-.floating-tool-btn{width:32px;height:32px;border:0;background:transparent;color:#c3ceda;border-radius:8px;display:grid;place-items:center;cursor:pointer}
-.floating-tool-btn:hover{background:rgba(255,255,255,.1);color:#fff}
-.floating-tool-btn.active{background:#3b82f6;color:#fff}
-.floating-tool-btn.danger:hover{background:rgba(220,38,38,.2);color:#f87171}
-.floating-tool-btn:disabled{opacity:.35;cursor:not-allowed}
-@media(max-width:700px){.floating-tool-dock{top:8px;right:8px;bottom:8px;gap:6px}.floating-tool-btn{width:28px;height:28px}.floating-zoom-slider{width:22px;min-height:50px}}
-.task-queue-panel{background:#fff;border-right:1px solid #dfe5e9;display:flex;flex-direction:column;min-width:0;overflow:hidden}
-.queue-head{height:52px;padding:0 11px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.queue-head>div{display:flex;flex-direction:column;gap:4px}.queue-head .panel-section-title{font-size:8px;color:#71808d;letter-spacing:1px}.queue-head b{font-size:8px;color:#a0a9b1;font-weight:600}.queue-head>button{width:29px;height:29px;border:1px solid var(--line);border-radius:6px;background:#fff;color:#62707c;display:grid;place-items:center;cursor:pointer}.queue-head>button:hover{background:#f5f8f9;color:#20a85f}
-.queue-search{height:34px;margin:9px 9px 6px;border:1px solid #dfe5e9;border-radius:6px;display:flex;align-items:center;gap:6px;padding:0 8px;color:#98a3ad}.queue-search input{width:100%;border:0;outline:0;font-size:8px;color:#34414d;background:transparent}.queue-filter{height:30px;margin:0 9px 7px;border:1px solid #e3e7ea;border-radius:6px;display:flex;align-items:center;padding:0 7px;color:#8a96a1}.queue-filter select{flex:1;border:0;outline:0;background:transparent;font-size:8px;color:#64707b}.task-queue-list{flex:1;overflow:auto;padding:2px 5px 7px}.task-queue-row{width:100%;min-height:61px;border:1px solid transparent;background:#fff;border-radius:6px;display:grid;grid-template-columns:14px 40px minmax(0,1fr) auto;align-items:center;gap:7px;padding:7px 6px;text-align:left;cursor:pointer}.task-queue-row:hover{background:#f7fafb}.task-queue-row.active{background:#eef6ff;border-color:#bcd8f6;box-shadow:inset 3px 0 #2563eb}.task-check{width:13px;height:13px;border:1px solid #cfd6db;border-radius:3px;display:grid;place-items:center;color:#2563eb;background:#fff}.task-queue-row.active .task-check{border-color:#2563eb;background:#fff}.task-thumb{width:40px;height:42px;border-radius:4px;overflow:hidden;background:#eef2f4}.task-thumb img{width:100%;height:100%;object-fit:cover}.task-row-copy{min-width:0}.task-row-copy b{display:block;font-size:8px;color:#3c4854;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-row-copy span{display:block;font-size:7px;color:#8a96a0;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-row-copy small{display:inline-block;font-size:6px;color:#4d7a5f;background:#edf8f1;border-radius:4px;padding:2px 4px;margin-top:4px;white-space:nowrap}.task-row-count{font-size:7px;color:#99a3ab}.task-queue-empty{padding:45px 15px;text-align:center;color:#a3adb6;display:flex;flex-direction:column;align-items:center;gap:7px}.task-queue-empty b{font-size:9px;color:#687580}.task-queue-empty span{font-size:7px;line-height:1.5}.queue-footer{height:34px;border-top:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;padding:0 10px;color:#8b96a0;font-size:7px}.queue-footer b{color:#56626d}
-.build8-tool-panel{background:#f8fafb;border-right:1px solid #dce3e8;padding:0;display:flex;flex-direction:column;overflow:hidden}.tool-panel-scroll{flex:1;overflow:auto;padding:10px 7px}.tool-group{margin-bottom:9px}.tool-group-title{font-size:6px;letter-spacing:1.1px;color:#9aa4ad;font-weight:800;padding:4px 7px 5px}.build8-tool-panel .tool-button{width:100%;min-height:39px;display:grid;grid-template-columns:22px minmax(0,1fr) auto;align-items:center;gap:6px;padding:0 7px;border:1px solid transparent;background:transparent;border-radius:6px;color:#65717d;cursor:pointer;text-align:left}.build8-tool-panel .tool-button:hover{background:#eef3f5}.build8-tool-panel .tool-button.active{background:#e8f2ff;border-color:#c9ddf7;color:#2563eb}.build8-tool-panel .tool-button svg{justify-self:center}.build8-tool-panel .tool-button span{font-size:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.build8-tool-panel .tool-button kbd{font-size:5px;color:#99a3ac;background:#eef1f3;padding:3px 4px;border-radius:3px}.build8-tool-panel .tool-button:disabled{opacity:.38;cursor:not-allowed}.build8-tool-panel .danger-tool{color:#bd4a4a}.build8-tool-panel .tool-divider{height:1px;background:#e1e6e9;margin:7px 5px}.build8-tool-panel .tool-bottom{border-top:1px solid #dfe5e9;padding:7px}.build8-tool-panel .tool-bottom .tool-button{min-height:35px}
-.build8-canvas-area{grid-template-rows:45px minmax(0,1fr) 42px;min-width:0}.build8-toolbar{padding:0 12px}.build8-toolbar .canvas-tool-status{min-width:170px}.build8-toolbar .canvas-tool-status b{font-size:9px;color:#d3dce5}.build8-toolbar .canvas-tool-status small{font-size:7px}.canvas-help{display:flex;gap:13px;color:#63738a;font-size:7px;margin-left:auto;margin-right:15px}.canvas-help span:before{content:"•";color:#3b82f6;margin-right:4px}.build8-stage{min-height:0}.build8-canvas{width:min(90%,1100px);aspect-ratio:16/10;transform-origin:center center;transition:none}.build8-canvas>img{border-radius:2px}.canvas-crosshair{position:absolute;inset:0;pointer-events:none;opacity:.14}.canvas-crosshair:before,.canvas-crosshair:after{content:"";position:absolute;background:#fff}.canvas-crosshair:before{width:1px;height:100%;left:50%;top:0}.canvas-crosshair:after{height:1px;width:100%;left:0;top:50%}.drawing-hint{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);background:rgba(4,10,18,.82);border:1px solid #34455a;color:#d9e4ef;border-radius:7px;padding:7px 11px;font-size:8px;z-index:5;white-space:nowrap}
-.build8-annotation-box{cursor:move}.build8-annotation-box.selected{z-index:5}.build8-annotation-svg{pointer-events:auto}.build8-annotation-svg text{font-family:Inter,Arial,sans-serif;font-weight:700;paint-order:stroke;stroke:#fff;stroke-width:.25px}.resize-handles{position:absolute;inset:0;pointer-events:none}.resize-handles i{position:absolute;width:8px;height:8px;background:#fff;border:2px solid var(--annotation-color);border-radius:2px;pointer-events:auto;z-index:10}.handle-nw{left:-5px;top:-5px;cursor:nwse-resize}.handle-n{left:50%;top:-5px;transform:translateX(-50%);cursor:ns-resize}.handle-ne{right:-5px;top:-5px;cursor:nesw-resize}.handle-e{right:-5px;top:50%;transform:translateY(-50%);cursor:ew-resize}.handle-se{right:-5px;bottom:-5px;cursor:nwse-resize}.handle-s{left:50%;bottom:-5px;transform:translateX(-50%);cursor:ns-resize}.handle-sw{left:-5px;bottom:-5px;cursor:nesw-resize}.handle-w{left:-5px;top:50%;transform:translateY(-50%);cursor:ew-resize}
-.handle-rotate{left:50%;top:-22px;transform:translateX(-50%);width:8px;height:8px;border-radius:50%;background:#fff;border:2px solid var(--annotation-color);pointer-events:auto;z-index:10;cursor:grab}
-.handle-rotate::before{content:"";position:absolute;left:50%;top:100%;width:1px;height:14px;background:var(--annotation-color);transform:translateX(-50%)}
-.marquee-box{position:absolute;border:1px dashed #2563eb;background:rgba(37,99,235,.08);pointer-events:none;z-index:6}
-.build8-bottom{height:42px}.build8-bottom .bottom-action{display:flex;align-items:center;gap:4px}.canvas-status-note{margin-left:7px!important;color:#8fa0b1!important;font-size:7px!important;border:1px solid #293a4f;border-radius:5px;padding:5px 7px}.build8-right-panel{border-left:1px solid #dfe5e9}.build8-top-tabs{height:43px}.build8-top-tabs button{font-size:8px}.region-info-card{min-height:205px;padding:25px 18px;text-align:center;border-bottom:1px solid var(--line);color:#74818c}.info-icon{width:38px;height:38px;border-radius:50%;background:#eef3ff;color:#5277d9;display:grid;place-items:center;margin:0 auto 11px}.region-info-card>b{display:block;color:#44515d;font-size:9px}.region-info-card>p{font-size:7px;line-height:1.55;margin:7px auto 0;max-width:190px}.info-fields{display:grid;grid-template-columns:1fr 1fr 1fr;gap:5px;margin-top:16px;text-align:left}.info-fields>div{background:#f6f8f9;border:1px solid #e8ecef;border-radius:6px;padding:7px}.info-fields span{display:block;font-size:5px;letter-spacing:.7px;color:#98a1a8}.info-fields b{display:block;font-size:7px;margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.history-panel{min-height:205px;padding:14px;border-bottom:1px solid var(--line)}.history-entry{display:flex;gap:8px;padding:10px 3px;border-bottom:1px solid #eef1f3;color:#7c8994}.history-entry:last-child{border-bottom:0}.history-entry svg{color:#5c83dc;flex:none}.history-entry b{display:block;font-size:8px;color:#4e5b67}.history-entry span{display:block;font-size:7px;color:#9aa4ad;margin-top:3px}.right-subtabs{height:38px;border-bottom:1px solid var(--line);display:flex;align-items:stretch}.right-subtabs button{flex:1;border:0;background:#fff;font-size:7px;color:#8b96a0;cursor:pointer}.right-subtabs button.active{color:#2563eb;font-weight:800;border-bottom:2px solid #2563eb}.right-subtabs em{font-style:normal;background:#edf2f6;border-radius:8px;padding:2px 4px;margin-left:2px;font-size:6px}.build8-right-content{flex:1;min-height:0}.label-section-build8{padding:11px}.label-section-build8 .right-section-head{margin-bottom:8px}.label-section-build8 .right-section-head>div{display:flex;flex-direction:column;gap:3px}.label-section-build8 .right-section-head small{font-size:6px;color:#a0a9b0}.label-search-build8{height:30px;border:1px solid #e1e6ea;border-radius:6px;display:flex;align-items:center;gap:6px;padding:0 7px;color:#9aa4ac;margin-bottom:7px}.label-search-build8 input{border:0;outline:0;width:100%;font-size:7px;color:#46535f}.build8-label-list{gap:2px}.build8-label-item{height:32px;border-radius:5px;padding:0 7px}.build8-label-item span:nth-child(2){font-size:8px}.build8-label-item>b{font-size:6px;color:#8d98a2;margin-left:auto;min-width:12px;text-align:right}.build8-label-item kbd{font-size:5px;padding:2px 4px;margin-left:3px}.build8-object-list{padding:0 11px 11px}.object-item-main{flex:1;min-width:0}
-.object-item-actions{display:flex;gap:1px;flex:none}
-.object-item-actions button{width:21px;height:21px;border:0;background:transparent;border-radius:4px;display:grid;place-items:center;color:#a2acb7;cursor:pointer;padding:0}
-.object-item-actions button:hover:not(:disabled){background:#eef2f7;color:#2563eb}
-.object-item-actions button.active{color:#2563eb}
-.object-item-actions button:disabled{opacity:.25;cursor:default}
-.object-item.is-hidden .object-item-main{opacity:.45}
-.object-item.is-hidden .object-number{opacity:.4}
-.annotation-svg .vertex-handle{cursor:grab}
-.annotation-svg .vertex-handle:hover{r:1.1}
-.annotation-svg .vertex-midpoint{cursor:copy}
-.annotation-svg .vertex-midpoint:hover{fill-opacity:.9}
-.annotation-box.locked,.annotation-svg.locked{cursor:not-allowed}
-.build8-object-item{padding:7px 6px;cursor:pointer}.build8-selected-card{margin:8px 11px}.build8-right-footer{height:46px;flex:none}
-.quick-label-bar{height:39px;flex:none;background:#fff;border-top:1px solid #dfe5e9;display:flex;align-items:center;padding:0 12px;gap:12px;box-shadow:0 -3px 12px rgba(0,0,0,.05);z-index:8}.quick-label-title{display:flex;align-items:center;gap:5px;color:#74808a;white-space:nowrap}.quick-label-title svg{color:#e6a319}.quick-label-title b{font-size:7px;letter-spacing:1px}.quick-label-scroll{display:flex;align-items:center;gap:5px;overflow:auto;white-space:nowrap}.quick-label-scroll button{height:25px;border:1px solid #dfe4e8;background:#f8fafb;border-radius:4px;padding:0 8px;display:flex;align-items:center;gap:5px;font-size:7px;color:#65717b;cursor:pointer}.quick-label-scroll button.active{background:#eef6ff;border-color:#9fc7f3;color:#1d5fae}.quick-label-scroll button span{width:7px;height:7px;border-radius:2px}
-@media(max-width:1250px){.build8-shell{grid-template-columns:190px minmax(350px,1fr) 260px}.canvas-help{display:none}}
-@media(max-width:980px){.build8-shell{grid-template-columns:190px minmax(300px,1fr)}.build8-right-panel{display:none}.quick-label-title b{display:none}}
-@media(max-width:700px){.build8-workspace{min-height:calc(100vh - 124px)}.build8-shell{height:calc(100% - 60px);grid-template-columns:1fr}.task-queue-panel{display:none}.build8-bottom .bottom-action{display:none}.build8-bottom .canvas-status-note{display:none}.workspace-top{padding:0 9px;gap:9px}.workspace-project select{max-width:125px}.workspace-project>span{display:none}.workspace-top-meta{display:none}.workspace-actions .secondary-btn{font-size:0;padding:0 9px}.workspace-actions .secondary-btn svg{margin:0}.build8-canvas{width:96%}.quick-label-bar{height:38px;padding:0 7px}.quick-label-scroll{gap:4px}.quick-label-scroll button{font-size:6px;padding:0 6px}}
-@media(max-width:430px){.build8-shell{grid-template-columns:1fr}.workspace-project select{max-width:105px}.workspace-task-title{display:none}.workspace-actions .primary-btn{font-size:8px;padding:0 9px}.build8-toolbar .canvas-tool-status{min-width:auto}.build8-toolbar .canvas-tool-status small{display:none}.canvas-controls button:nth-child(4),.canvas-controls button:nth-child(5){display:none}.canvas-controls{gap:2px}.canvas-controls b{min-width:28px}.quick-label-title{display:none}}
-
-/* Build 9 - Task Planner / Project Operations */
-.task-planner-page{max-width:1550px}.planner-landing-head{align-items:center}.planner-landing-actions{display:flex;gap:7px}.planner-global-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:18px}.planner-project-picker-panel{overflow:hidden}.planner-project-search{height:34px;border:1px solid var(--line);border-radius:7px;display:flex;align-items:center;gap:7px;padding:0 9px;color:#8d98a4;width:270px}.planner-project-search input{border:0;outline:0;width:100%;font-size:9px}.planner-project-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;padding:16px}.planner-project-card{border:1px solid #e3e7ec;background:#fff;border-radius:10px;padding:15px;text-align:left;transition:.15s;min-width:0}.planner-project-card:hover{border-color:#a5b4fc;box-shadow:0 5px 18px rgba(15,23,42,.06);transform:translateY(-1px)}.planner-card-top{display:flex;align-items:center;justify-content:space-between}.planner-folder{width:32px;height:32px;border-radius:8px;background:#f1efff;color:#635bda;display:grid;place-items:center}.planner-project-card h3{font-size:12px;margin:13px 0 3px;color:#283343}.planner-project-card>p{font-size:8px;color:#929ca8;margin:0}.planner-card-meta{display:flex;gap:7px;margin-top:11px;flex-wrap:wrap}.planner-card-meta span{font-size:7px;color:#697585;background:#f5f7fa;border:1px solid #edf0f3;border-radius:10px;padding:4px 6px}.planner-card-progress{margin-top:14px}.planner-card-progress>div:first-child{display:flex;justify-content:space-between;align-items:center}.planner-card-progress b{font-size:9px}.planner-card-progress span{font-size:7px;color:#929ca8}.planner-card-progress .progress-track{margin-top:6px}.planner-open-label{margin-top:14px;padding-top:10px;border-top:1px solid #eef1f4;color:#625bd5;font-size:8px;font-weight:700;display:flex;justify-content:space-between}.planner-reference-head{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:15px}.planner-title-wrap{display:flex;align-items:center;gap:12px}.planner-back-btn{width:32px;height:32px;border:1px solid var(--line);background:#fff;border-radius:7px;font-size:19px;color:#4c5866;line-height:1}.planner-title-wrap h1{font-size:24px;margin:0 0 3px;letter-spacing:-.5px}.planner-title-wrap span{font-size:10px;color:#8b96a3}.planner-head-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}.planner-project-btn{height:32px;border:1px solid #9d96ff;color:#645cdc;background:#faf9ff;border-radius:16px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:700}.planner-control-group{display:flex;align-items:center;gap:5px}.planner-control-group>span{font-size:8px;color:#8a95a2}.priority-chip,.queue-chip{height:25px;border:1px solid #d7dde4;background:#fff;border-radius:7px;padding:0 9px;font-size:8px;font-weight:700;color:#738090}.priority-chip.active{color:#fff;border-color:#665ddd;background:#665ddd}.priority-chip.top{color:#e34b4b}.priority-chip.high{color:#e58a19}.priority-chip.medium{color:#5b54c9}.priority-chip.low{color:#677587}.priority-chip.active.top,.priority-chip.active.high,.priority-chip.active.low{color:#fff}.queue-chip{border-radius:14px;font-weight:600}.queue-chip.active{border-color:#45bf73;background:#effcf4;color:#16a34a}.queue-chip.hold{color:#d9464b;border-color:#f2b3b6}.queue-chip.hold.active{background:#fff1f2}.planner-refresh{height:32px}.planner-overall{display:flex;align-items:center;gap:20px;padding:12px 15px;margin-bottom:14px}.planner-overall>div{flex:1;min-width:0}.planner-overall b{font-size:9px;color:#344152}.planner-overall strong{font-size:9px;color:#687483;white-space:nowrap}.planner-progress-track{height:7px;background:#edf0f3;border-radius:6px;margin-top:8px;overflow:hidden}.planner-progress-track i{display:block;height:100%;background:#2fc36b;border-radius:inherit}.planner-stat-grid{display:grid;grid-template-columns:repeat(9,1fr);gap:10px;margin-bottom:18px}.planner-stat-grid .mini-stat{padding:11px 10px}.planner-stat-grid .mini-stat span{font-size:7px;text-transform:uppercase;letter-spacing:.55px}.planner-stat-grid .mini-stat b{font-size:18px}.planner-section{margin-bottom:18px}.planner-section-head{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:17px 18px 13px}.planner-section-head h2{font-size:13px;margin:0 0 4px;letter-spacing:.1px}.planner-section-head p{font-size:8px;color:#98a1ac;margin:0}.planner-section-tag{font-size:7px;color:#655ddb;background:#f3f1ff;border-radius:14px;padding:5px 8px;font-weight:700}.planner-table-wrap{overflow:auto}.planner-table{width:100%;border-collapse:collapse;min-width:1050px}.planner-table th{background:#fff;padding:10px 10px;border-top:1px solid #edf0f3;border-bottom:1px solid #dfe4e9;font-size:7px;letter-spacing:.7px;text-align:left;color:#8b95a1;white-space:nowrap}.planner-table td{padding:10px;border-bottom:1px solid #edf0f3;font-size:8px;vertical-align:middle;white-space:nowrap}.planner-table td>b{font-size:8px}.planner-table td small{font-size:7px}.planner-purple{color:#655ddd!important}.planner-green{color:#21ae61!important}.planner-red{color:#e04b55!important}.planner-blue{color:#2e72d8!important}.planner-row-progress{display:flex;align-items:center;gap:6px}.planner-row-progress>span{width:74px;height:5px;background:#edf0f3;border-radius:6px;overflow:hidden}.planner-row-progress i{display:block;height:100%;background:#2fc36b;border-radius:inherit}.planner-row-progress b{font-size:7px;color:#7b8794}.tiny-outline,.tiny-danger{height:27px;border:1px solid #d5dce4;background:#fff;border-radius:7px;font-size:7px;font-weight:700;padding:0 7px;margin-right:5px;color:#4e5a67}.tiny-danger{color:#d94b53}.planner-empty-row{text-align:center;padding:24px;color:#9aa4af;font-size:8px}.rework-section{overflow:hidden}.rework-controls{display:flex;align-items:flex-end;gap:8px;padding:0 18px 12px;border-bottom:1px solid #edf0f3}.rework-controls label{display:flex;align-items:center;gap:7px}.rework-controls label span{font-size:7px;font-weight:700;color:#8a95a2}.rework-controls select{height:32px;border:1px solid var(--line);border-radius:7px;background:#fff;padding:0 8px;font-size:8px}.rework-task-list{max-height:280px;overflow:auto}.rework-task-row{display:flex;align-items:center;gap:9px;padding:9px 18px;border-bottom:1px solid #f0f2f5;cursor:pointer}.rework-task-row:hover,.rework-task-row.selected{background:#faf9ff}.rework-task-row input{accent-color:#665ddd}.rework-task-name{flex:1;min-width:0}.rework-task-name b{display:block;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.rework-task-name small{display:block;font-size:7px;color:#9aa3ad;margin-top:2px}.rework-project-name{font-size:7px;color:#9aa3ad;min-width:110px}.rework-more{padding:8px 18px;font-size:7px;color:#9aa3ad;border-bottom:1px solid #edf0f3}.rework-actions{display:flex;justify-content:flex-end;gap:7px;padding:12px 18px}.danger-outline{height:36px;border:1px solid #f0b1b5;background:#fff8f8;color:#d6454f;border-radius:7px;padding:0 12px;display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:700}.danger-outline:disabled,.primary-btn:disabled{opacity:.45;cursor:not-allowed}.target-section{overflow:hidden}.target-toolbar{display:flex;align-items:center;gap:11px;padding:0 18px 13px;border-bottom:1px solid #edf0f3;flex-wrap:wrap}.target-toolbar label{display:flex;align-items:center;gap:7px;font-size:8px;font-weight:700;color:#465261}.target-toolbar label>span{font-size:7px;color:#8994a0}.target-toolbar input[type=number]{width:75px;height:31px;border:1px solid var(--line);border-radius:7px;text-align:center;outline:0;font-size:8px}.target-toolbar input[type=date]{height:31px;border:1px solid var(--line);border-radius:7px;padding:0 7px;font-size:8px;color:#596575}.target-toolbar>small{font-size:7px;color:#9aa4af}.target-queue{display:flex;align-items:center;gap:5px;margin-left:auto}.target-queue span{font-size:7px;color:#8c97a3}.target-queue button{height:25px;border:1px solid #cfd6df;background:#fff;border-radius:5px;padding:0 7px;font-size:7px;color:#7c8794}.target-queue button.active{border-color:#665ddd;background:#665ddd;color:#fff}.target-input{width:70px;height:29px;border:1px solid #d7dde4;border-radius:7px;background:#fff;text-align:center;font-size:8px;outline:0}.queue-toggle{display:inline-flex;border:1px solid #d8dee6;border-radius:5px;overflow:hidden;font-size:7px}.queue-toggle b{background:#665ddd;color:#fff;padding:5px 6px}.queue-toggle span{padding:5px 6px;color:#8c97a3}.planner-toast{position:fixed;right:24px;bottom:24px;z-index:100}.planner-link{border:0;background:#f3f1ff;color:#655ddd;border-radius:5px;height:27px;padding:0 7px;display:inline-flex;align-items:center;gap:4px;font-size:8px;font-weight:700}.planner-link:hover{background:#e9e6ff}
-
-@media(max-width:1200px){.planner-stat-grid{grid-template-columns:repeat(5,1fr)}.planner-project-grid{grid-template-columns:repeat(2,1fr)}.planner-reference-head{align-items:flex-start;flex-direction:column}.planner-head-controls{justify-content:flex-start}.planner-overall{flex-direction:column;align-items:stretch}.planner-overall strong{align-self:flex-end}.planner-table{min-width:1150px}}
-@media(max-width:760px){.planner-global-summary{grid-template-columns:1fr 1fr}.planner-project-grid{grid-template-columns:1fr}.planner-project-search{width:100%}.planner-project-picker-panel .panel-head{align-items:stretch;flex-direction:column}.planner-stat-grid{grid-template-columns:repeat(3,1fr)}.planner-stat-grid .mini-stat b{font-size:15px}.planner-head-controls{width:100%}.planner-control-group{flex-wrap:wrap}.planner-refresh{margin-left:auto}.rework-controls{align-items:stretch;flex-direction:column}.rework-controls label{justify-content:space-between}.rework-controls select{flex:1}.rework-actions{flex-direction:column}.rework-actions button{width:100%}.target-toolbar{align-items:flex-start;flex-direction:column}.target-queue{margin-left:0}.planner-title-wrap h1{font-size:21px}}
-@media(max-width:520px){.planner-global-summary,.planner-stat-grid{grid-template-columns:1fr 1fr}.planner-section-head{align-items:flex-start;flex-direction:column}.planner-overall{padding:12px}.planner-head-controls{gap:5px}.planner-project-btn{order:0}.priority-chip,.queue-chip{padding:0 7px}.planner-stat-grid .mini-stat{padding:9px}.planner-stat-grid .mini-stat b{font-size:16px}.planner-table{min-width:1100px}.planner-link{display:none}}
-
-/* Build 10 - Task Assignment & Queue Operations */
-.assignment-section .planner-section-head h2{display:flex;align-items:center;gap:8px}
-.assignment-toolbar{display:flex;justify-content:space-between;align-items:center;gap:14px;padding:14px 16px;border:1px solid var(--line,#e5e9ed);border-radius:12px;background:var(--soft,#f7f9fa);margin-bottom:14px}
-.assignment-summary{display:flex;align-items:center;gap:22px;flex-wrap:wrap;color:#66717d;font-size:12px}.assignment-summary b{font-size:15px;color:#15202b;margin-right:4px}
-.assignment-task-list{border:1px solid var(--line,#e5e9ed);border-radius:12px;overflow:hidden;background:#fff}.assignment-task-row{display:grid;grid-template-columns:minmax(260px,1.4fr) minmax(300px,1fr) auto;gap:14px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line,#e5e9ed)}.assignment-task-row:last-child{border-bottom:0}.assignment-task-main{display:flex;align-items:center;gap:9px;min-width:0}.assignment-task-main>b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.task-id-chip{font-family:monospace;font-size:10px;padding:4px 6px;border-radius:5px;background:#f1f3f5;color:#66717d;flex:none}.assignment-task-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;color:#66717d;font-size:11px}.assignment-task-meta>span{padding:4px 7px;border:1px solid #e5e9ed;border-radius:6px;background:#fff}.priority-mini{font-weight:700}.priority-mini.top{color:#dc2626}.priority-mini.high{color:#ea580c}.priority-mini.medium{color:#4f46e5}.priority-mini.low{color:#66717d}
-.planner-assignment-modal{width:min(650px,calc(100vw - 32px))}.planner-assignment-task-preview{max-height:180px;overflow:auto;border:1px solid #e5e9ed;border-radius:10px;background:#f7f9fa;margin-bottom:18px}.planner-assignment-task-preview>div{display:flex;gap:10px;align-items:center;padding:9px 11px;border-bottom:1px solid #e5e9ed;font-size:12px}.planner-assignment-task-preview>div:last-of-type{border-bottom:0}.planner-assignment-task-preview span{font-family:monospace;color:#66717d;font-size:10px}.planner-assignment-task-preview b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.planner-assignment-task-preview small{display:block;padding:8px 11px;color:#66717d}.assignment-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.assignment-form-grid label{display:flex;flex-direction:column;gap:7px}.assignment-form-grid label>span{font-size:10px;letter-spacing:.08em;font-weight:700;color:#66717d}.assignment-form-grid select{width:100%;padding:10px 11px;border:1px solid #d9dfe4;border-radius:8px;background:#fff;color:#15202b}.assignment-capacity-note{display:flex;align-items:center;gap:8px;margin-top:16px;padding:10px 12px;border-radius:9px;background:#f5f7ff;color:#66717d;font-size:11px}.assignment-capacity-note svg{color:#4f46e5;flex:none}
-@media(max-width:900px){.assignment-task-row{grid-template-columns:1fr}.assignment-task-meta{order:2}.assignment-task-row>.tiny-outline{justify-self:start}.assignment-toolbar{align-items:flex-start;flex-direction:column}.assignment-summary{gap:10px 18px}}
-@media(max-width:600px){.assignment-form-grid{grid-template-columns:1fr}.planner-assignment-modal{width:calc(100vw - 20px)}.assignment-section .planner-section-head{align-items:flex-start;flex-direction:column}}
-
-/* Build 11 - Workload & Capacity */
-.workload-page{position:relative}.workload-head{align-items:center}.workload-head .page-head-actions{display:flex;gap:8px}.workload-controls{display:flex;align-items:flex-end;gap:18px;padding:14px 16px;margin-bottom:18px;flex-wrap:wrap}.workload-control{display:flex;flex-direction:column;gap:7px;min-width:150px}.workload-control>span{font-size:9px;font-weight:800;letter-spacing:.08em;color:#7d8995}.workload-control select{height:36px;border:1px solid var(--line,#e5e9ed);border-radius:8px;background:#fff;padding:0 10px;color:#26313c;font-size:11px;min-width:170px}.segmented-control{display:inline-flex;height:36px;border:1px solid var(--line,#e5e9ed);border-radius:8px;overflow:hidden;background:#fff}.segmented-control button{border:0;background:#fff;padding:0 13px;color:#7b8793;font-size:10px;font-weight:700;cursor:pointer}.segmented-control button.active{background:#15202b;color:#fff}.workload-settings{margin-left:auto}.workload-settings label{display:flex;align-items:center;gap:7px;color:#7d8995;font-size:9px;font-weight:700}.workload-settings input{width:72px;height:36px;border:1px solid var(--line,#e5e9ed);border-radius:8px;text-align:center;font-size:11px}.workload-settings b{color:#4d5965}.workload-stats{grid-template-columns:repeat(5,1fr);margin-bottom:18px}.workload-panel{overflow:hidden;margin-bottom:18px}.section-header{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:16px 18px;border-bottom:1px solid var(--line,#e5e9ed)}.section-header h2{margin:0 0 4px;font-size:14px}.section-header p{margin:0;color:#929ca6;font-size:9px}.workload-project-chip{padding:6px 9px;border-radius:7px;background:#f1f5ff;color:#4863a5;font-size:9px;font-weight:800}.workload-table-wrap{overflow:auto}.workload-table{width:100%;min-width:1000px;border-collapse:collapse}.workload-table th{padding:11px 12px;text-align:left;background:#fbfcfd;border-bottom:1px solid var(--line,#e5e9ed);font-size:7px;letter-spacing:.8px;color:#8b96a0}.workload-table td{padding:12px;border-bottom:1px solid #edf0f2;font-size:9px;vertical-align:middle}.workload-table td>strong{display:block;font-size:12px}.workload-table td>small{display:block;color:#98a2ab;font-size:7px;margin-top:3px}.workload-member{display:flex;align-items:center;gap:9px}.user-avatar.small{width:30px;height:30px;font-size:11px}.workload-member b{display:block;font-size:10px}.workload-member span{display:block;color:#99a3ad;font-size:7px;margin-top:2px}.role-pill,.project-access{display:inline-flex;padding:5px 7px;border:1px solid #e1e6eb;border-radius:6px;background:#fff;color:#5f6b77;font-size:8px;font-weight:700}.load-pill{display:inline-flex;padding:5px 7px;border-radius:6px;font-size:8px;font-weight:800}.load-pill.available{background:#edf8f1;color:#24945a}.load-pill.healthy{background:#eef7f1;color:#278a55}.load-pill.high{background:#fff5e8;color:#c67617}.load-pill.overloaded{background:#fff0f1;color:#d64750}.workload-progress{display:flex;align-items:center;gap:7px;min-width:110px}.workload-progress>span{height:6px;flex:1;background:#edf0f2;border-radius:5px;overflow:hidden}.workload-progress i{display:block;height:100%;background:#2fc36b;border-radius:inherit}.workload-progress b{font-size:7px;color:#65717c;width:25px}.capacity-input{width:58px;height:30px;border:1px solid #d9dfe5;border-radius:7px;text-align:center;font-size:9px}.workload-empty{text-align:center!important;padding:35px!important;color:#99a3ad}.workload-bottom-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.workload-panel.compact{margin-bottom:0}.queue-health-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:14px 18px}.queue-health-grid .mini-stat{border:1px solid #edf0f2;border-radius:8px;padding:9px;background:#fbfcfd}.queue-health-grid .mini-stat b{font-size:17px}.queue-health-note{margin:0 18px 16px;padding:10px 12px;border-radius:8px;background:#f4f8ff;color:#66717d;font-size:8px;display:flex;align-items:center;gap:7px}.queue-health-note svg{color:#4b6fc4}.capacity-guide{display:grid;grid-template-columns:1fr 1fr;gap:9px;padding:14px 18px}.capacity-guide>div{display:grid;grid-template-columns:10px 1fr;column-gap:7px;align-items:center;padding:9px;border:1px solid #edf0f2;border-radius:8px}.capacity-guide small{grid-column:2;color:#98a2ac;font-size:7px}.capacity-guide b{font-size:8px}.guide-dot{width:7px;height:7px;border-radius:50%;grid-row:1/3}.guide-dot.available{background:#2fb76a}.guide-dot.healthy{background:#55a66e}.guide-dot.high{background:#e3a13c}.guide-dot.overloaded{background:#dd5058}.workload-tip{margin:0 18px 16px;padding:10px 12px;border-radius:8px;background:#faf7ff;color:#6e687c;font-size:8px;display:flex;align-items:center;gap:7px}.workload-tip svg{color:#715fe0}.workload-toast{position:fixed;right:24px;bottom:24px;z-index:120;background:#15202b;color:#fff;border-radius:9px;padding:11px 14px;display:flex;align-items:center;gap:8px;font-size:10px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
-@media(max-width:1100px){.workload-stats{grid-template-columns:repeat(3,1fr)}.workload-bottom-grid{grid-template-columns:1fr}.workload-settings{margin-left:0}.workload-head{align-items:flex-start;flex-direction:column}}
-@media(max-width:700px){.workload-controls{align-items:stretch;flex-direction:column}.workload-control{width:100%}.workload-control select{width:100%}.workload-settings{width:100%}.workload-settings label{justify-content:space-between}.workload-stats{grid-template-columns:1fr 1fr}.workload-head .page-head-actions{width:100%}.workload-head .page-head-actions button{flex:1}.queue-health-grid{grid-template-columns:1fr 1fr}.capacity-guide{grid-template-columns:1fr}}
-
-
-/* Build 12 - Operations & Activity Control Center */
-.operations-page{position:relative}.operations-head{align-items:center}.operations-head .page-head-actions{display:flex;gap:8px}.operations-stats{grid-template-columns:repeat(4,1fr);margin-bottom:18px}.operations-panel{margin-bottom:18px}.operations-toolbar{display:flex;align-items:center;gap:10px;padding:13px 15px;flex-wrap:wrap}.operations-search{height:36px;display:flex;align-items:center;gap:8px;border:1px solid var(--line,#e5e9ed);border-radius:8px;background:#fff;padding:0 10px;flex:1;min-width:240px}.operations-search svg{color:#8a96a1}.operations-search input{border:0;outline:0;width:100%;font-size:11px;color:#26313c}.operations-toolbar select{height:36px;border:1px solid var(--line,#e5e9ed);border-radius:8px;background:#fff;padding:0 10px;font-size:10px;color:#46525e;min-width:150px}.operations-unread{display:flex;align-items:center;gap:7px;color:#66717d;font-size:10px;font-weight:700;padding:0 5px}.operations-unread input{accent-color:#15202b}.operations-grid{display:grid;grid-template-columns:minmax(0,1fr) 330px;gap:18px}.operations-panel,.operations-feed,.operations-alerts,.operations-read{overflow:hidden}.operations-count{font-size:9px;color:#8a96a1;font-weight:700;padding:5px 8px;border-radius:6px;background:#f5f7f9}.operations-list{background:#fff}.operation-row{position:relative;width:100%;border:0;border-bottom:1px solid #edf0f2;background:#fff;display:grid;grid-template-columns:34px minmax(0,1fr) auto 7px;gap:11px;align-items:center;text-align:left;padding:13px 16px;cursor:pointer}.operation-row:hover{background:#fbfcfd}.operation-row.unread{background:#f8fbff}.operation-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;background:#f1f4f7;color:#65727e}.operation-icon.assignment{background:#eef5ff;color:#4d73b7}.operation-icon.qa{background:#edf8f2;color:#2d8c5a}.operation-icon.rework,.operation-icon.alert{background:#fff2f2;color:#d34e57}.operation-icon.completion{background:#eef9f2;color:#2f9660}.operation-icon.export{background:#f5f1ff;color:#765ac5}.operation-icon.team{background:#fff7e9;color:#b77a25}.operation-body{min-width:0;display:flex;flex-direction:column;gap:3px}.operation-body b{font-size:10px;color:#26313c}.operation-body em{font-style:normal;font-size:9px;color:#6d7984;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.operation-body small{font-size:7px;color:#9aa4ad}.operation-row time{font-size:8px;color:#9aa4ad;white-space:nowrap}.unread-dot{width:6px;height:6px;border-radius:50%;background:#2f76d2;display:block}.operations-empty{min-height:330px;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:7px;color:#98a2ac;font-size:10px}.operations-empty svg{color:#c0c7cd}.operations-empty b{color:#65717c;font-size:11px}.attention-list{padding:6px 16px 14px}.attention-item{display:flex;gap:9px;padding:11px 0;border-bottom:1px solid #edf0f2}.attention-item:last-child{border-bottom:0}.attention-item>span{width:28px;height:28px;border-radius:7px;background:#fff3f3;color:#d34e57;display:flex;align-items:center;justify-content:center;flex:none}.attention-item div{min-width:0}.attention-item b{display:block;font-size:9px;color:#3b4650}.attention-item small{display:block;margin-top:3px;font-size:8px;line-height:1.45;color:#8b96a0}.attention-empty{display:flex;align-items:center;gap:7px;padding:18px 4px;color:#5f8e70;font-size:9px}.operations-read{margin-top:18px}.read-actions{display:flex;gap:7px;padding:13px 16px}.read-actions button{flex:1;border:1px solid #dfe4e8;background:#fff;border-radius:7px;padding:8px 7px;font-size:8px;color:#56636e;font-weight:700;display:flex;align-items:center;justify-content:center;gap:5px;cursor:pointer}.read-actions button:hover{background:#f7f9fa}.read-note{margin:0 16px 16px;padding:10px;border-radius:8px;background:#f7f9fa;color:#7b8791;font-size:8px;display:flex;gap:7px;line-height:1.5}.read-note svg{flex:none;color:#6b7782}
-@media(max-width:1050px){.operations-grid{grid-template-columns:1fr}.operations-side{display:grid;grid-template-columns:1fr 1fr;gap:18px}.operations-read{margin-top:0}.operations-stats{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:700px){.operations-head{align-items:flex-start;flex-direction:column}.operations-head .page-head-actions{width:100%}.operations-head .page-head-actions button{flex:1}.operations-toolbar{align-items:stretch;flex-direction:column}.operations-search{min-width:0}.operations-toolbar select{width:100%}.operations-unread{padding:5px 0}.operations-side{grid-template-columns:1fr}.operations-stats{grid-template-columns:1fr 1fr}.operation-row{grid-template-columns:32px minmax(0,1fr) 7px;gap:9px}.operation-row time{display:none}.operation-body em{white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}.read-actions{flex-direction:column}}
-
-/* Build 14 - Notification & Alert Center */
-.notification-trigger{position:relative}.notification-trigger i{position:absolute;top:-5px;right:-5px;min-width:17px;height:17px;padding:0 4px;border-radius:99px;background:#e5484d;color:#fff;font-size:9px;font-style:normal;font-weight:800;display:flex;align-items:center;justify-content:center;border:2px solid #0b1724}
-.notifications-page{padding-bottom:40px}.notifications-stats{margin-bottom:18px}.notification-toolbar{display:flex;align-items:center;gap:18px;padding:14px;margin-bottom:14px}.notification-toolbar .search-box{flex:1;max-width:420px}.notification-filters{display:flex;gap:7px;flex-wrap:wrap}.notification-filters button{border:1px solid var(--line,#e5e9ed);background:#fff;border-radius:9px;padding:8px 12px;font-size:12px;font-weight:700;color:#66717d;cursor:pointer}.notification-filters button.active{background:#15202b;color:#fff;border-color:#15202b}.notification-list{padding:0;overflow:hidden}.notification-row{display:flex;align-items:flex-start;gap:14px;padding:17px 18px;border-bottom:1px solid var(--line,#e5e9ed);transition:.15s}.notification-row:last-child{border-bottom:0}.notification-row.unread{background:#fbfdfc}.notification-row:hover{background:#f7f9fa}.notification-icon{width:38px;height:38px;border-radius:11px;background:#edf8f2;color:#20a85f;display:flex;align-items:center;justify-content:center;flex:0 0 auto}.notification-main{flex:1;min-width:0}.notification-title{display:flex;align-items:center;gap:8px;font-size:14px}.notification-title strong{color:#15202b}.unread-dot{width:7px;height:7px;border-radius:50%;background:#20a85f}.notification-main p{margin:5px 0 8px;color:#66717d;font-size:13px;line-height:1.45}.notification-meta{display:flex;gap:8px;flex-wrap:wrap;color:#8a949e;font-size:11px}.notification-meta span{padding-right:8px;border-right:1px solid #dce1e5}.notification-meta span:last-child{border-right:0}.notification-actions{display:flex;align-items:center;gap:6px}.small-btn{padding:7px 9px!important;font-size:11px!important}.danger-btn{border:1px solid #f0c8ca;background:#fff5f5;color:#c43f45;border-radius:9px;padding:9px 12px;font-weight:700;display:flex;align-items:center;gap:7px;cursor:pointer}.empty-state{padding:60px 20px;text-align:center;color:#8a949e}.empty-state h3{margin:12px 0 5px;color:#15202b}.empty-state p{margin:0;font-size:13px}
-@media(max-width:800px){.notification-toolbar{align-items:stretch;flex-direction:column}.notification-toolbar .search-box{max-width:none}.notification-row{padding:14px;gap:10px}.notification-actions{flex-direction:column}.notification-meta{gap:5px}.page-head-actions{flex-wrap:wrap}}
-
-/* Build 13 - Annotation History & Audit Trail */
-.audit-page .page-head-actions{display:flex;gap:10px;flex-wrap:wrap}
-.audit-stats{margin-bottom:18px}
-.audit-toolbar{display:grid;grid-template-columns:minmax(260px,1fr) repeat(4,minmax(130px,180px)) minmax(140px,190px);gap:10px;margin-bottom:18px;align-items:center}
-.audit-toolbar select,.audit-toolbar input{height:40px;border:1px solid var(--line,#e5e9ed);border-radius:10px;background:#fff;padding:0 11px;font:inherit;color:inherit;min-width:0}
-.audit-grid{display:grid;grid-template-columns:minmax(0,1.7fr) minmax(300px,.8fr);gap:18px}
-.audit-list{overflow:hidden}
-.audit-row{width:100%;display:grid;grid-template-columns:38px minmax(0,1fr) auto;gap:12px;text-align:left;padding:15px 18px;border:0;border-bottom:1px solid var(--line,#e5e9ed);background:#fff;cursor:pointer;transition:.16s}
-.audit-row:hover,.audit-row.active{background:#f7faf8}
-.audit-icon{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;background:#eef8f2;color:#20a85f}
-.audit-body{min-width:0;display:flex;flex-direction:column;gap:4px}
-.audit-body strong{font-size:13px;color:#15202b}.audit-body em{font-style:normal;color:#66717d;font-size:12px}.audit-body small{color:#8a949d;font-size:11px}.audit-row time{font-size:11px;color:#8a949d;white-space:nowrap}
-.audit-side{display:flex;flex-direction:column;gap:18px}.task-history{display:flex;flex-direction:column;padding:4px 18px 16px}.history-item{display:flex;gap:10px;padding:13px 0;border-bottom:1px solid var(--line,#e5e9ed)}.history-item>span{width:28px;height:28px;border-radius:8px;background:#f1f5f3;display:grid;place-items:center;color:#20a85f;flex:none}.history-item div{display:flex;flex-direction:column;gap:3px}.history-item b{font-size:12px}.history-item small{font-size:11px;color:#66717d}.history-item em{font-size:10px;color:#9aa3aa;font-style:normal}.task-history-empty{min-height:180px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#8a949d;text-align:center;padding:20px}.audit-task-chips{padding:0 18px 18px;display:flex;gap:8px;flex-wrap:wrap}.audit-task-chips button{border:1px solid var(--line,#e5e9ed);background:#fff;border-radius:9px;padding:8px 10px;font-size:11px;cursor:pointer}.audit-task-chips button.active{background:#20a85f;color:#fff;border-color:#20a85f}.audit-task-chips span{font-size:12px;color:#8a949d}
-@media(max-width:1100px){.audit-toolbar{grid-template-columns:1fr 1fr 1fr}.audit-grid{grid-template-columns:1fr}.audit-side{display:grid;grid-template-columns:1fr 1fr}}
-@media(max-width:700px){.audit-toolbar{grid-template-columns:1fr}.audit-side{display:flex}.audit-row{grid-template-columns:34px minmax(0,1fr)}.audit-row time{grid-column:2}.audit-row{padding:13px 12px}.audit-body strong{font-size:12px}}
-
-/* Build 15 — Settings & Workspace Controls */
-.settings-page{padding:28px 30px 40px;max-width:1450px;margin:0 auto}.settings-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;margin-bottom:22px}.settings-heading h1{margin:3px 0 6px}.settings-heading p{margin:0;color:var(--muted,#66717d)}.settings-status{display:flex;align-items:center;gap:7px;padding:9px 12px;border:1px solid var(--line,#e5e9ed);border-radius:10px;background:#fff;font-size:12px;color:#4b5965;white-space:nowrap}.settings-layout{display:grid;grid-template-columns:240px minmax(0,1fr);gap:20px;align-items:start}.settings-nav{padding:8px}.settings-nav button{width:100%;display:flex;align-items:center;gap:11px;border:0;background:transparent;border-radius:10px;padding:12px 11px;color:#53616d;text-align:left;font-weight:700;cursor:pointer}.settings-nav button span{flex:1}.settings-nav button svg:last-child{opacity:.45}.settings-nav button.active{background:#effaf4;color:#15965a}.settings-nav-note{display:flex;gap:9px;margin:14px 7px 5px;padding:12px 9px;border-top:1px solid var(--line,#e5e9ed);color:#6b7782}.settings-nav-note b,.settings-nav-note small{display:block}.settings-nav-note b{font-size:11px;color:#3d4b57;margin-bottom:3px}.settings-nav-note small{font-size:10px;line-height:1.45}.settings-card{padding:24px}.settings-card-title{display:flex;justify-content:space-between;gap:16px;padding-bottom:18px;border-bottom:1px solid var(--line,#e5e9ed);margin-bottom:18px}.settings-card-title h2{margin:0 0 5px;font-size:18px}.settings-card-title p{margin:0;color:var(--muted,#66717d);font-size:12px}.settings-card-title>svg{color:#19a764}.settings-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:17px}.settings-grid label,.settings-range{display:flex;flex-direction:column;gap:7px}.settings-grid label>span,.settings-range b{font-size:11px;font-weight:800;color:#475561;text-transform:uppercase;letter-spacing:.04em}.settings-grid input,.settings-grid select{height:40px;border:1px solid #dce2e7;border-radius:9px;padding:0 11px;background:#fff;color:#24313b;outline:none}.settings-grid input:focus,.settings-grid select:focus{border-color:#37c878;box-shadow:0 0 0 3px rgba(55,200,120,.1)}.settings-section{margin-top:25px;border-top:1px solid var(--line,#e5e9ed);padding-top:17px}.settings-section h3,.settings-shortcuts h3{margin:0 0 10px;font-size:13px}.settings-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:15px 0;border-bottom:1px solid #eef1f3;cursor:pointer}.settings-toggle-row:last-child{border-bottom:0}.settings-toggle-row span:first-child{display:block}.settings-toggle-row b,.settings-range b{display:block;font-size:13px;color:#293741}.settings-toggle-row small,.settings-range small{display:block;color:#78838d;font-size:11px;margin-top:3px}.toggle-switch{width:42px;height:24px;border:0;border-radius:20px;background:#cbd3d9;padding:3px;cursor:pointer;transition:.18s;flex:none}.toggle-switch span{display:block;width:18px;height:18px;border-radius:50%;background:#fff;transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.18)}.toggle-switch.on{background:#22b66c}.toggle-switch.on span{transform:translateX(18px)}.settings-range{display:grid;grid-template-columns:1fr minmax(130px,260px) 38px;align-items:center;gap:18px;padding:17px 0;border-bottom:1px solid #eef1f3}.settings-range input{accent-color:#22b66c}.settings-range strong{font-size:12px;text-align:right}.settings-info{display:flex;gap:10px;margin-top:20px;padding:13px;border:1px solid #dff1e7;background:#f4fbf7;border-radius:10px;color:#168956}.settings-info b,.settings-info span{display:block}.settings-info b{font-size:12px;margin-bottom:3px}.settings-info span{font-size:11px;color:#5e6b75}.settings-profile{display:flex;align-items:center;gap:12px;padding:15px;border:1px solid #e3e8eb;border-radius:11px}.settings-avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;background:#152331;color:#fff;font-weight:800}.settings-profile b,.settings-profile span{display:block}.settings-profile b{font-size:13px}.settings-profile span{font-size:11px;color:#77828b;margin-top:2px}.settings-role{margin-left:auto!important;padding:5px 8px;border-radius:6px;background:#edf8f2;color:#15945a!important;font-size:9px!important;font-weight:800}.settings-shortcuts{margin-top:22px}.settings-shortcuts>div{display:flex;align-items:center;gap:7px;flex-wrap:wrap;color:#64717c;font-size:11px}.settings-shortcuts kbd{min-width:25px;text-align:center;padding:5px 7px;border:1px solid #d6dde2;border-bottom-width:2px;border-radius:5px;background:#f8fafb;color:#34414b;font-size:10px;font-weight:800}.settings-danger{margin-top:25px;padding-top:20px;border-top:1px solid #eceff1;display:flex;align-items:center;justify-content:space-between;gap:20px}.settings-danger h3{margin:0 0 4px;font-size:13px}.settings-danger p{margin:0;color:#78838d;font-size:11px;max-width:620px}.settings-danger .btn{display:flex;align-items:center;gap:7px;white-space:nowrap}
-@media(max-width:850px){.settings-page{padding:20px 16px}.settings-heading{align-items:flex-start;flex-direction:column}.settings-layout{grid-template-columns:1fr}.settings-nav{display:grid;grid-template-columns:repeat(2,1fr);gap:4px}.settings-nav-note{display:none}.settings-grid{grid-template-columns:1fr}.settings-danger{align-items:flex-start;flex-direction:column}.settings-range{grid-template-columns:1fr}.settings-range strong{text-align:left}}
-
-/* ===== Build 30 — Projects → Tasks → Annotation/Review workflow ===== */
-.breadcrumb .crumb-link{border:0;background:transparent;font-size:11px;color:#8b96a4;padding:0;cursor:pointer}
-.breadcrumb .crumb-link:hover{color:#2563eb;text-decoration:underline}
-
-/* Task card: whole body opens the annotation workstation */
-.task-open-card{display:flex;flex-direction:column}
-.task-open-zone{text-align:left;padding:0;width:100%;cursor:pointer;display:block;outline:none;border-radius:8px}
-.task-open-zone:focus-visible{box-shadow:0 0 0 2px #2563eb}
-.task-open-zone:hover .project-card-title h3{color:#2563eb}
-.task-workflow-row{display:flex;gap:7px;margin-top:14px}
-.workflow-btn{flex:1;height:29px;border-radius:7px;border:1px solid var(--line);background:#fff;font-size:8.5px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:5px;cursor:pointer;color:#485463}
-.workflow-btn.annotate{background:#2563eb;border-color:#2563eb;color:#fff}
-.workflow-btn.annotate:hover{background:#1d4ed8}
-.workflow-btn.review{color:#7c3aed;border-color:#ddd3f7;background:#f8f5ff}
-.workflow-btn.review:hover{background:#f1ebff}
-
-/* Workstation stage switch (Annotation / Review) */
-.workstation-back{height:30px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:#fff;font-size:9px;font-weight:600;color:#5b6675;display:flex;align-items:center;gap:4px;cursor:pointer;flex:none}
-.workstation-back:hover{border-color:#c7d2e0;color:#2563eb}
-.workstation-mode-switch{display:flex;gap:3px;background:#f1f4f8;border:1px solid var(--line);border-radius:8px;padding:3px;flex:none}
-.workstation-mode-switch button{height:24px;padding:0 11px;border:0;border-radius:6px;background:transparent;font-size:8.5px;font-weight:700;letter-spacing:.3px;color:#6b7683;display:flex;align-items:center;gap:5px;cursor:pointer}
-.workstation-mode-switch button.active{background:#fff;color:#1f2937;box-shadow:0 1px 2px rgba(16,24,40,.12)}
-.workstation-mode-switch button.active svg{color:#2563eb}
-
-.workspace-actions .skip-btn{color:#6b7683}
-.workspace-actions .reject-btn{color:#dc2626;border-color:#f3cfcf}
-.workspace-actions .reject-btn:hover{background:#fef2f2}
-.workspace-actions .accept-btn{background:#16a34a;border-color:#16a34a}
-.workspace-actions .accept-btn:hover{background:#15803d}
-.workspace-actions button:disabled{opacity:.45;cursor:not-allowed}
-
-@media(max-width:700px){
-  .workstation-mode-switch button{padding:0 8px;font-size:7.5px}
-  .workstation-back{font-size:0;padding:0 8px}
-  .workstation-back svg{margin:0}
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error, info) { logClientError(error.message, error.stack, `ErrorBoundary: ${(info.componentStack || "").slice(0, 300)}`); }
+  render() {
+    if (this.state.hasError) {
+      return <div className="crash-screen">
+        <div className="crash-card">
+          <AlertCircle size={32} />
+          <h2>Something went wrong</h2>
+          <p>AnnotatePro hit an unexpected error. Your data is safe — it's saved as you go. Reloading usually fixes this.</p>
+          <button className="primary-btn" onClick={() => window.location.reload()}>Reload AnnotatePro</button>
+        </div>
+      </div>;
+    }
+    return this.props.children;
+  }
 }
 
-/* ===== Build 32 — Label & Taxonomy Manager ===== */
-.taxonomy-head-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.taxonomy-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:14px 0}
-.schema-version-badge{display:flex;align-items:center;gap:6px;background:#eef2ff;color:#4338ca;border:1px solid #e0e4fb;border-radius:8px;padding:6px 12px;font-size:11px;font-weight:700}
-.ghost-btn{height:30px;padding:0 12px;border-radius:7px;border:1px solid var(--line);background:#fff;font-size:11px;font-weight:600;color:#485463;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
-.ghost-btn:hover{border-color:#c7d2e0;color:#2563eb}
+const PROJECTS_KEY = "annotatepro_projects_v2";
+const TASKS_KEY = "annotatepro_tasks_v1";
+const DATASETS_KEY = "annotatepro_datasets_v1";
+const SETTINGS_KEY = "annotatepro_settings_v1";
 
-.schema-history-list{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;border:1px solid var(--line);border-radius:10px;padding:10px;background:#fafbfd}
-.schema-history-row{display:flex;align-items:center;justify-content:space-between;padding:7px 8px;border-radius:7px}
-.schema-history-row:hover{background:#fff}
-.schema-history-row div{display:flex;flex-direction:column;gap:2px}
-.schema-history-row b{font-size:12px}
-.schema-history-row span{font-size:10.5px;color:#8b96a4}
-.config-empty.small{padding:16px}
+const labelPalette = [
+  "#2563eb", "#16a34a", "#dc2626", "#9333ea", "#ea580c",
+  "#0891b2", "#ca8a04", "#db2777", "#4f46e5", "#65a30d"
+];
 
-.label-group-strip{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:14px}
-.label-group-strip > button{height:28px;padding:0 11px;border-radius:20px;border:1px solid var(--line);background:#fff;font-size:10.5px;font-weight:600;color:#5b6675;cursor:pointer}
-.label-group-strip > button.active{background:#1f2937;border-color:#1f2937;color:#fff}
-.label-group-chip{display:inline-flex;align-items:center;border-radius:20px;border:1px solid var(--line);overflow:hidden}
-.label-group-chip button:first-child{height:28px;padding:0 10px;border:0;background:#fff;font-size:10.5px;font-weight:600;color:var(--chip-color,#5b6675);cursor:pointer;border-left:3px solid var(--chip-color,#cbd5e1)}
-.label-group-chip.active button:first-child{background:#f1f4f8}
-.label-group-chip .chip-x{width:20px;height:28px;border:0;background:#fff;color:#9aa4b2;cursor:pointer;border-left:1px solid var(--line)}
-.label-group-chip .chip-x:hover{color:#dc2626}
-.new-group-form{display:flex;align-items:center;gap:4px}
-.new-group-form input{height:28px;border-radius:20px;border:1px dashed #c7d2e0;padding:0 12px;font-size:10.5px;width:140px}
-.new-group-form button{width:26px;height:26px;border-radius:50%;border:1px solid var(--line);background:#fff;cursor:pointer;display:flex;align-items:center;justify-content:center;color:#5b6675}
-.new-group-form button:hover{color:#2563eb;border-color:#2563eb}
+const GROUP_ICONS = { Brush, Square, Layers, FolderKanban, Target, ShieldCheck };
 
-.taxonomy-list{padding:4px 0}
-.taxonomy-row{position:relative;display:flex;align-items:center;gap:10px}
-.taxonomy-tree-connector{color:#c7d2e0;font-size:13px;margin-right:-4px}
-.taxonomy-shortcut{background:#1f2937;color:#fff;font-family:ui-monospace,monospace}
-.taxonomy-usage{font-size:9.5px;color:#8b96a4;white-space:nowrap;padding:2px 8px;border-radius:20px;background:#f1f4f8;flex:none}
-.taxonomy-usage-list{display:flex;flex-direction:column;gap:6px}
-.taxonomy-usage-row{display:flex;align-items:center;gap:8px;font-size:11px;color:#485463}
-.taxonomy-usage-row b{margin-left:auto;color:#1f2937}
-.taxonomy-usage-row .schema-color{width:9px;height:9px;border-radius:3px;flex:none}
+const defaultProjectGroups = [
+  { id: "grp-segmentation", name: "Segmentation", description: "Pixel-level segmentation work — masks, polygons and brush labels.", icon: "Brush", color: "#1D9E75", status: "Active", stage: "Active", ownerId: "m1", teamIds: ["m1","m4"] },
+  { id: "grp-detection", name: "Detection", description: "Bounding-box object detection work.", icon: "Square", color: "#378ADD", status: "Active", stage: "Active", ownerId: "m1", teamIds: ["m1","m3","m7"] },
+  { id: "grp-combined", name: "Combined", description: "Projects mixing multiple annotation types.", icon: "Layers", color: "#8B5CF6", status: "Active", stage: "Planning", ownerId: "", teamIds: [] }
+];
 
-.field-hint{display:block;font-size:9.5px;color:#8b96a4;margin-top:4px;font-weight:400}
-.attribute-editor{border-top:1px solid var(--line);padding-top:12px;margin-top:6px}
-.attribute-editor-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
-.attribute-editor-head > span{font-size:10.5px;font-weight:700;color:#8b96a4;letter-spacing:.4px}
-.attribute-row{display:grid;grid-template-columns:1.2fr 0.9fr 1fr auto auto;gap:6px;align-items:center;margin-bottom:6px}
-.attribute-row input,.attribute-row select{height:32px;border-radius:7px;border:1px solid var(--line);padding:0 9px;font-size:11.5px}
-.attribute-required{display:flex;align-items:center;gap:5px;font-size:10px;color:#5b6675;white-space:nowrap}
-.attribute-empty{font-size:11px;color:#8b96a4;margin:0}
-.form-error{display:flex;align-items:center;gap:6px;color:#dc2626;font-size:11px;background:#fef2f2;border:1px solid #f3cfcf;border-radius:7px;padding:8px 10px;margin-top:8px}
+const PROJECT_STAGES = ["Planning", "Active", "In Review", "Completed"];
 
-@media(max-width:700px){
-  .attribute-row{grid-template-columns:1fr}
-  .taxonomy-toolbar{flex-direction:column;align-items:flex-start}
+const sampleProjects = [
+  {
+    id: "p1", name: "Road Object Detection", client: "Mobility AI",
+    annotationType: "Bounding Box", groupId: "grp-detection", totalImages: 120, completedImages: 46,
+    team: "Road Vision Team", status: "In Progress", startDate: "2026-09-01",
+    dueDate: "2026-09-25", description: "Vehicle and road-object detection dataset."
+  },
+  {
+    id: "p2", name: "Pavement Segmentation", client: "Urban Mapping",
+    annotationType: "Segmentation", groupId: "grp-segmentation", totalImages: 80, completedImages: 29,
+    team: "Segmentation Team", status: "In Progress", startDate: "2026-08-25",
+    dueDate: "2026-09-20", description: "Road and pavement segmentation."
+  },
+  {
+    id: "p3", name: "Street Infrastructure", client: "City Intelligence",
+    annotationType: "Polygon", groupId: "grp-combined", totalImages: 150, completedImages: 64,
+    team: "Infrastructure Team", status: "In Progress", startDate: "2026-08-20",
+    dueDate: "2026-10-05", description: "Street infrastructure object annotation."
+  },
+  {
+    id: "p4", name: "Traffic Sign Classification", client: "DriveSafe AI",
+    annotationType: "Classification", groupId: "grp-combined", totalImages: 50, completedImages: 50,
+    team: "Classification Team", status: "Completed", startDate: "2026-08-01",
+    dueDate: "2026-09-10", description: "Traffic sign classification."
+  }
+];
+
+const sampleTasks = [
+  { id: "task-001", projectId: "p1", datasetId: "ds-p1-default", name: "road_scene_001.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1514565131-fce0801e5785?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-002", projectId: "p1", datasetId: "ds-p1-default", name: "road_scene_002.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1494783367193-149034c05e8f?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-003", projectId: "p2", datasetId: "ds-p2-default", name: "road_scene_003.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1549317661-bd32c8ce0db2?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-004", projectId: "p2", datasetId: "ds-p2-default", name: "street_scene_004.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1449824913935-59a10b8d2000?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-005", projectId: "p3", datasetId: "ds-p3-default", name: "street_scene_005.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1519501025264-65ba15a82390?auto=format&fit=crop&w=1600&q=85" },
+  { id: "task-006", projectId: "p4", datasetId: "ds-p4-default", name: "traffic_scene_006.jpg", status: "Pending", image: "https://images.unsplash.com/photo-1473448912268-2022ce9509d8?auto=format&fit=crop&w=1600&q=85" }
+];
+
+const DATASET_STAGES = ["Draft", "Collecting", "Ready", "In Use", "Retired"];
+
+function defaultDatasetFor(project) {
+  return { id: `ds-${project.id}-default`, projectId: project.id, name: "Default Dataset", description: "Initial imported dataset.", version: 1, stage: "Ready", status: "Active", versionHistory: [], createdAt: new Date().toISOString() };
+}
+const defaultDatasets = sampleProjects.map(defaultDatasetFor);
+
+const defaultLabels = [
+  { id: "car", name: "Car", color: "#2563eb", type: "Rectangle", parentId: null, groupId: null, shortcut: "1", attributes: [] },
+  { id: "person", name: "Person", color: "#16a34a", type: "Rectangle", parentId: null, groupId: null, shortcut: "2", attributes: [] },
+  { id: "truck", name: "Truck", color: "#dc2626", type: "Rectangle", parentId: null, groupId: null, shortcut: "3", attributes: [] },
+  { id: "bus", name: "Bus", color: "#9333ea", type: "Rectangle", parentId: null, groupId: null, shortcut: "4", attributes: [] },
+  { id: "traffic-sign", name: "Traffic Sign", color: "#ea580c", type: "Rectangle", parentId: null, groupId: null, shortcut: "5", attributes: [] }
+];
+// Single-character keys reserved by the annotation workspace's tool shortcuts —
+// label shortcuts can't reuse these since tool-switching takes priority.
+const RESERVED_SHORTCUTS = ["v","b","p","l","k","g","r","e"," "];
+const ATTRIBUTE_TYPES = ["Text", "Number", "Boolean", "Select"];
+
+const emptyProject = {
+  name: "", client: "", annotationType: "Bounding Box", groupId: defaultProjectGroups[0].id, totalImages: 100,
+  completedImages: 0, team: "Annotation Team", status: "Pending",
+  startDate: "", dueDate: "", description: ""
+};
+
+// ---- Build 44: Storage optimization — downscale large images before upload.
+// Only ever shrinks (never crops), so percent-based annotation coordinates
+// stay valid regardless of the final pixel size. Falls back to the original
+// blob on any failure so a broken image can never block an import.
+function compressImageBlob(blob, maxDimension = 1920, quality = 0.85) {
+  return new Promise((resolve) => {
+    if (!blob || !blob.type || !blob.type.startsWith("image/") || blob.type.includes("svg")) { resolve(blob); return; }
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      if (scale >= 1 || !img.width || !img.height) { URL.revokeObjectURL(url); resolve(blob); return; }
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const outType = blob.type.includes("png") ? "image/png" : "image/jpeg";
+        canvas.toBlob((out) => { URL.revokeObjectURL(url); resolve(out || blob); }, outType, quality);
+      } catch { URL.revokeObjectURL(url); resolve(blob); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); };
+    img.src = url;
+  });
 }
 
-/* ===== Build 33 — Workflow Automation ===== */
-.pipeline-diagram{display:flex;align-items:stretch;gap:6px;overflow-x:auto;margin:16px 0 22px;padding-bottom:4px}
-.pipeline-stage{flex:none;min-width:84px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;text-align:center;background:#fafbfd}
-.pipeline-stage b{display:block;font-size:19px;color:#1f2937;line-height:1.1}
-.pipeline-stage span{display:block;margin-top:3px;font-size:9px;font-weight:700;letter-spacing:.4px;color:#8b96a4;text-transform:uppercase}
-.pipeline-arrow{flex:none;align-self:center;color:#c7d2e0;font-size:16px}
-
-.automation-rules-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.automation-rules-head h3{font-size:13px;margin:0}
-.automation-rules-list{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
-.automation-rule-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;padding:9px 12px;flex-wrap:wrap;background:#fff}
-.automation-rule-row.disabled{opacity:.55}
-.switch-btn{width:34px;height:19px;border-radius:20px;border:1px solid var(--line);background:#e5e9ee;position:relative;flex:none;cursor:pointer;padding:0}
-.switch-btn i{position:absolute;top:1px;left:1px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(16,24,40,.2);transition:transform .15s}
-.switch-btn.on{background:#16a34a;border-color:#16a34a}
-.switch-btn.on i{transform:translateX(15px)}
-.rule-name-input{height:32px;border-radius:7px;border:1px solid var(--line);padding:0 9px;font-size:11.5px;font-weight:600;width:150px;flex:none}
-.rule-condition{display:flex;align-items:center;gap:6px;font-size:10.5px;color:#5b6675;flex-wrap:wrap}
-.rule-condition select{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:10.5px}
-.rule-hours-input{width:48px;height:30px;border-radius:7px;border:1px solid var(--line);padding:0 6px;font-size:10.5px;text-align:center}
-.rule-action{display:flex;align-items:center;gap:6px;color:#5b6675;margin-left:auto}
-.rule-action select{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:10.5px}
-.rule-note-input{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 9px;font-size:10.5px;width:160px}
-
-.automation-templates{border-top:1px solid var(--line);padding-top:14px}
-.automation-template-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-top:10px}
-.automation-template-card{border:1px dashed #c7d2e0;border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:6px;background:#fafbfd}
-.automation-template-card b{font-size:11.5px}
-.automation-template-card p{font-size:10.5px;color:#8b96a4;margin:0;line-height:1.4}
-.automation-template-card .ghost-btn{align-self:flex-start}
-
-@media(max-width:760px){
-  .automation-rule-row{flex-direction:column;align-items:flex-start}
-  .rule-action{margin-left:0}
-  .rule-name-input{width:100%}
+function progressOf(p) {
+  const total = Number(p.totalImages) || 0;
+  const completed = Math.min(total, Math.max(0, Number(p.completedImages) || 0));
+  return total ? Math.round((completed / total) * 100) : 0;
 }
 
-/* ===== Build 34 — SLA & Deadline Management ===== */
-.deadlines-grid-top{display:grid;grid-template-columns:1.3fr 1fr;gap:16px;margin:16px 0}
-@media(max-width:1000px){.deadlines-grid-top{grid-template-columns:1fr}}
-
-.deadlines-upcoming-panel .panel-head{margin-bottom:10px}
-.upcoming-deadlines-list{display:flex;flex-direction:column;gap:8px}
-.upcoming-deadline-row{display:grid;grid-template-columns:1.4fr 1fr auto;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
-.upcoming-deadline-row div:first-child b{display:block;font-size:11.5px}
-.upcoming-deadline-row div:first-child span{font-size:9.5px;color:#8b96a4}
-.upcoming-progress{display:flex;align-items:center;gap:6px}
-.upcoming-progress .progress-track{flex:1;height:5px;border-radius:20px;background:#eef1f5;overflow:hidden}
-.upcoming-progress .progress-track i{display:block;height:100%;background:#2563eb}
-.upcoming-progress small{font-size:9.5px;color:#8b96a4;width:28px;text-align:right}
-.days-left-badge{font-size:9px;font-weight:700;padding:4px 8px;border-radius:20px;background:#eef2ff;color:#4338ca;white-space:nowrap}
-.days-left-badge.soon{background:#fff7ed;color:#c2410c}
-.days-left-badge.overdue{background:#fef2f2;color:#dc2626}
-
-.deadlines-overdue-panel{margin-top:16px}
-.overdue-task-list{display:flex;flex-direction:column;gap:7px}
-.overdue-task-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px;flex-wrap:wrap}
-.overdue-task-main{display:flex;flex-direction:column;min-width:160px;flex:1}
-.overdue-task-main b{font-size:11.5px}
-.overdue-task-main span{font-size:9.5px;color:#8b96a4}
-.overdue-hours-badge{font-size:9.5px;font-weight:700;color:#dc2626;background:#fef2f2;border-radius:20px;padding:4px 9px;white-space:nowrap}
-.due-date-input{height:30px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:10.5px}
-
-/* ===== Build 35 — Advanced QA & Quality Scoring ===== */
-.qa-scorecard-panel{border-top:1px solid var(--line);flex:none}
-.qa-scorecard-toggle{width:100%;display:flex;align-items:center;gap:7px;height:38px;padding:0 14px;border:0;background:#fafbfd;font-size:11px;font-weight:700;color:#1f2937;cursor:pointer}
-.qa-live-score{background:#1f2937;color:#fff;border-radius:20px;padding:2px 9px;font-size:10px}
-.qa-scorecard-body{padding:12px 14px 14px;display:flex;flex-direction:column;gap:10px;max-height:280px;overflow-y:auto}
-.qa-criterion-row{display:grid;grid-template-columns:1fr 2fr auto;align-items:center;gap:8px}
-.qa-criterion-row span{font-size:10px;color:#485463;display:flex;flex-direction:column}
-.qa-criterion-row span small{color:#9aa4b2;font-weight:400}
-.qa-criterion-row input[type="range"]{width:100%}
-.qa-criterion-row b{font-size:11px;width:24px;text-align:right}
-.qa-scorecard-empty{font-size:10.5px;color:#8b96a4;margin:0}
-.qa-error-log{border-top:1px dashed var(--line);padding-top:10px;display:flex;flex-direction:column;gap:6px}
-.qa-error-chip{display:flex;align-items:center;gap:7px;font-size:10px;background:#fafbfd;border:1px solid var(--line);border-radius:7px;padding:5px 8px}
-.qa-error-chip b{flex:1}
-.qa-error-chip button{border:0;background:transparent;color:#9aa4b2;cursor:pointer}
-.sev-badge{font-size:8.5px;font-weight:700;padding:2px 7px;border-radius:20px}
-.sev-badge.sev-minor{background:#eef2ff;color:#4338ca}
-.sev-badge.sev-major{background:#fff7ed;color:#c2410c}
-.sev-badge.sev-critical{background:#fef2f2;color:#dc2626}
-.qa-error-adder{display:flex;gap:6px}
-.qa-error-adder select{flex:1;height:28px;border-radius:7px;border:1px solid var(--line);font-size:10px;padding:0 6px}
-
-.qa-config-block{border-bottom:1px solid var(--line);padding:16px 0}
-.qa-config-block:last-child{border-bottom:0}
-.qa-config-block-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}
-.qa-config-block-head h3{font-size:12.5px;margin:0;display:flex;align-items:center;gap:8px}
-.weight-total{font-size:10px;font-weight:700;padding:2px 8px;border-radius:20px}
-.weight-total.ok{background:#f0fdf4;color:#16a34a}
-.weight-total.warn{background:#fff7ed;color:#c2410c}
-.qa-criteria-config-list{display:flex;flex-direction:column;gap:7px}
-.qa-criterion-config-row,.qa-error-config-row{display:flex;align-items:center;gap:8px}
-.qa-criterion-config-row input[type="text"],.qa-criterion-config-row input:not([type]),.qa-error-config-row input{flex:1;height:32px;border-radius:7px;border:1px solid var(--line);padding:0 10px;font-size:11.5px}
-.weight-input{display:flex;align-items:center;gap:4px;width:70px;flex:none}
-.weight-input input{width:100%;height:32px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:11px}
-.qa-error-config-row select{height:32px;border-radius:7px;border:1px solid var(--line);padding:0 8px;font-size:11px;width:110px;flex:none}
-.weight-warning{margin-top:8px}
-.sampling-slider-label{display:flex;flex-direction:column;gap:6px;font-size:11.5px;font-weight:600;color:#485463}
-.sampling-slider-label input{width:100%}
-
-.calibration-add-form{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap}
-.calibration-add-form input{height:32px;border-radius:7px;border:1px solid var(--line);padding:0 10px;font-size:11px}
-.calibration-add-form input:nth-child(1){width:140px}
-.calibration-add-form input:nth-child(2){width:90px}
-.calibration-notes-input{flex:1;min-width:140px}
-.calibration-list{display:flex;flex-direction:column;gap:7px}
-.calibration-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
-.calibration-row div:first-child{flex:1;display:flex;flex-direction:column}
-.calibration-row div:first-child b{font-size:11.5px}
-.calibration-row div:first-child span{font-size:9.5px;color:#8b96a4}
-.drift-badge{font-size:9.5px;font-weight:700;padding:4px 9px;border-radius:20px;white-space:nowrap}
-.drift-badge.good{background:#f0fdf4;color:#16a34a}
-.drift-badge.warn{background:#fff7ed;color:#c2410c}
-.drift-badge.bad{background:#fef2f2;color:#dc2626}
-.drift-badge.pending{background:#f1f4f8;color:#8b96a4}
-
-.ranking-list{display:flex;flex-direction:column;gap:7px}
-.ranking-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:8px 11px}
-.rank-number{width:20px;height:20px;border-radius:50%;background:#f1f4f8;color:#5b6675;font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;flex:none}
-.ranking-main{flex:1;display:flex;flex-direction:column;min-width:0}
-.ranking-main b{font-size:11.5px}
-.ranking-main span{font-size:9.5px;color:#8b96a4}
-.ranking-score{font-size:12px;font-weight:700;color:#1f2937;width:44px;text-align:right}
-.ranking-approval{font-size:9.5px;color:#8b96a4;width:84px;text-align:right}
-
-.error-tally-list{display:flex;flex-direction:column;gap:7px}
-.error-tally-row{display:flex;align-items:center;gap:8px;font-size:11px}
-.error-tally-row b{flex:1}
-.sev-dot{width:8px;height:8px;border-radius:50%;flex:none}
-.sev-dot.sev-minor{background:#4338ca}
-.sev-dot.sev-major{background:#c2410c}
-.sev-dot.sev-critical{background:#dc2626}
-.error-tally-count{font-weight:700;color:#1f2937}
-
-@media(max-width:760px){
-  .qa-criterion-config-row,.qa-error-config-row{flex-wrap:wrap}
-  .calibration-add-form input{width:100%!important}
+function initials(name = "?") {
+  return name.split(" ").map(x => x[0]).join("").slice(0, 2).toUpperCase();
 }
 
-/* ===== Build 37 — Advanced Analytics & Reporting ===== */
-.production-stat-list{display:flex;flex-direction:column;gap:9px}
-.production-stat-row{display:flex;align-items:center;justify-content:space-between;font-size:11.5px;color:#485463;padding:7px 0;border-bottom:1px solid var(--line)}
-.production-stat-row:last-child{border-bottom:0}
-.production-stat-row b{color:#1f2937;font-size:13px}
-
-.utilization-list{display:flex;flex-direction:column;gap:9px}
-.utilization-row{display:grid;grid-template-columns:1.4fr 2fr auto;align-items:center;gap:12px}
-.utilization-main{display:flex;flex-direction:column;min-width:0}
-.utilization-main b{font-size:11.5px}
-.utilization-main span{font-size:9.5px;color:#8b96a4}
-.utilization-track{height:7px;border-radius:20px;background:#eef1f5;overflow:hidden}
-.utilization-track i{display:block;height:100%;background:#2563eb;border-radius:20px}
-.utilization-track i.high{background:#c2410c}
-.utilization-track i.over{background:#dc2626}
-.utilization-pct{font-size:11px;font-weight:700;width:36px;text-align:right}
-
-.forecast-stalled{color:#c2410c;font-size:10.5px;font-weight:600}
-
-.report-builder-panel .panel-head{margin-bottom:12px}
-.report-builder-controls{display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap}
-.report-builder-controls label{display:flex;flex-direction:column;gap:5px;font-size:10px;font-weight:700;color:#8b96a4}
-.report-builder-controls select{height:34px;border-radius:8px;border:1px solid var(--line);padding:0 10px;font-size:11.5px;min-width:160px}
-.report-section-toggles{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
-.report-toggle-chip{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;color:#485463;border:1px solid var(--line);border-radius:20px;padding:6px 12px;cursor:pointer}
-.report-toggle-chip input{accent-color:#2563eb}
-
-/* ===== Build 38 — Customizable Dashboard ===== */
-.dashboard-head-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.layout-switcher{height:36px;border-radius:8px;border:1px solid var(--line);padding:0 10px;font-size:11.5px;font-weight:600;background:#fff;color:#485463}
-.secondary-btn.active-toggle{background:#1f2937;border-color:#1f2937;color:#fff}
-
-.dashboard-editor{margin-bottom:18px;background:#fafbfd}
-.dashboard-editor-row{padding:12px 0;border-bottom:1px solid var(--line)}
-.dashboard-editor-row:last-child{border-bottom:0}
-.placed-widget-list{display:flex;flex-wrap:wrap;gap:7px;margin-top:9px}
-.placed-widget-chip{display:flex;align-items:center;gap:6px;background:#fff;border:1px solid var(--line);border-radius:20px;padding:5px 6px 5px 11px;font-size:10.5px;font-weight:600;color:#485463}
-.placed-widget-chip button{width:20px;height:20px;border:0;background:#f1f4f8;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#5b6675;cursor:pointer}
-.placed-widget-chip button:disabled{opacity:.35;cursor:not-allowed}
-.placed-widget-chip button.chip-x{background:#fef2f2;color:#dc2626}
-.widget-library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:9px}
-.widget-library-card{display:flex;align-items:center;gap:8px;border:1px dashed #c7d2e0;border-radius:9px;padding:10px 11px;background:#fff;font-size:11px;font-weight:600;color:#485463;cursor:pointer}
-.widget-library-card:hover{border-color:#2563eb;color:#2563eb}
-.widget-library-card span{flex:1;text-align:left}
-.layout-save-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.layout-save-row input{flex:1;min-width:180px;height:34px;border-radius:8px;border:1px solid var(--line);padding:0 11px;font-size:11.5px}
-
-.widget-grid{display:flex;flex-direction:column;gap:18px}
-.widget-slot.widget-medium,.widget-slot.widget-large{width:100%}
-@media(min-width:980px){
-  .widget-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px;align-items:start}
-  .widget-grid > .stats-grid{grid-column:1/-1}
-  .widget-slot.widget-large{grid-column:1/-1}
+function validateDataset(dsTasks, config) {
+  const issues = [];
+  if (!dsTasks.length) issues.push("No images in this dataset yet");
+  const invalid = dsTasks.filter(t => !t.image).length;
+  if (invalid) issues.push(`${invalid} invalid file${invalid > 1 ? "s" : ""} (missing image data)`);
+  const duplicateNames = dsTasks.map(t => t.name).filter((n, i, arr) => arr.indexOf(n) !== i);
+  if (duplicateNames.length) issues.push(`${new Set(duplicateNames).size} duplicate filename${new Set(duplicateNames).size > 1 ? "s" : ""}`);
+  if (!config?.labels?.length) issues.push("Project has no labels configured yet");
+  return { valid: issues.length === 0, issues };
 }
 
-/* ===== Build 39 — Global Search & Command Center ===== */
-.command-backdrop{position:fixed;inset:0;background:rgba(15,20,28,.5);z-index:300;display:flex;align-items:flex-start;justify-content:center;padding-top:12vh}
-.command-palette{width:min(600px,92vw);max-height:70vh;background:#fff;border-radius:14px;box-shadow:0 20px 60px rgba(15,20,28,.35);display:flex;flex-direction:column;overflow:hidden}
-.command-input-row{display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line);color:#8b96a4;flex:none}
-.command-input-row input{flex:1;border:0;outline:0;font-size:14px;color:#1f2937}
-.command-close{border:0;background:#f1f4f8;color:#5b6675;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;flex:none}
-.command-results{overflow-y:auto;padding:8px 0}
-.command-section{padding:6px 0}
-.command-section-label{display:block;padding:6px 16px 4px;font-size:9.5px;font-weight:700;letter-spacing:.5px;color:#9aa4b2}
-.command-row{display:flex;align-items:center;gap:11px;padding:9px 16px;cursor:pointer;color:#485463}
-.command-row svg:first-child{flex:none;color:#8b96a4}
-.command-row.active{background:#f1f4f8}
-.command-row.active svg:first-child{color:#2563eb}
-.command-row-main{flex:1;display:flex;flex-direction:column;min-width:0}
-.command-row-main b{font-size:12px;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.command-row-main span{font-size:10px;color:#8b96a4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.command-star{border:0;background:transparent;color:#c7d2e0;cursor:pointer;flex:none;padding:4px}
-.command-star.starred{color:#f59e0b}
-.command-empty{padding:14px 16px;font-size:11.5px;color:#8b96a4}
-.command-footer{display:flex;gap:16px;padding:9px 16px;border-top:1px solid var(--line);font-size:9.5px;color:#9aa4b2;flex:none}
-.command-footer span{display:flex;align-items:center;gap:4px}
-
-@media(max-width:640px){
-  .command-backdrop{padding-top:6vh}
-  .command-palette{max-height:82vh}
+function projectHealth(groupTasks, recentActivity) {
+  if (!groupTasks.length) return { level: "No data", overdue: 0 };
+  const today = new Date().toISOString().slice(0, 10);
+  const overdue = groupTasks.filter(p => p.dueDate && p.dueDate < today && p.status !== "Completed").length;
+  const overdueRatio = overdue / groupTasks.length;
+  const lastActivityAt = recentActivity[0]?.timestamp;
+  const daysSinceActivity = lastActivityAt ? (Date.now() - new Date(lastActivityAt).getTime()) / 86400000 : Infinity;
+  let level = "Healthy";
+  if (overdueRatio > 0.3 || daysSinceActivity > 14) level = "Critical";
+  else if (overdueRatio > 0 || daysSinceActivity > 7) level = "At Risk";
+  return { level, overdue };
 }
 
-/* ===== Build 40 — API & Integrations ===== */
-.integrations-block{border-bottom:1px solid var(--line);padding:18px 0}
-.integrations-block:last-child{border-bottom:0}
-.integrations-block-head h3{font-size:13px;margin:0 0 6px}
-.integrations-block .field-hint{margin-bottom:10px}
-.integrations-block code{background:#f1f4f8;border-radius:5px;padding:1px 6px;font-family:ui-monospace,monospace;font-size:10px}
-
-.token-create-form,.webhook-create-form{display:flex;flex-direction:column;gap:8px;margin-bottom:12px}
-.token-create-form{flex-direction:row}
-.token-create-form input,.webhook-create-form input{height:34px;border-radius:8px;border:1px solid var(--line);padding:0 11px;font-size:11.5px}
-.token-create-form input{flex:1}
-.token-create-form button,.webhook-create-form button{align-self:flex-start}
-.webhook-url-input{width:100%}
-.webhook-event-toggles{display:flex;gap:7px;flex-wrap:wrap}
-
-.token-reveal{display:flex;align-items:center;gap:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:9px 11px;margin-bottom:12px}
-.token-reveal code{flex:1;background:transparent;font-size:11px;word-break:break-all}
-
-.token-list,.webhook-list{display:flex;flex-direction:column;gap:7px}
-.token-row,.webhook-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px;flex-wrap:wrap}
-.token-row div:first-child,.webhook-main{flex:1;display:flex;flex-direction:column;min-width:0}
-.token-row div:first-child b,.webhook-main b{font-size:11.5px}
-.token-row div:first-child span,.webhook-main span{font-size:9.5px;color:#8b96a4;word-break:break-all}
-.webhook-events{display:flex;gap:5px;flex-wrap:wrap;margin-top:4px}
-.webhook-event-tag{font-size:8.5px;font-weight:700;background:#eef2ff;color:#4338ca;border-radius:20px;padding:2px 8px}
-.token-status{font-size:9px;font-weight:700;padding:3px 9px;border-radius:20px;background:#f1f4f8;color:#8b96a4;white-space:nowrap}
-.token-status.active{background:#f0fdf4;color:#16a34a}
-.token-status.revoked{background:#fef2f2;color:#dc2626}
-.token-row.revoked{opacity:.6}
-
-.ml-import-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.ml-import-row select{height:34px;border-radius:8px;border:1px solid var(--line);padding:0 10px;font-size:11.5px;min-width:180px}
-.ml-import-result{display:flex;align-items:center;gap:7px;background:#f0fdf4;color:#16a34a;border-radius:8px;padding:9px 11px;font-size:11px;margin-top:10px}
-
-.sql-snippet{background:#0f141c;color:#d1d9e6;border-radius:9px;padding:12px 14px;font-size:10.5px;font-family:ui-monospace,monospace;overflow-x:auto;white-space:pre;line-height:1.6}
-
-@media(max-width:700px){
-  .token-create-form{flex-direction:column;align-items:stretch}
-  .token-row,.webhook-row{flex-direction:column;align-items:flex-start}
+function readStorage(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
-/* ===== Build 41 — AI-Assisted Annotation ===== */
-.ai-suggested-badge{color:#f59e0b;display:flex;align-items:center;flex:none}
-.ai-review-banner{display:flex;align-items:center;gap:8px;background:#fff7ed;border:1px solid #fed7aa;border-radius:9px;padding:9px 11px;margin-bottom:10px;font-size:11px;color:#c2410c;font-weight:600}
-.ai-review-banner svg{flex:none}
-.ai-review-banner span{flex:1}
-.ai-review-banner-actions{display:flex;gap:6px}
-.ai-review-banner-actions button{height:24px;padding:0 9px;border-radius:6px;border:1px solid #fed7aa;background:#fff;font-size:9.5px;font-weight:700;color:#c2410c;display:flex;align-items:center;gap:4px;cursor:pointer}
-.ai-review-banner-actions button:hover{background:#fff1e0}
+function App() {
+  const [activePage, setActivePage] = useState("Dashboard");
+  const [dashboardLayouts, setDashboardLayouts] = useState(() => readStorage("annotatepro_dashboard_layouts_v1", DASHBOARD_PRESETS));
+  const [activeDashboardLayoutId, setActiveDashboardLayoutId] = useState(() => readStorage("annotatepro_dashboard_active_layout_v1", "overview"));
+  const [dashboardEditing, setDashboardEditing] = useState(false);
+  const [commandOpen, setCommandOpen] = useState(false);
+  const [recentItems, setRecentItems] = useState(() => readStorage("annotatepro_recent_items_v1", []));
+  const [favoriteItems, setFavoriteItems] = useState(() => readStorage("annotatepro_favorite_items_v1", []));
+  useEffect(() => { localStorage.setItem("annotatepro_recent_items_v1", JSON.stringify(recentItems)); }, [recentItems]);
+  useEffect(() => { localStorage.setItem("annotatepro_favorite_items_v1", JSON.stringify(favoriteItems)); }, [favoriteItems]);
+  const [apiTokens, setApiTokens] = useState(() => readStorage("annotatepro_api_tokens_v1", []));
+  const [webhooks, setWebhooks] = useState(() => readStorage("annotatepro_webhooks_v1", []));
+  useEffect(() => { localStorage.setItem("annotatepro_api_tokens_v1", JSON.stringify(apiTokens)); }, [apiTokens]);
+  useEffect(() => { localStorage.setItem("annotatepro_webhooks_v1", JSON.stringify(webhooks)); }, [webhooks]);
+  useEffect(() => {
+    function onGlobalKey(e) {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        setCommandOpen(v => !v);
+      } else if (e.key === "Escape") {
+        setCommandOpen(false);
+      }
+    }
+    window.addEventListener("keydown", onGlobalKey);
+    return () => window.removeEventListener("keydown", onGlobalKey);
+  }, []);
+  useEffect(() => { localStorage.setItem("annotatepro_dashboard_layouts_v1", JSON.stringify(dashboardLayouts)); }, [dashboardLayouts]);
+  useEffect(() => { localStorage.setItem("annotatepro_dashboard_active_layout_v1", JSON.stringify(activeDashboardLayoutId)); }, [activeDashboardLayoutId]);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
 
-.object-item.is-pending-ai{border-left:2px solid #f59e0b}
-.ai-source-tag{color:#f59e0b;font-weight:600}
-.object-item-actions button.accept-btn{color:#16a34a}
+  const [session, setSession] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authProfile, setAuthProfile] = useState(null);
+  const [passwordRecovery, setPasswordRecovery] = useState(false);
 
-.pending-ai-box{border-style:dashed !important;box-shadow:0 0 0 1px rgba(245,158,11,.35) !important}
+  useEffect(() => {
+    const hash = window.location.hash || "";
+    if (hash.includes("type=recovery") || hash.includes("type=invite")) setPasswordRecovery(true);
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === "PASSWORD_RECOVERY") setPasswordRecovery(true);
+      setSession(nextSession);
+      setAuthLoading(false);
+    });
+    return () => listener?.subscription?.unsubscribe();
+  }, []);
 
-.ai-qa-panel .qa-scorecard-toggle{background:#fffbeb}
-.ai-qa-stat-row{display:flex;align-items:center;justify-content:space-between;font-size:11px;color:#485463;padding:5px 0}
-.ai-qa-stat-row b{color:#1f2937}
-.ai-qa-lowconf{border-top:1px dashed var(--line);padding-top:10px;margin-top:4px;display:flex;flex-direction:column;gap:5px}
-.ai-qa-lowconf-row{display:flex;align-items:center;justify-content:space-between;font-size:10.5px;background:#fef2f2;border-radius:6px;padding:5px 8px;color:#dc2626}
+  useEffect(() => {
+    if (!session?.user) { setAuthProfile(null); return; }
+    supabase.from("profiles").select("*").eq("id", session.user.id).single().then(({ data }) => {
+      setAuthProfile(data || null);
+    });
+  }, [session?.user?.id]);
 
-/* ===== Build 42 — Security & Production Hardening ===== */
-.crash-screen{position:fixed;inset:0;background:#f7f8fa;display:flex;align-items:center;justify-content:center;padding:24px;z-index:9999}
-.crash-card{max-width:380px;text-align:center;background:#fff;border:1px solid var(--line);border-radius:16px;padding:32px 28px;box-shadow:0 20px 60px rgba(15,20,28,.12)}
-.crash-card svg{color:#dc2626;margin-bottom:12px}
-.crash-card h2{font-size:17px;margin:0 0 8px}
-.crash-card p{font-size:12.5px;color:#5b6675;line-height:1.5;margin:0 0 18px}
+  const currentUserName = authProfile?.full_name || session?.user?.email?.split("@")[0] || "there";
+  const currentUserEmail = session?.user?.email || "";
+  const currentUserInitial = initials(currentUserName);
+  const currentUserRole = authProfile?.role || "Annotator";
+  const isAdmin = currentUserRole === "Admin";
+  const canManage = isAdmin || currentUserRole === "Team Lead";
+  const canReview = canManage || currentUserRole === "Reviewer";
 
-.danger-icon-btn{height:30px;padding:0 12px;border-radius:7px;border:1px solid #f3cfcf;background:#fff;color:#dc2626;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
-.danger-icon-btn:hover{background:#fef2f2}
+  async function signOut() {
+    await supabase.auth.signOut();
+    setProfileOpen(false);
+  }
 
-.error-log-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}
-.error-log-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
-.error-log-row div{flex:1;display:flex;flex-direction:column;min-width:0}
-.error-log-row b{font-size:11px;color:#dc2626;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.error-log-row span{font-size:9.5px;color:#8b96a4}
+  async function signOutAllDevices() {
+    await supabase.auth.signOut({ scope: "global" });
+    setProfileOpen(false);
+  }
 
-.security-panel .form-error{margin-top:8px}
+  // ---- Build 42: Session security — idle timeout ----
+  const lastActivityRef = useRef(Date.now());
+  useEffect(() => {
+    const mark = () => { lastActivityRef.current = Date.now(); };
+    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
+    events.forEach(evt => window.addEventListener(evt, mark, { passive: true }));
+    return () => events.forEach(evt => window.removeEventListener(evt, mark));
+  }, []);
+  useEffect(() => {
+    const minutes = appSettings.sessionIdleMinutes;
+    if (!minutes || minutes <= 0 || !session) return;
+    const id = setInterval(() => {
+      const idleMs = Date.now() - lastActivityRef.current;
+      if (idleMs >= minutes * 60000) {
+        logAudit("Session Auto-Locked", null, null, `Signed out after ${minutes} minutes of inactivity.`, currentUserName, "System");
+        supabase.auth.signOut();
+      }
+    }, 30000);
+    return () => clearInterval(id);
+  }, [appSettings.sessionIdleMinutes, session]);
 
-/* ===== Build 43 — Testing & Regression ===== */
-.health-check-results{margin-top:14px}
-.health-check-summary{display:flex;gap:8px;margin-bottom:12px}
-.health-check-summary span{font-size:10.5px;font-weight:700;padding:4px 10px;border-radius:20px}
-.hc-pass{background:#f0fdf4;color:#16a34a}
-.hc-warn{background:#fff7ed;color:#c2410c}
-.hc-fail{background:#fef2f2;color:#dc2626}
-.health-check-group{margin-bottom:14px}
-.health-check-row{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--line)}
-.health-check-row:last-child{border-bottom:0}
-.health-check-row div{display:flex;flex-direction:column}
-.health-check-row b{font-size:11.5px;color:#1f2937}
-.health-check-row span{font-size:10px;color:#8b96a4}
-.health-check-row.hc-pass svg{color:#16a34a;flex:none;margin-top:1px}
-.health-check-row.hc-warn svg{color:#c2410c;flex:none;margin-top:1px}
-.health-check-row.hc-fail svg{color:#dc2626;flex:none;margin-top:1px}
+  const [accountActionStatus, setAccountActionStatus] = useState({ loading: false, forEmail: null, message: "", error: false });
 
-/* ===== Build 44 — Performance & Scalability ===== */
-.pagination-bar{display:flex;align-items:center;justify-content:center;gap:14px;padding:14px 0;flex:none}
-.pagination-bar button{height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--line);background:#fff;font-size:11px;font-weight:600;color:#485463;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
-.pagination-bar button:hover:not(:disabled){border-color:#c7d2e0;color:#2563eb}
-.pagination-bar button:disabled{opacity:.4;cursor:not-allowed}
-.pagination-bar span{font-size:10.5px;color:#8b96a4;font-weight:600}
+  const [roleProfiles, setRoleProfiles] = useState([]);
+  const [rolesLoading, setRolesLoading] = useState(false);
+
+  async function loadRoleProfiles() {
+    setRolesLoading(true);
+    const { data, error } = await supabase.from("profiles").select("*").order("created_at");
+    if (!error) setRoleProfiles(data || []);
+    setRolesLoading(false);
+  }
+
+  async function updateProfileRole(id, role) {
+    setRoleProfiles(prev => prev.map(p => p.id === id ? { ...p, role } : p));
+    const { error } = await supabase.from("profiles").update({ role }).eq("id", id);
+    if (error) {
+      setDatasetToast(`Couldn't update role: ${error.message}`);
+      setTimeout(() => setDatasetToast(""), 2600);
+      loadRoleProfiles();
+    }
+  }
+
+  async function inviteTeamMember(email, fullName) {
+    if (!email) return;
+    setAccountActionStatus({ loading: true, forEmail: email, message: "Sending invite...", error: false });
+    const { data, error } = await supabase.functions.invoke("admin-invite-user", { body: { email, full_name: fullName } });
+    if (error || data?.error) {
+      setAccountActionStatus({ loading: false, forEmail: email, message: (data?.error || error.message || "Invite failed — is the admin-invite-user function deployed?"), error: true });
+      return;
+    }
+    setAccountActionStatus({ loading: false, forEmail: email, message: "Invite sent — they'll get an email to set their password.", error: false });
+  }
+
+  async function sendPasswordReset(email) {
+    if (!email) return;
+    setAccountActionStatus({ loading: true, forEmail: email, message: "Sending reset email...", error: false });
+    const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin });
+    if (error) {
+      setAccountActionStatus({ loading: false, forEmail: email, message: error.message, error: true });
+      return;
+    }
+    setAccountActionStatus({ loading: false, forEmail: email, message: "Password reset email sent.", error: false });
+  }
+
+  const [appSettings, setAppSettings] = useState(() => readStorage(SETTINGS_KEY, {
+    workspaceName: "Production Workspace",
+    timezone: "Asia/Kolkata",
+    theme: "System",
+    autosave: true,
+    autosaveInterval: 10,
+    confirmSubmit: true,
+    showObjectIds: true,
+    keyboardShortcuts: true,
+    compactMode: false,
+    emailAssignments: true,
+    emailQa: true,
+    emailRework: true,
+    defaultPage: "Dashboard",
+    sessionIdleMinutes: 30
+  }));
+  const [settingsTab, setSettingsTab] = useState("Workspace");
+  const [taskSettingsId, setTaskSettingsId] = useState(null);
+  const [taskSettingsTab, setTaskSettingsTab] = useState("General");
+  const [taskSettingsSubTab, setTaskSettingsSubTab] = useState("Import");
+  const [settingsMessage, setSettingsMessage] = useState("");
+
+  const [migrationStatus, setMigrationStatus] = useState({});
+  const [migrationRunning, setMigrationRunning] = useState(false);
+  const [verifyStatus, setVerifyStatus] = useState({});
+  const [verifying, setVerifying] = useState(false);
+  const [lastMigratedAt, setLastMigratedAt] = useState(() => localStorage.getItem("annotatepro_last_migration_v1"));
+  const [imageMigration, setImageMigration] = useState({ running: false, total: 0, done: 0, failed: 0 });
+
+  async function migrateImagesToStorage() {
+    const base64Tasks = tasks.filter(t => t.image && t.image.startsWith("data:"));
+    if (!base64Tasks.length) { setImageMigration({ running: false, total: 0, done: 0, failed: 0, complete: true }); return; }
+    setImageMigration({ running: true, total: base64Tasks.length, done: 0, failed: 0 });
+    for (const task of base64Tasks) {
+      try {
+        const res = await fetch(task.image);
+        const blob = await res.blob();
+        const ext = (blob.type.split("/")[1] || "jpg").split("+")[0];
+        const path = `${task.projectId || "unassigned"}/${task.datasetId || "unassigned"}/${Date.now()}-${task.id}.${ext}`;
+        const { error } = await supabase.storage.from("task-images").upload(path, blob, { cacheControl: "3600", upsert: false });
+        if (error) throw error;
+        const { data } = supabase.storage.from("task-images").getPublicUrl(path);
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, image: data.publicUrl, source: "Cloud Storage" } : t));
+        syncUpdate("tasks", task.id, { image: data.publicUrl, source: "Cloud Storage" });
+        setImageMigration(prev => ({ ...prev, done: prev.done + 1 }));
+      } catch (err) {
+        console.warn("[Storage] image migration failed for", task.id, err.message);
+        setImageMigration(prev => ({ ...prev, failed: prev.failed + 1 }));
+      }
+    }
+    setImageMigration(prev => ({ ...prev, running: false, complete: true }));
+  }
+
+  function migrationDomains() {
+    return [
+      { key: "groups", label: "Projects (groups)", table: "project_groups", rows: () => projectGroups.map(g => ({
+          id: g.id, name: g.name, description: g.description || "", icon: g.icon || "FolderKanban",
+          color: g.color || "#2563eb", status: g.status || "Active", owner_id: g.ownerId || null, team_ids: g.teamIds || []
+        })) },
+      { key: "projects", label: "Tasks", table: "projects", rows: () => projects.map(p => ({
+          id: p.id, group_id: p.groupId || null, name: p.name, client: p.client || "",
+          annotation_type: p.annotationType || "Bounding Box", total_images: Number(p.totalImages) || 0,
+          completed_images: Number(p.completedImages) || 0, team: p.team || "", status: p.status || "Pending",
+          start_date: p.startDate || null, due_date: p.dueDate || null, description: p.description || ""
+        })) },
+      { key: "datasets", label: "Datasets", table: "datasets", rows: () => datasets.map(d => ({
+          id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "",
+          version: d.version || 1, stage: d.stage || "Draft", version_history: d.versionHistory || [],
+          status: d.status || "Active", created_at: d.createdAt || new Date().toISOString()
+        })) },
+      { key: "tasks", label: "Images", table: "tasks", rows: () => tasks.map(t => ({
+          id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name,
+          status: t.status || "Pending", image: t.image || null, size: t.size || null,
+          source: t.source || "Sample", due_date: t.dueDate || null, assignee_id: t.assigneeId || null,
+          reviewer_id: t.reviewerId || null, priority: t.priority || null, queue: t.queue || null,
+          created_at: t.createdAt || new Date().toISOString()
+        })) },
+      { key: "annotations", label: "Annotations", table: "annotations", rows: () => {
+          const rows = [];
+          Object.entries(annotationsByTask).forEach(([taskId, list]) => {
+            (list || []).forEach(a => rows.push({
+              id: a.id, task_id: taskId, label_id: a.labelId || null, type: a.type,
+              color: a.color || null, locked: !!a.locked, hidden: !!a.hidden,
+              geometry: { x: a.x, y: a.y, w: a.w, h: a.h, rotation: a.rotation, points: a.points }
+            }));
+          });
+          return rows;
+        } },
+      { key: "team", label: "Team members", table: "team_members", rows: () => teamMembers.map(m => ({
+          id: m.id, name: m.name, email: m.email || null, role: m.role || "Annotator",
+          status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qa_score: m.qaScore ?? 100
+        })) },
+      { key: "configs", label: "Project configuration", table: "project_configs", rows: () => Object.entries(projectConfigs).map(([groupId, c]) => ({
+          group_id: groupId, labels: c.labels || [], require_qa: !!c.requireQa,
+          allow_annotator_submit: !!c.allowAnnotatorSubmit, auto_save: !!c.autoSave,
+          default_reviewer: c.defaultReviewer || "", max_tasks_per_annotator: c.maxTasksPerAnnotator || 10,
+          instructions: c.instructions || "", color: c.color || "", workspace: c.workspace || "",
+          task_sampling: c.taskSampling || "Sequential", show_instructions_before_labeling: !!c.showInstructionsBeforeLabeling,
+          use_predictions: !!c.usePredictions, prediction_source: c.predictionSource || ""
+        })) },
+      { key: "qa", label: "QA reviews", table: "qa_reviews", rows: () => Object.entries(qaReviews).map(([taskId, r]) => ({
+          task_id: taskId, decision: r.decision || null, score: r.score ?? null, reviewer: r.reviewer || null,
+          comment: r.comment || "", reason: r.reason || "", annotation_count: r.annotationCount || 0,
+          criteria_scores: r.criteriaScores || {}, errors: r.errors || [],
+          history: r.history || [], reviewed_at: r.reviewedAt || new Date().toISOString()
+        })) },
+      { key: "notifications", label: "Notifications", table: "notifications", rows: () => notifications.map(n => ({
+          id: n.id, type: n.type || null, title: n.title || "", message: n.message || "",
+          read: !!n.read, project_id: n.projectId || null, task_id: n.taskId || null,
+          created_at: n.createdAt || new Date().toISOString()
+        })) },
+      { key: "audit", label: "Audit events", table: "audit_events", rows: () => auditEvents.map(e => ({
+          id: e.id, action: e.action, actor: e.actor || null, actor_role: e.actorRole || null,
+          project_id: e.projectId || null, task_id: e.taskId || null, details: e.details || "",
+          timestamp: e.timestamp || new Date().toISOString()
+        })) },
+      { key: "importHistory", label: "Import history", table: "import_history", rows: () => importHistory.map(h => ({
+          id: h.id, file_name: h.fileName || null, dataset_id: h.datasetId || null, dataset_name: h.datasetName || null,
+          imported: h.imported || 0, skipped: h.skipped || 0, at: h.at || new Date().toISOString()
+        })) },
+      { key: "exportHistory", label: "Export history", table: "export_history", rows: () => exportHistory.map(h => ({
+          id: String(h.id), scope: h.scope || null, format: h.format || null,
+          task_count: h.tasks ?? null, annotation_count: h.annotations ?? null, created_at: h.at || new Date().toISOString()
+        })) },
+      { key: "planner", label: "Planner targets", table: "planner_targets", conflictKeys: "member_id,role", rows: () => {
+          const rows = [];
+          Object.entries(plannerTargets.annotators || {}).forEach(([memberId, target]) => rows.push({ member_id: memberId, role: "annotator", daily_target: Number(target) || 0 }));
+          Object.entries(plannerTargets.reviewers || {}).forEach(([memberId, target]) => rows.push({ member_id: memberId, role: "reviewer", daily_target: Number(target) || 0 }));
+          return rows;
+        } },
+      { key: "operations", label: "Operation read states", table: "operation_reads", rows: () => Object.entries(operationRead).map(([id, read]) => ({ operation_id: id, read: !!read })) }
+    ];
+  }
+
+  function migrationSingletons() {
+    return [
+      { key: "workload", label: "Workload settings", table: "workload_settings", row: () => ({
+          id: 1, default_daily_capacity: workloadSettings.defaultDailyCapacity ?? 8, default_weekly_capacity: workloadSettings.defaultWeeklyCapacity ?? 40
+        }) },
+      { key: "appSettings", label: "App settings", table: "app_settings", row: () => ({
+          id: 1, workspace_name: appSettings.workspaceName, timezone: appSettings.timezone, theme: appSettings.theme,
+          autosave: appSettings.autosave, autosave_interval: appSettings.autosaveInterval, confirm_submit: appSettings.confirmSubmit,
+          show_object_ids: appSettings.showObjectIds, keyboard_shortcuts: appSettings.keyboardShortcuts, compact_mode: appSettings.compactMode,
+          email_assignments: appSettings.emailAssignments, email_qa: appSettings.emailQa, email_rework: appSettings.emailRework,
+          default_page: appSettings.defaultPage
+        }) }
+    ];
+  }
+
+  // ---- Build 30.1: Supabase Live Data Cutover — row <-> app-shape mappers (Phase 1) ----
+  function groupFromRow(g) {
+    return { id: g.id, name: g.name, description: g.description || "", icon: g.icon || "FolderKanban", color: g.color || "#2563eb", status: g.status || "Active", ownerId: g.owner_id || "", teamIds: g.team_ids || [] };
+  }
+  function groupToRow(g) {
+    return { id: g.id, name: g.name, description: g.description || "", icon: g.icon || "FolderKanban", color: g.color || "#2563eb", status: g.status || "Active", owner_id: g.ownerId || null, team_ids: g.teamIds || [] };
+  }
+  function projectFromRow(p) {
+    return { id: p.id, groupId: p.group_id || "", name: p.name, client: p.client || "", annotationType: p.annotation_type || "Bounding Box", totalImages: Number(p.total_images) || 0, completedImages: Number(p.completed_images) || 0, team: p.team || "", status: p.status || "Pending", startDate: p.start_date || "", dueDate: p.due_date || "", description: p.description || "" };
+  }
+  function projectToRow(p) {
+    return { id: p.id, group_id: p.groupId || null, name: p.name, client: p.client || "", annotation_type: p.annotationType || "Bounding Box", total_images: Number(p.totalImages) || 0, completed_images: Number(p.completedImages) || 0, team: p.team || "", status: p.status || "Pending", start_date: p.startDate || null, due_date: p.dueDate || null, description: p.description || "" };
+  }
+  function datasetFromRow(d) {
+    return { id: d.id, projectId: d.project_id || "", name: d.name, description: d.description || "", version: d.version || 1, stage: d.stage || "Draft", versionHistory: d.version_history || [], status: d.status || "Active", createdAt: d.created_at || new Date().toISOString() };
+  }
+  function datasetToRow(d) {
+    return { id: d.id, project_id: d.projectId || null, name: d.name, description: d.description || "", version: d.version || 1, stage: d.stage || "Draft", version_history: d.versionHistory || [], status: d.status || "Active", created_at: d.createdAt || new Date().toISOString() };
+  }
+  function taskFromRow(t) {
+    return { id: t.id, projectId: t.project_id || "", datasetId: t.dataset_id || "", name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", dueDate: t.due_date || null, assigneeId: t.assignee_id || null, reviewerId: t.reviewer_id || null, priority: t.priority || null, queue: t.queue || null, createdAt: t.created_at || new Date().toISOString() };
+  }
+  function taskToRow(t) {
+    return { id: t.id, project_id: t.projectId || null, dataset_id: t.datasetId || null, name: t.name, status: t.status || "Pending", image: t.image || null, size: t.size || null, source: t.source || "Sample", due_date: t.dueDate || null, assignee_id: t.assigneeId || null, reviewer_id: t.reviewerId || null, priority: t.priority || null, queue: t.queue || null, created_at: t.createdAt || new Date().toISOString() };
+  }
+  function memberFromRow(m) {
+    return { id: m.id, name: m.name, email: m.email || "", role: m.role || "Annotator", status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qaScore: m.qa_score ?? 100 };
+  }
+  function memberToRow(m) {
+    return { id: m.id, name: m.name, email: m.email || null, role: m.role || "Annotator", status: m.status || "Active", capacity: m.capacity ?? 8, completed: m.completed ?? 0, qa_score: m.qaScore ?? 100 };
+  }
+  function syncUpsert(table, row) {
+    if (!session) return;
+    supabase.from(table).upsert(row).then(({ error }) => { if (error) console.warn(`[Cloud] ${table} upsert failed:`, error.message); });
+  }
+  function syncDelete(table, id) {
+    if (!session) return;
+    supabase.from(table).delete().eq("id", id).then(({ error }) => { if (error) console.warn(`[Cloud] ${table} delete failed:`, error.message); });
+  }
+  function syncUpdate(table, id, patch) {
+    if (!session) return;
+    supabase.from(table).update(patch).eq("id", id).then(({ error }) => { if (error) console.warn(`[Cloud] ${table} update failed:`, error.message); });
+  }
+
+  // Hydrate Phase 1 domains from Supabase once per session — cloud is the source of
+  // truth for any device that connects after data already exists there. If a table
+  // comes back empty (fresh workspace, migration not yet run) we keep local/sample
+  // data so the UI isn't blanked out before the one-time migration is performed.
+  const [cloudHydrated, setCloudHydrated] = useState(false);
+  useEffect(() => {
+    if (!session?.user) { setCloudHydrated(false); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        const [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes, qaRes] = await Promise.all([
+          supabase.from("project_groups").select("*"),
+          supabase.from("projects").select("*"),
+          supabase.from("datasets").select("*"),
+          supabase.from("tasks").select("*"),
+          supabase.from("team_members").select("*"),
+          supabase.from("qa_reviews").select("*")
+        ]);
+        if (cancelled) return;
+        if (!groupsRes.error && groupsRes.data?.length) setProjectGroups(groupsRes.data.map(groupFromRow));
+        if (!projectsRes.error && projectsRes.data?.length) setProjects(projectsRes.data.map(projectFromRow));
+        if (!datasetsRes.error && datasetsRes.data?.length) setDatasets(datasetsRes.data.map(datasetFromRow));
+        if (!tasksRes.error && tasksRes.data?.length) setTasks(tasksRes.data.map(taskFromRow));
+        if (!membersRes.error && membersRes.data?.length) setTeamMembers(membersRes.data.map(memberFromRow));
+        if (!qaRes.error && qaRes.data?.length) {
+          const mapped = {};
+          qaRes.data.forEach(row => {
+            mapped[row.task_id] = { decision: row.decision, score: row.score, reviewer: row.reviewer, comment: row.comment, reason: row.reason, annotationCount: row.annotation_count, criteriaScores: row.criteria_scores || {}, errors: row.errors || [], history: row.history || [], reviewedAt: row.reviewed_at };
+          });
+          setQaReviews(mapped);
+        }
+        [groupsRes, projectsRes, datasetsRes, tasksRes, membersRes, qaRes].forEach(r => { if (r.error) console.warn("[Cloud] hydrate failed:", r.error.message); });
+      } catch (err) {
+        console.warn("[Cloud] hydrate failed:", err.message);
+      } finally {
+        if (!cancelled) setCloudHydrated(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [session?.user?.id]);
+
+  async function runMigration() {
+    if (migrationRunning) return;
+    setMigrationRunning(true);
+    setVerifyStatus({});
+    const domains = migrationDomains();
+    const singletons = migrationSingletons();
+    const initial = {};
+    [...domains, ...singletons].forEach(d => { initial[d.key] = { state: "pending", count: 0 }; });
+    setMigrationStatus(initial);
+
+    for (const d of domains) {
+      setMigrationStatus(prev => ({ ...prev, [d.key]: { state: "running", count: 0 } }));
+      try {
+        const rows = d.rows();
+        if (rows.length) {
+          const { error } = d.conflictKeys ? await supabase.from(d.table).upsert(rows, { onConflict: d.conflictKeys }) : await supabase.from(d.table).upsert(rows);
+          if (error) throw error;
+        }
+        setMigrationStatus(prev => ({ ...prev, [d.key]: { state: "done", count: rows.length } }));
+      } catch (err) {
+        setMigrationStatus(prev => ({ ...prev, [d.key]: { state: "error", count: 0, error: err.message } }));
+      }
+    }
+    for (const s of singletons) {
+      setMigrationStatus(prev => ({ ...prev, [s.key]: { state: "running", count: 0 } }));
+      try {
+        const { error } = await supabase.from(s.table).upsert(s.row());
+        if (error) throw error;
+        setMigrationStatus(prev => ({ ...prev, [s.key]: { state: "done", count: 1 } }));
+      } catch (err) {
+        setMigrationStatus(prev => ({ ...prev, [s.key]: { state: "error", count: 0, error: err.message } }));
+      }
+    }
+    setMigrationRunning(false);
+    const now = new Date().toISOString();
+    setLastMigratedAt(now);
+    localStorage.setItem("annotatepro_last_migration_v1", now);
+  }
+
+  async function verifyMigrationCounts() {
+    setVerifying(true);
+    const domains = migrationDomains();
+    const results = {};
+    for (const d of domains) {
+      const localCount = d.rows().length;
+      try {
+        const { count, error } = await supabase.from(d.table).select("*", { count: "exact", head: true });
+        if (error) throw error;
+        results[d.key] = { local: localCount, cloud: count ?? 0, match: (count ?? 0) >= localCount };
+      } catch (err) {
+        results[d.key] = { local: localCount, cloud: null, match: false, error: err.message };
+      }
+    }
+    setVerifyStatus(results);
+    setVerifying(false);
+  }
+
+  const [projects, setProjects] = useState(() => readStorage(PROJECTS_KEY, sampleProjects));
+  const [projectSearch, setProjectSearch] = useState("");
+  const [projectStatusFilter, setProjectStatusFilter] = useState("All");
+  const [projectModalOpen, setProjectModalOpen] = useState(false);
+  const [editingProjectId, setEditingProjectId] = useState(null);
+  const [projectForm, setProjectForm] = useState(emptyProject);
+  const [projectDetails, setProjectDetails] = useState(null);
+
+  const PROJECT_GROUPS_KEY = "annotatepro_project_groups_v1";
+  const emptyGroupForm = { name: "", description: "", icon: "FolderKanban", color: labelPalette[0], status: "Active", stage: "Planning", ownerId: "", teamIds: [] };
+  const [projectGroups, setProjectGroups] = useState(() => readStorage(PROJECT_GROUPS_KEY, defaultProjectGroups));
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [editingGroupId, setEditingGroupId] = useState(null);
+  const [groupForm, setGroupForm] = useState(emptyGroupForm);
+  const [groupMessage, setGroupMessage] = useState("");
+  useEffect(() => { localStorage.setItem(PROJECT_GROUPS_KEY, JSON.stringify(projectGroups)); }, [projectGroups]);
+
+  function openCreateGroup() { setEditingGroupId(null); setGroupForm(emptyGroupForm); setGroupModalOpen(true); }
+  function openEditGroup(group) { setEditingGroupId(group.id); setGroupForm({ name: group.name, description: group.description || "", icon: group.icon || "FolderKanban", color: group.color || labelPalette[0], status: group.status || "Active", stage: group.stage || "Planning", ownerId: group.ownerId || "", teamIds: group.teamIds || [] }); setGroupModalOpen(true); }
+  function saveGroup(e) {
+    e.preventDefault();
+    if (!groupForm.name.trim()) return;
+    if (editingGroupId) {
+      const updated = { ...groupForm, id: editingGroupId };
+      setProjectGroups(prev => prev.map(g => g.id === editingGroupId ? { ...g, ...groupForm } : g));
+      syncUpsert("project_groups", groupToRow(updated));
+    } else {
+      const created = { ...groupForm, id: `grp-${Date.now()}` };
+      setProjectGroups(prev => [...prev, created]);
+      syncUpsert("project_groups", groupToRow(created));
+    }
+    setGroupModalOpen(false);
+  }
+  function deleteGroup(id) {
+    if (projects.some(p => p.groupId === id)) {
+      setGroupMessage("Move or delete this project's tasks before deleting it.");
+      setTimeout(() => setGroupMessage(""), 3000);
+      return;
+    }
+    setProjectGroups(prev => prev.filter(g => g.id !== id));
+    setProjectConfigs(prev => { const next = { ...prev }; delete next[id]; return next; });
+    syncDelete("project_groups", id);
+  }
+  function updateGroupMeta(id, patch) {
+    setProjectGroups(prev => prev.map(g => g.id === id ? { ...g, ...patch } : g));
+    syncUpdate("project_groups", id, groupToRow({ ...(projectGroups.find(g => g.id === id) || {}), ...patch }));
+  }
+  function archiveGroup(id) { updateGroupMeta(id, { status: "Archived" }); }
+  function restoreGroup(id) { updateGroupMeta(id, { status: "Active" }); }
+  function duplicateGroup(id) {
+    const source = projectGroups.find(g => g.id === id);
+    if (!source) return;
+    const newId = `grp-${Date.now()}`;
+    const copy = { ...source, id: newId, name: `${source.name} (Copy)`, status: "Active" };
+    setProjectGroups(prev => [...prev, copy]);
+    syncUpsert("project_groups", groupToRow(copy));
+    setProjectConfigs(prev => {
+      const sourceConfig = prev[id] || makeDefaultProjectConfig(source);
+      const idMap = {};
+      const newLabels = sourceConfig.labels.map(l => { const nid = `${newId}-${l.id}`; idMap[l.id] = nid; return { ...l, id: nid }; });
+      newLabels.forEach(l => { if (l.parentId) l.parentId = idMap[l.parentId] || null; });
+      const groupIdMap = {};
+      const newLabelGroups = (sourceConfig.labelGroups || []).map(g => { const nid = `${newId}-${g.id}`; groupIdMap[g.id] = nid; return { ...g, id: nid }; });
+      newLabels.forEach(l => { if (l.groupId) l.groupId = groupIdMap[l.groupId] || null; });
+      return { ...prev, [newId]: { ...sourceConfig, projectId: newId, labels: newLabels, labelGroups: newLabelGroups, schemaVersion: 1, schemaHistory: [], automationRules: (sourceConfig.automationRules || []).map(r => ({ ...r, id: `${newId}-rule-${r.id}` })), qaCriteria: sourceConfig.qaCriteria || [], errorCategories: sourceConfig.errorCategories || [], samplingRate: sourceConfig.samplingRate ?? 100, calibrationSet: [] } };
+    });
+  }
+
+
+  const [tasks, setTasks] = useState(() => readStorage(TASKS_KEY, sampleTasks));
+  const [datasets, setDatasets] = useState(() => readStorage(DATASETS_KEY, defaultDatasets));
+  useEffect(() => { localStorage.setItem(DATASETS_KEY, JSON.stringify(datasets)); }, [datasets]);
+  useEffect(() => {
+    setDatasets(prev => {
+      const next = [...prev]; let changed = false;
+      projects.forEach(project => { if (!next.some(d => d.projectId === project.id)) { next.push(defaultDatasetFor(project)); changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [projects]);
+
+  const emptyDatasetForm = { name: "", description: "", version: 1, stage: "Draft" };
+  const [datasetModalOpen, setDatasetModalOpen] = useState(false);
+  const [editingDatasetId, setEditingDatasetId] = useState(null);
+  const [datasetForm, setDatasetForm] = useState(emptyDatasetForm);
+  const [importTaskId, setImportTaskId] = useState(sampleProjects[0]?.id || "");
+  const [activeDatasetId, setActiveDatasetId] = useState(null);
+  const [datasetListSearch, setDatasetListSearch] = useState("");
+  const [datasetListStatus, setDatasetListStatus] = useState("Active");
+  const [importTargetDataset, setImportTargetDataset] = useState(null);
+  const [compareVersion, setCompareVersion] = useState(null);
+
+  function openCreateDataset(projectId) { setEditingDatasetId(null); setDatasetForm({ ...emptyDatasetForm, projectId }); setDatasetModalOpen(true); }
+  function openEditDataset(ds) { setEditingDatasetId(ds.id); setDatasetForm({ name: ds.name, description: ds.description || "", version: ds.version || 1, stage: ds.stage || "Draft", projectId: ds.projectId }); setDatasetModalOpen(true); }
+  function saveDataset(e) {
+    e.preventDefault();
+    if (!datasetForm.name.trim()) return;
+    if (editingDatasetId) {
+      const updated = { ...(datasets.find(d => d.id === editingDatasetId) || {}), ...datasetForm, id: editingDatasetId };
+      setDatasets(prev => prev.map(d => d.id === editingDatasetId ? { ...d, ...datasetForm } : d));
+      syncUpsert("datasets", datasetToRow(updated));
+    } else {
+      const created = { ...datasetForm, id: `ds-${Date.now()}`, status: "Active", versionHistory: [], createdAt: new Date().toISOString() };
+      setDatasets(prev => [...prev, created]);
+      syncUpsert("datasets", datasetToRow(created));
+    }
+    setDatasetModalOpen(false);
+  }
+  function snapshotDatasetVersion(id) {
+    const ds = datasets.find(d => d.id === id);
+    if (!ds) return;
+    const dsTasks = tasks.filter(t => t.datasetId === id);
+    const nextVersion = (ds.version || 1) + 1;
+    const snapshot = { version: ds.version || 1, savedAt: new Date().toISOString(), imageIds: dsTasks.map(t => t.name) };
+    const nextHistory = [...(ds.versionHistory || []), snapshot];
+    setDatasets(prev => prev.map(d => d.id === id ? { ...d, version: nextVersion, versionHistory: nextHistory } : d));
+    syncUpsert("datasets", datasetToRow({ ...ds, version: nextVersion, versionHistory: nextHistory }));
+    setDatasetToast(`Saved as v${ds.version || 1} — now editing v${nextVersion}`);
+    setTimeout(() => setDatasetToast(""), 2400);
+  }
+  function archiveDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Archived" } : d)); syncUpdate("datasets", id, { status: "Archived" }); }
+  function restoreDataset(id) { setDatasets(prev => prev.map(d => d.id === id ? { ...d, status: "Active" } : d)); syncUpdate("datasets", id, { status: "Active" }); }
+  function deleteDataset(id) {
+    if (tasks.some(t => t.datasetId === id)) {
+      setDatasetToast("Remove or move this dataset's images before deleting it.");
+      setTimeout(() => setDatasetToast(""), 3000);
+      return;
+    }
+    setDatasets(prev => prev.filter(d => d.id !== id));
+    syncDelete("datasets", id);
+    if (activeDatasetId === id) setActiveDatasetId(null);
+  }
+
+  const [datasetSearch, setDatasetSearch] = useState("");
+  const [datasetStatus, setDatasetStatus] = useState("All");
+  const [datasetView, setDatasetView] = useState("table");
+  const [datasetToast, setDatasetToast] = useState("");
+  const [selectedTaskIndex, setSelectedTaskIndex] = useState(0);
+  const [tool, setTool] = useState("select");
+  const [selectedLabel, setSelectedLabel] = useState(defaultLabels[0].id);
+  const [labels, setLabels] = useState(defaultLabels);
+  const [annotationsByTask, setAnnotationsByTask] = useState({});
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState(null);
+  const [additionalSelectedIds, setAdditionalSelectedIds] = useState([]);
+  const [marquee, setMarquee] = useState(null);
+  const clipboardRef = useRef([]);
+  const selectedIds = useMemo(() => (
+    selectedAnnotationId ? [selectedAnnotationId, ...additionalSelectedIds.filter(id => id !== selectedAnnotationId)] : additionalSelectedIds
+  ), [selectedAnnotationId, additionalSelectedIds]);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [drawing, setDrawing] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [future, setFuture] = useState([]);
+  const [workspaceProject, setWorkspaceProject] = useState(projects[0]?.id || "p1");
+  const [workstationMode, setWorkstationMode] = useState("Annotation"); // "Annotation" | "Review"
+  const [taskFilter, setTaskFilter] = useState("All");
+  const [workspaceMessage, setWorkspaceMessage] = useState("");
+  const [qaReviews, setQaReviews] = useState(() => readStorage("annotatepro_qa_reviews_v1", {}));
+  const [qaSelectedTaskId, setQaSelectedTaskId] = useState(null);
+  const [qaFilter, setQaFilter] = useState("All");
+  const [qaSearch, setQaSearch] = useState("");
+  const [qaScore, setQaScore] = useState(96);
+  const [qaCriteriaScores, setQaCriteriaScores] = useState({});
+  const [qaErrors, setQaErrors] = useState([]);
+  const [qaScorecardOpen, setQaScorecardOpen] = useState(false);
+  const [qaReason, setQaReason] = useState("Incorrect label");
+  const [qaComment, setQaComment] = useState("");
+  const [qaMessage, setQaMessage] = useState("");
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  const [analyticsRange, setAnalyticsRange] = useState("7 days");
+  const [analyticsProject, setAnalyticsProject] = useState("All Projects");
+  const [exportFormat, setExportFormat] = useState("AnnotatePro JSON");
+  const [exportScope, setExportScope] = useState("All Tasks");
+  const [exportProject, setExportProject] = useState("All Projects");
+  const [exportSearch, setExportSearch] = useState("");
+  const [exportHistory, setExportHistory] = useState(() => readStorage("annotatepro_export_history_v1", []));
+  const [exportMessage, setExportMessage] = useState("");
+  const TEAM_KEY = "annotatepro_team_v1";
+  const [teamMembers, setTeamMembers] = useState(() => readStorage(TEAM_KEY, [
+    { id: "m1", name: "Manjunath", email: "manjunath@annotatepro.local", role: "Team Lead", status: "Active", projects: ["p1", "p2"], capacity: 8, completed: 46, qaScore: 97 },
+    { id: "m2", name: "Priya Sharma", email: "priya@annotatepro.local", role: "Reviewer", status: "Active", projects: ["p1", "p3"], capacity: 6, completed: 39, qaScore: 98 },
+    { id: "m3", name: "Rahul Kumar", email: "rahul@annotatepro.local", role: "Annotator", status: "Active", projects: ["p1"], capacity: 7, completed: 52, qaScore: 96 },
+    { id: "m4", name: "Sneha Patil", email: "sneha@annotatepro.local", role: "Annotator", status: "Active", projects: ["p2"], capacity: 6, completed: 44, qaScore: 95 },
+    { id: "m5", name: "Arjun Rao", email: "arjun@annotatepro.local", role: "Annotator", status: "Active", projects: ["p3"], capacity: 8, completed: 61, qaScore: 97 },
+    { id: "m6", name: "Kavya Nair", email: "kavya@annotatepro.local", role: "Reviewer", status: "Active", projects: ["p2", "p4"], capacity: 5, completed: 34, qaScore: 99 },
+    { id: "m7", name: "Vikram Singh", email: "vikram@annotatepro.local", role: "Annotator", status: "Active", projects: ["p1", "p3"], capacity: 7, completed: 48, qaScore: 94 },
+    { id: "m8", name: "Ananya Das", email: "ananya@annotatepro.local", role: "Annotator", status: "Inactive", projects: [], capacity: 0, completed: 27, qaScore: 93 }
+  ]));
+  const myTeamMemberId = teamMembers.find(m => m.email && currentUserEmail && m.email.toLowerCase() === currentUserEmail.toLowerCase())?.id || null;
+  const canEditProject = (group) => canManage || (group?.teamIds || []).includes(myTeamMemberId);
+  const [teamSearch, setTeamSearch] = useState("");
+  const [teamRoleFilter, setTeamRoleFilter] = useState("All Roles");
+  const [teamStatusFilter, setTeamStatusFilter] = useState("All Status");
+  const [teamModalOpen, setTeamModalOpen] = useState(false);
+  const [editingMemberId, setEditingMemberId] = useState(null);
+  const [teamForm, setTeamForm] = useState({ name: "", email: "", role: "Annotator", status: "Active", projects: [], capacity: 6 });
+  const [teamMessage, setTeamMessage] = useState("");
+  const PROJECT_CONFIGS_KEY = "annotatepro_project_configs_v1";
+  const makeDefaultProjectConfig = (project) => ({
+    projectId: project.id,
+    labels: defaultLabels.map(label => ({ ...label, id: `${project.id}-${label.id}` })),
+    labelGroups: [],
+    schemaVersion: 1,
+    schemaHistory: [],
+    automationRules: [],
+    annotatorSlaHours: 24,
+    reviewerSlaHours: 12,
+    escalateAfterHours: 24,
+    qaCriteria: [
+      { id: "crit-accuracy", name: "Label Accuracy", weight: 40 },
+      { id: "crit-boundary", name: "Boundary Precision", weight: 35 },
+      { id: "crit-completeness", name: "Completeness", weight: 25 }
+    ],
+    errorCategories: [
+      { id: "err-missing", name: "Missing Object", severity: "Major" },
+      { id: "err-wrong-label", name: "Wrong Label", severity: "Major" },
+      { id: "err-boundary", name: "Boundary Error", severity: "Minor" },
+      { id: "err-duplicate", name: "Duplicate Annotation", severity: "Minor" },
+      { id: "err-attribute", name: "Attribute Error", severity: "Minor" }
+    ],
+    samplingRate: 100,
+    calibrationSet: [],
+    requireQa: true, allowAnnotatorSubmit: true, autoSave: true, defaultReviewer: "", maxTasksPerAnnotator: 10,
+    instructions: project.description || "Follow the project annotation guidelines and maintain consistent labeling quality.",
+    color: labelPalette[0],
+    workspace: "",
+    taskSampling: "Sequential",
+    showInstructionsBeforeLabeling: false,
+    usePredictions: false,
+    predictionSource: ""
+  });
+  const [projectConfigs, setProjectConfigs] = useState(() => {
+    const saved = readStorage(PROJECT_CONFIGS_KEY, null);
+    return saved || Object.fromEntries(defaultProjectGroups.map(group => [group.id, makeDefaultProjectConfig(group)]));
+  });
+  const [configProject, setConfigProject] = useState(projectGroups[0]?.id || defaultProjectGroups[0].id);
+  const [configTab, setConfigTab] = useState("General");
+  const [configMessage, setConfigMessage] = useState("");
+  const TASK_PLANNER_KEY = "annotatepro_task_planner_v1";
+  const [plannerProjectId, setPlannerProjectId] = useState(null);
+  const [plannerPriority, setPlannerPriority] = useState("MEDIUM");
+  const [plannerQueue, setPlannerQueue] = useState("Now");
+  const [plannerDate, setPlannerDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [plannerTargets, setPlannerTargets] = useState(() => readStorage(TASK_PLANNER_KEY, { annotators: {}, reviewers: {} }));
+  const [plannerReworkFilter, setPlannerReworkFilter] = useState("Issues");
+  const [plannerReworkSelection, setPlannerReworkSelection] = useState([]);
+  const [plannerMessage, setPlannerMessage] = useState("");
+  const [plannerAssignmentOpen, setPlannerAssignmentOpen] = useState(false);
+  const [plannerAssignmentTaskIds, setPlannerAssignmentTaskIds] = useState([]);
+  const [plannerAssignmentAssignee, setPlannerAssignmentAssignee] = useState("");
+  const [plannerAssignmentReviewer, setPlannerAssignmentReviewer] = useState("");
+  const [plannerAssignmentPriority, setPlannerAssignmentPriority] = useState("MEDIUM");
+  const [plannerAssignmentQueue, setPlannerAssignmentQueue] = useState("Now");
+  const WORKLOAD_KEY = "annotatepro_workload_v1";
+  const [workloadFilter, setWorkloadFilter] = useState("All Projects");
+  const [workloadRole, setWorkloadRole] = useState("Annotator");
+  const [workloadMessage, setWorkloadMessage] = useState("");
+  const [workloadCapacityMode, setWorkloadCapacityMode] = useState("Daily");
+  const [workloadSettings, setWorkloadSettings] = useState(() => readStorage(WORKLOAD_KEY, { defaultDailyCapacity: 8, defaultWeeklyCapacity: 40 }));
+  const [labelEditorOpen, setLabelEditorOpen] = useState(false);
+  const [editingLabelId, setEditingLabelId] = useState(null);
+  const emptyLabelForm = { name: "", color: labelPalette[0], type: "Rectangle", parentId: "", groupId: "", shortcut: "", attributes: [] };
+  const [labelForm, setLabelForm] = useState(emptyLabelForm);
+  const [importOpen, setImportOpen] = useState(false);
+  const [imageUploadOpen, setImageUploadOpen] = useState(false);
+  const IMPORT_HISTORY_KEY = "annotatepro_import_history_v1";
+  const [importHistory, setImportHistory] = useState(() => readStorage(IMPORT_HISTORY_KEY, []));
+  useEffect(() => { localStorage.setItem(IMPORT_HISTORY_KEY, JSON.stringify(importHistory)); }, [importHistory]);
+  const [importStep, setImportStep] = useState("upload");
+  const [importRows, setImportRows] = useState([]);
+  const [importColumns, setImportColumns] = useState([]);
+  const [importMapping, setImportMapping] = useState({ name: "", image: "", status: "" });
+  const [importFileName, setImportFileName] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importDuplicateMode, setImportDuplicateMode] = useState("Skip");
+  const structuredInputRef = useRef(null);
+
+  const [advImportOpen, setAdvImportOpen] = useState(false);
+  const [advImportStep, setAdvImportStep] = useState("upload"); // upload | mapping | preview
+  const [advImportKind, setAdvImportKind] = useState(null); // zip-images | yolo | coco
+  const [advImportFileName, setAdvImportFileName] = useState("");
+  const [advImportError, setAdvImportError] = useState("");
+  const [advImportParsed, setAdvImportParsed] = useState(null);
+  const [advImportMapping, setAdvImportMapping] = useState({});
+  const [advImportProgress, setAdvImportProgress] = useState({ done: 0, total: 0 });
+  const [advImportRunning, setAdvImportRunning] = useState(false);
+  const advImportInputRef = useRef(null);
+
+  function resetAdvImportWizard() {
+    setAdvImportStep("upload"); setAdvImportKind(null); setAdvImportFileName("");
+    setAdvImportError(""); setAdvImportParsed(null); setAdvImportMapping({});
+    setAdvImportProgress({ done: 0, total: 0 });
+  }
+
+  function resetImportWizard() {
+    setImportStep("upload"); setImportRows([]); setImportColumns([]);
+    setImportMapping({ name: "", image: "", status: "" }); setImportFileName(""); setImportError("");
+  }
+
+  function parseCsv(text) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    if (!lines.length) return { columns: [], rows: [] };
+    const splitLine = (line) => {
+      const out = []; let cur = ""; let quoted = false;
+      for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+        if (ch === '"') { if (quoted && line[i+1] === '"') { cur += '"'; i++; } else quoted = !quoted; }
+        else if (ch === "," && !quoted) { out.push(cur); cur = ""; }
+        else cur += ch;
+      }
+      out.push(cur);
+      return out.map(v => v.trim());
+    };
+    const columns = splitLine(lines[0]);
+    const rows = lines.slice(1).map(line => {
+      const values = splitLine(line);
+      return Object.fromEntries(columns.map((c, i) => [c, values[i] ?? ""]));
+    });
+    return { columns, rows };
+  }
+
+  function flattenRecord(record) {
+    const out = {};
+    const walk = (obj, prefix) => {
+      Object.entries(obj || {}).forEach(([k, v]) => {
+        const key = prefix ? `${prefix}.${k}` : k;
+        if (v && typeof v === "object" && !Array.isArray(v)) walk(v, key);
+        else out[key] = Array.isArray(v) ? JSON.stringify(v) : v;
+      });
+    };
+    walk(record, "");
+    return out;
+  }
+
+  function autoMap(columns) {
+    const find = (patterns) => columns.find(c => patterns.some(p => c.toLowerCase().includes(p))) || "";
+    return {
+      name: find(["name", "file", "title", "id"]),
+      image: find(["image", "url", "src", "path", "uri"]),
+      status: find(["status", "state"])
+    };
+  }
+
+  async function handleStructuredFile(file) {
+    if (!file) return;
+    setImportFileName(file.name);
+    setImportError("");
+    try {
+      const text = await file.text();
+      let parsed;
+      if (file.name.toLowerCase().endsWith(".json")) {
+        const data = JSON.parse(text);
+        const list = Array.isArray(data) ? data : Array.isArray(data.tasks) ? data.tasks : Array.isArray(data.data) ? data.data : [data];
+        const flat = list.map(flattenRecord);
+        const columns = [...new Set(flat.flatMap(r => Object.keys(r)))];
+        parsed = { columns, rows: flat };
+      } else {
+        parsed = parseCsv(text);
+      }
+      if (!parsed.rows.length) { setImportError("No rows found in this file."); return; }
+      setImportColumns(parsed.columns);
+      setImportRows(parsed.rows);
+      setImportMapping(autoMap(parsed.columns));
+      setImportStep("mapping");
+    } catch (err) {
+      setImportError(`Could not parse this file: ${err.message}`);
+    }
+  }
+
+  const importValidation = useMemo(() => {
+    if (!importRows.length) return { valid: [], invalid: [], duplicates: [] };
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id;
+    const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
+    const seen = new Set();
+    const valid = [], invalid = [], duplicates = [];
+    importRows.forEach((row, i) => {
+      const name = String(row[importMapping.name] ?? "").trim();
+      const image = String(row[importMapping.image] ?? "").trim();
+      const status = String(row[importMapping.status] ?? "").trim();
+      const entry = { row: i + 1, name, image, status: ["Pending","In Progress","Completed"].includes(status) ? status : "Pending" };
+      if (!name) { invalid.push({ ...entry, reason: "Missing name" }); return; }
+      if (!image) { invalid.push({ ...entry, reason: "Missing image URL" }); return; }
+      if (!/^https?:\/\/|^data:image\//i.test(image)) { invalid.push({ ...entry, reason: "Invalid image URL" }); return; }
+      if (existingNames.has(name) || seen.has(name)) { duplicates.push({ ...entry, reason: "Duplicate name" }); return; }
+      seen.add(name);
+      valid.push(entry);
+    });
+    return { valid, invalid, duplicates };
+  }, [importRows, importMapping, tasks, datasets, importTargetDataset, importTaskId]);
+
+  function runStructuredImport() {
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id;
+    const targetDataset = datasets.find(d => d.id === targetDatasetId);
+    if (!targetDataset) { setImportError("Select a dataset to import into."); return; }
+    const toImport = importDuplicateMode === "Import anyway"
+      ? [...importValidation.valid, ...importValidation.duplicates]
+      : importValidation.valid;
+    if (!toImport.length) { setImportError("Nothing valid to import."); return; }
+    const newTasks = toImport.map((entry, i) => ({
+      id: `import-${Date.now()}-${i}`,
+      name: entry.name, status: entry.status, image: entry.image,
+      source: importFileName.toLowerCase().endsWith(".json") ? "JSON import" : "CSV import",
+      projectId: targetDataset.projectId, datasetId: targetDatasetId,
+      createdAt: new Date().toISOString()
+    }));
+    setTasks(prev => [...prev, ...newTasks]);
+    setImportHistory(prev => [{
+      id: `imp-${Date.now()}`, fileName: importFileName, datasetId: targetDatasetId,
+      datasetName: targetDataset.name, imported: newTasks.length,
+      skipped: importValidation.invalid.length + (importDuplicateMode === "Import anyway" ? 0 : importValidation.duplicates.length),
+      at: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+    setImportOpen(false);
+    resetImportWizard();
+    setDatasetToast(`${newTasks.length} task${newTasks.length > 1 ? "s" : ""} imported from ${importFileName}`);
+    setTimeout(() => setDatasetToast(""), 2600);
+  }
+
+  async function handleAdvancedImportFile(file) {
+    if (!file) return;
+    setAdvImportFileName(file.name);
+    setAdvImportError("");
+    try {
+      if (file.name.toLowerCase().endsWith(".zip")) {
+        const zip = await JSZip.loadAsync(file);
+        const entries = Object.entries(zip.files).filter(([, e]) => !e.dir);
+        const isImage = (p) => /\.(jpe?g|png|webp|gif|bmp)$/i.test(p);
+        const baseName = (p) => p.split("/").pop();
+        const stripExt = (n) => n.replace(/\.[^.]+$/, "");
+
+        const imageEntries = entries.filter(([p]) => isImage(p));
+        if (!imageEntries.length) { setAdvImportError("No image files found inside this zip."); return; }
+
+        const classesEntry = entries.find(([p]) => /(^|\/)classes\.txt$/i.test(p));
+        const yamlEntry = entries.find(([p]) => /(^|\/)data\.ya?ml$/i.test(p));
+        const labelTxtEntries = entries.filter(([p]) => /\.txt$/i.test(p) && !/classes\.txt$/i.test(p));
+        const cocoJsonEntry = entries.find(([p]) => /\.json$/i.test(p));
+
+        // Try COCO: any JSON entry shaped like {images, annotations, categories}
+        if (cocoJsonEntry) {
+          const jsonText = await cocoJsonEntry[1].async("string");
+          let cocoData;
+          try { cocoData = JSON.parse(jsonText); } catch { cocoData = null; }
+          if (cocoData && Array.isArray(cocoData.images) && Array.isArray(cocoData.annotations) && Array.isArray(cocoData.categories)) {
+            const images = [];
+            for (const [path, entry] of imageEntries) {
+              const blob = await entry.async("blob");
+              images.push({ name: baseName(path), blob });
+            }
+            const categories = cocoData.categories.map(c => ({ id: c.id, name: c.name }));
+            const imagesById = Object.fromEntries(cocoData.images.map(im => [im.id, im]));
+            const annotationsByImageName = {};
+            cocoData.annotations.forEach(ann => {
+              const im = imagesById[ann.image_id];
+              if (!im) return;
+              const key = baseName(im.file_name || "");
+              if (!annotationsByImageName[key]) annotationsByImageName[key] = [];
+              const w = im.width || 1, h = im.height || 1;
+              let shape = null;
+              if (Array.isArray(ann.segmentation) && ann.segmentation.length && Array.isArray(ann.segmentation[0])) {
+                const flat = ann.segmentation[0];
+                const points = [];
+                for (let i = 0; i < flat.length - 1; i += 2) points.push({ x: Math.max(0, Math.min(100, (flat[i] / w) * 100)), y: Math.max(0, Math.min(100, (flat[i + 1] / h) * 100)) });
+                if (points.length >= 3) shape = { type: "polygon", points };
+              }
+              if (!shape && Array.isArray(ann.bbox) && ann.bbox.length === 4) {
+                const [x, y, bw, bh] = ann.bbox;
+                shape = { type: "rectangle", x: Math.max(0, (x / w) * 100), y: Math.max(0, (y / h) * 100), w: Math.min(100, (bw / w) * 100), h: Math.min(100, (bh / h) * 100) };
+              }
+              if (shape) annotationsByImageName[key].push({ ...shape, categoryId: ann.category_id });
+            });
+            setAdvImportParsed({ kind: "coco", images, classes: categories, annotationsByImageName });
+            setAdvImportMapping({});
+            setAdvImportKind("coco");
+            setAdvImportStep(categories.length ? "mapping" : "preview");
+            return;
+          }
+        }
+
+        // Try YOLO: classes file/yaml + matching .txt label files
+        if ((classesEntry || yamlEntry) && labelTxtEntries.length) {
+          let classNames = [];
+          if (classesEntry) {
+            const text = await classesEntry[1].async("string");
+            classNames = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+          } else if (yamlEntry) {
+            const text = await yamlEntry[1].async("string");
+            const inline = text.match(/names:\s*\[(.+?)\]/s);
+            if (inline) classNames = inline[1].split(",").map(s => s.replace(/['"]/g, "").trim()).filter(Boolean);
+            else {
+              const lines = text.split(/\r?\n/);
+              const idx = lines.findIndex(l => /^names:/.test(l.trim()));
+              if (idx >= 0) {
+                for (let i = idx + 1; i < lines.length; i++) {
+                  const m = lines[i].match(/^\s*\d+:\s*(.+)$/) || lines[i].match(/^\s*-\s*(.+)$/);
+                  if (!m) break;
+                  classNames.push(m[1].replace(/['"]/g, "").trim());
+                }
+              }
+            }
+          }
+          if (!classNames.length) { setAdvImportError("Found label files but couldn't read class names from classes.txt / data.yaml."); return; }
+
+          const images = [];
+          for (const [path, entry] of imageEntries) {
+            const blob = await entry.async("blob");
+            images.push({ name: baseName(path), blob, key: stripExt(baseName(path)) });
+          }
+          const annotationsByImageName = {};
+          for (const [path, entry] of labelTxtEntries) {
+            const key = stripExt(baseName(path));
+            const match = images.find(im => im.key === key);
+            if (!match) continue;
+            const text = await entry.async("string");
+            const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+            const shapes = lines.map(line => {
+              const parts = line.split(/\s+/).map(Number);
+              if (parts.length < 5) return null;
+              const [classId, cx, cy, w, h] = parts;
+              return { type: "rectangle", x: Math.max(0, (cx - w / 2) * 100), y: Math.max(0, (cy - h / 2) * 100), w: Math.min(100, w * 100), h: Math.min(100, h * 100), categoryId: classId };
+            }).filter(Boolean);
+            annotationsByImageName[match.name] = shapes;
+          }
+          setAdvImportParsed({ kind: "yolo", images, classes: classNames.map((n, i) => ({ id: i, name: n })), annotationsByImageName });
+          setAdvImportMapping({});
+          setAdvImportKind("yolo");
+          setAdvImportStep("mapping");
+          return;
+        }
+
+        // Plain zip of images, no annotations
+        const images = [];
+        for (const [path, entry] of imageEntries) {
+          const blob = await entry.async("blob");
+          images.push({ name: baseName(path), blob });
+        }
+        setAdvImportParsed({ kind: "zip-images", images, classes: [], annotationsByImageName: {} });
+        setAdvImportKind("zip-images");
+        setAdvImportStep("preview");
+        return;
+      }
+
+      if (file.name.toLowerCase().endsWith(".json")) {
+        const text = await file.text();
+        let cocoData;
+        try { cocoData = JSON.parse(text); } catch { cocoData = null; }
+        if (!cocoData || !Array.isArray(cocoData.images) || !Array.isArray(cocoData.annotations) || !Array.isArray(cocoData.categories)) {
+          setAdvImportError("This doesn't look like a COCO file (expected images/annotations/categories). For plain task lists, use the CSV / JSON import instead.");
+          return;
+        }
+        const withUrls = cocoData.images.filter(im => im.coco_url || /^https?:\/\//i.test(im.file_name || ""));
+        if (!withUrls.length) { setAdvImportError("This COCO file's images have no URLs — upload a zip containing both the images and the COCO json instead."); return; }
+        const categories = cocoData.categories.map(c => ({ id: c.id, name: c.name }));
+        const imagesById = Object.fromEntries(cocoData.images.map(im => [im.id, im]));
+        const images = withUrls.map(im => ({ name: (im.file_name || `image-${im.id}`).split("/").pop(), url: im.coco_url || im.file_name }));
+        const annotationsByImageName = {};
+        cocoData.annotations.forEach(ann => {
+          const im = imagesById[ann.image_id];
+          if (!im) return;
+          const key = (im.file_name || "").split("/").pop();
+          if (!annotationsByImageName[key]) annotationsByImageName[key] = [];
+          const w = im.width || 1, h = im.height || 1;
+          if (Array.isArray(ann.bbox) && ann.bbox.length === 4) {
+            const [x, y, bw, bh] = ann.bbox;
+            annotationsByImageName[key].push({ type: "rectangle", x: Math.max(0, (x / w) * 100), y: Math.max(0, (y / h) * 100), w: Math.min(100, (bw / w) * 100), h: Math.min(100, (bh / h) * 100), categoryId: ann.category_id });
+          }
+        });
+        setAdvImportParsed({ kind: "coco-urls", images, classes: categories, annotationsByImageName });
+        setAdvImportMapping({});
+        setAdvImportKind("coco");
+        setAdvImportStep(categories.length ? "mapping" : "preview");
+        return;
+      }
+
+      setAdvImportError("Unsupported file — upload a .zip (images, YOLO export, or COCO export) or a standalone COCO .json.");
+    } catch (err) {
+      setAdvImportError(`Couldn't read this file: ${err.message}`);
+    }
+  }
+
+  function ensureLabelForClass(groupId, className) {
+    const config = projectConfigs[groupId];
+    const existing = config?.labels?.find(l => l.name.toLowerCase() === className.toLowerCase());
+    if (existing) return existing.id;
+    const newLabel = { id: `label-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, name: className, color: labelPalette[(config?.labels?.length || 0) % labelPalette.length], type: "Rectangle", parentId: null, groupId: null, shortcut: null, attributes: [] };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), labels: [...(prev[groupId]?.labels || []), newLabel] } }));
+    return newLabel.id;
+  }
+
+  async function runAdvancedImport() {
+    if (!advImportParsed) return;
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id;
+    const targetDataset = datasets.find(d => d.id === targetDatasetId);
+    if (!targetDataset) { setAdvImportError("Select a dataset to import into."); return; }
+    const groupId = projects.find(p => p.id === targetDataset.projectId)?.groupId;
+
+    const resolvedLabelIds = {};
+    advImportParsed.classes.forEach(c => {
+      const choice = advImportMapping[c.id];
+      if (choice === "__new__" || !choice) resolvedLabelIds[c.id] = ensureLabelForClass(groupId, c.name);
+      else resolvedLabelIds[c.id] = choice;
+    });
+
+    setAdvImportRunning(true);
+    const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
+    const toImport = advImportParsed.images.filter(im => !existingNames.has(im.name));
+    setAdvImportProgress({ done: 0, total: toImport.length });
+
+    const newTasks = [];
+    const newAnnotationsByTask = {};
+    for (let i = 0; i < toImport.length; i++) {
+      const im = toImport[i];
+      let imageUrl = im.url || null;
+      if (!imageUrl && im.blob) {
+        const path = `${targetDataset.projectId || "unassigned"}/${targetDatasetId}/${Date.now()}-${i}-${im.name}`;
+        try {
+          const compressed = await compressImageBlob(im.blob);
+          const { error } = await supabase.storage.from("task-images").upload(path, compressed, { cacheControl: "3600", upsert: false });
+          if (error) throw error;
+          imageUrl = supabase.storage.from("task-images").getPublicUrl(path).data.publicUrl;
+        } catch {
+          imageUrl = await new Promise(resolve => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => resolve(null); r.readAsDataURL(im.blob); });
+        }
+      }
+      if (!imageUrl) continue;
+      const taskId = `import-${advImportKind}-${Date.now()}-${i}`;
+      newTasks.push({ id: taskId, name: im.name, status: "Pending", image: imageUrl, source: `${advImportKind.toUpperCase()} import`, projectId: targetDataset.projectId, datasetId: targetDatasetId, createdAt: new Date().toISOString() });
+      const shapes = advImportParsed.annotationsByImageName[im.name] || [];
+      if (shapes.length) {
+        newAnnotationsByTask[taskId] = shapes.map((s, si) => ({ id: `${taskId}-ann-${si}`, type: s.type, labelId: resolvedLabelIds[s.categoryId], x: s.x, y: s.y, w: s.w, h: s.h, points: s.points }));
+      }
+      setAdvImportProgress({ done: i + 1, total: toImport.length });
+    }
+
+    setTasks(prev => [...prev, ...newTasks]);
+    setAnnotationsByTask(prev => ({ ...prev, ...newAnnotationsByTask }));
+    if (session) {
+      newTasks.forEach(t => {
+        supabase.from("tasks").upsert({ id: t.id, project_id: t.projectId, dataset_id: t.datasetId, name: t.name, status: t.status, image: t.image, source: t.source, created_at: t.createdAt }).then(({error})=>{if(error) console.warn("[Import] task sync failed:", error.message);});
+      });
+      Object.entries(newAnnotationsByTask).forEach(([taskId, anns]) => {
+        anns.forEach(a => {
+          supabase.from("annotations").upsert({ id: a.id, task_id: taskId, label_id: a.labelId, type: a.type, geometry: { x: a.x, y: a.y, w: a.w, h: a.h, points: a.points } }).then(({error})=>{if(error) console.warn("[Import] annotation sync failed:", error.message);});
+        });
+      });
+    }
+    setImportHistory(prev => [{
+      id: `imp-${Date.now()}`, fileName: advImportFileName, datasetId: targetDatasetId, datasetName: targetDataset.name,
+      imported: newTasks.length, skipped: advImportParsed.images.length - newTasks.length, at: new Date().toISOString()
+    }, ...prev].slice(0, 50));
+
+    setAdvImportRunning(false);
+    setAdvImportOpen(false);
+    resetAdvImportWizard();
+    const annCount = Object.values(newAnnotationsByTask).reduce((n, a) => n + a.length, 0);
+    setDatasetToast(`${newTasks.length} image${newTasks.length !== 1 ? "s" : ""} imported${annCount ? ` with ${annCount} annotations` : ""}`);
+    setTimeout(() => setDatasetToast(""), 3000);
+  }
+
+  const fileInputRef = useRef(null);
+  const imageInputRef = useRef(null);
+  const canvasRef = useRef(null);
+  const imageRef = useRef(null);
+  const panStart = useRef(null);
+  const editRef = useRef(null);
+
+  const [notifications, setNotifications] = useState(() => readStorage("annotatepro_notifications_v1", []));
+  const [notificationFilter, setNotificationFilter] = useState("All");
+  const [notificationSearch, setNotificationSearch] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+  }, [projects]);
+
+  useEffect(() => {
+    localStorage.setItem(TASKS_KEY, JSON.stringify(tasks));
+  }, [tasks]);
+
+  useEffect(() => {
+    localStorage.setItem("annotatepro_qa_reviews_v1", JSON.stringify(qaReviews));
+  }, [qaReviews]);
+
+  useEffect(() => {
+    localStorage.setItem("annotatepro_export_history_v1", JSON.stringify(exportHistory));
+  }, [exportHistory]);
+
+  useEffect(() => {
+    localStorage.setItem(TEAM_KEY, JSON.stringify(teamMembers));
+  }, [teamMembers]);
+
+  useEffect(() => { localStorage.setItem(PROJECT_CONFIGS_KEY, JSON.stringify(projectConfigs)); }, [projectConfigs]);
+  useEffect(() => { localStorage.setItem(TASK_PLANNER_KEY, JSON.stringify(plannerTargets)); }, [plannerTargets]);
+  useEffect(() => { localStorage.setItem(WORKLOAD_KEY, JSON.stringify(workloadSettings)); }, [workloadSettings]);
+  useEffect(() => { localStorage.setItem(SETTINGS_KEY, JSON.stringify(appSettings)); }, [appSettings]);
+  useEffect(() => { localStorage.setItem("annotatepro_notifications_v1", JSON.stringify(notifications)); }, [notifications]);
+  const OPERATIONS_KEY = "annotatepro_operations_v1";
+  const [operationRead, setOperationRead] = useState(() => readStorage(OPERATIONS_KEY, {}));
+  const [operationsSearch, setOperationsSearch] = useState("");
+  const [operationsFilter, setOperationsFilter] = useState("All");
+  const [operationsProject, setOperationsProject] = useState("All Projects");
+  const [operationsShowUnread, setOperationsShowUnread] = useState(false);
+  const AUDIT_KEY = "annotatepro_audit_trail_v1";
+  const [auditEvents, setAuditEvents] = useState(() => readStorage(AUDIT_KEY, []));
+  const [onlineUsers, setOnlineUsers] = useState([]);
+  const presenceChannelRef = useRef(null);
+
+  useEffect(() => {
+    if (!session?.user) { setOnlineUsers([]); return; }
+
+    const dataChannel = supabase
+      .channel("live-data-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "tasks" }, (payload) => {
+        if (payload.eventType === "DELETE") { setTasks(prev => prev.filter(t => t.id !== payload.old.id)); return; }
+        const row = payload.new;
+        const mapped = { id: row.id, projectId: row.project_id, datasetId: row.dataset_id, name: row.name, status: row.status, image: row.image, size: row.size, source: row.source, createdAt: row.created_at };
+        // Only touch columns that actually came back from the cloud row — otherwise
+        // leave any locally-set value alone instead of wiping it with undefined,
+        // which matters for fields whose columns may not exist yet on every deployment.
+        if (row.due_date !== undefined) mapped.dueDate = row.due_date;
+        if (row.assignee_id !== undefined) mapped.assigneeId = row.assignee_id;
+        if (row.reviewer_id !== undefined) mapped.reviewerId = row.reviewer_id;
+        if (row.priority !== undefined) mapped.priority = row.priority;
+        if (row.queue !== undefined) mapped.queue = row.queue;
+        setTasks(prev => prev.some(t => t.id === mapped.id) ? prev.map(t => t.id === mapped.id ? { ...t, ...mapped } : t) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "project_groups" }, (payload) => {
+        if (payload.eventType === "DELETE") { setProjectGroups(prev => prev.filter(g => g.id !== payload.old.id)); return; }
+        const mapped = groupFromRow(payload.new);
+        setProjectGroups(prev => prev.some(g => g.id === mapped.id) ? prev.map(g => g.id === mapped.id ? mapped : g) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "projects" }, (payload) => {
+        if (payload.eventType === "DELETE") { setProjects(prev => prev.filter(p => p.id !== payload.old.id)); return; }
+        const mapped = projectFromRow(payload.new);
+        setProjects(prev => prev.some(p => p.id === mapped.id) ? prev.map(p => p.id === mapped.id ? mapped : p) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "datasets" }, (payload) => {
+        if (payload.eventType === "DELETE") { setDatasets(prev => prev.filter(d => d.id !== payload.old.id)); return; }
+        const mapped = datasetFromRow(payload.new);
+        setDatasets(prev => prev.some(d => d.id === mapped.id) ? prev.map(d => d.id === mapped.id ? mapped : d) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_members" }, (payload) => {
+        if (payload.eventType === "DELETE") { setTeamMembers(prev => prev.filter(m => m.id !== payload.old.id)); return; }
+        const mapped = memberFromRow(payload.new);
+        setTeamMembers(prev => prev.some(m => m.id === mapped.id) ? prev.map(m => m.id === mapped.id ? mapped : m) : [...prev, mapped]);
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "qa_reviews" }, (payload) => {
+        if (payload.eventType === "DELETE") return;
+        const row = payload.new;
+        setQaReviews(prev => ({ ...prev, [row.task_id]: { decision: row.decision, score: row.score, reviewer: row.reviewer, comment: row.comment, reason: row.reason, annotationCount: row.annotation_count, criteriaScores: row.criteria_scores || {}, errors: row.errors || [], history: row.history, reviewedAt: row.reviewed_at } }));
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, (payload) => {
+        const row = payload.new;
+        setNotifications(prev => prev.some(n => n.id === row.id) ? prev : [{ id: row.id, type: row.type, title: row.title, message: row.message, read: row.read, projectId: row.project_id, taskId: row.task_id, createdAt: row.created_at }, ...prev]);
+      })
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "audit_events" }, (payload) => {
+        const row = payload.new;
+        setAuditEvents(prev => prev.some(e => e.id === row.id) ? prev : [{ id: row.id, action: row.action, actor: row.actor, actorRole: row.actor_role, projectId: row.project_id, taskId: row.task_id, details: row.details, timestamp: row.timestamp }, ...prev].slice(0, 2000));
+      })
+      .subscribe();
+
+    const presenceChannel = supabase.channel("workspace-presence", { config: { presence: { key: session.user.id } } });
+    presenceChannelRef.current = presenceChannel;
+    presenceChannel
+      .on("presence", { event: "sync" }, () => {
+        const state = presenceChannel.presenceState();
+        setOnlineUsers(Object.values(state).map(entries => entries[0]).filter(Boolean));
+      })
+      .subscribe(async (status) => {
+        if (status === "SUBSCRIBED") {
+          await presenceChannel.track({ user_id: session.user.id, name: currentUserName, online_at: new Date().toISOString(), current_task_id: null });
+        }
+      });
+
+    return () => {
+      supabase.removeChannel(dataChannel);
+      supabase.removeChannel(presenceChannel);
+      presenceChannelRef.current = null;
+    };
+  }, [session?.user?.id]);
+
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditFilter, setAuditFilter] = useState("All Actions");
+  const [auditProject, setAuditProject] = useState("All Projects");
+  const [auditUser, setAuditUser] = useState("All Users");
+  const [auditTask, setAuditTask] = useState("");
+  const [auditDate, setAuditDate] = useState("All Time");
+  const [auditSelectedTask, setAuditSelectedTask] = useState(null);
+  useEffect(() => { localStorage.setItem(AUDIT_KEY, JSON.stringify(auditEvents)); }, [auditEvents]);
+  useEffect(() => {
+    if (auditEvents.length || (!tasks.length && !projects.length)) return;
+    const now = Date.now();
+    const seed = [];
+    projects.forEach((p, i) => seed.push({ id:`audit-project-${p.id}`, action:"Project Created", actor:"Manjunath", actorRole:"Team Lead", projectId:p.id, taskId:null, details:`Project ${p.name} is available in the workspace.`, timestamp:new Date(now-(i+2)*86400000).toISOString() }));
+    tasks.forEach((t, i) => {
+      seed.push({ id:`audit-task-${t.id}`, action:"Task Created", actor:"System", actorRole:"System", projectId:t.projectId, taskId:t.id, details:`Task ${t.name} added to the dataset.`, timestamp:new Date(now-(i+1)*3600000).toISOString() });
+      if (t.assigneeId) seed.push({ id:`audit-assign-${t.id}`, action:"Task Assigned", actor:"Manjunath", actorRole:"Team Lead", projectId:t.projectId, taskId:t.id, details:`Assigned to ${teamMembers.find(m=>m.id===t.assigneeId)?.name || t.assigneeId}.`, timestamp:new Date(now-(i+1)*1800000).toISOString() });
+      if (t.status && t.status !== "Pending") seed.push({ id:`audit-status-${t.id}`, action:`Status → ${t.status}`, actor:"System", actorRole:"System", projectId:t.projectId, taskId:t.id, details:`Current task status is ${t.status}.`, timestamp:new Date(now-(i+1)*900000).toISOString() });
+    });
+    Object.entries(qaReviews).forEach(([taskId, r], i) => { const t=tasks.find(x=>x.id===taskId); if(t&&r) seed.push({id:`audit-qa-${taskId}`,action:`QA ${r.decision}`,actor:r.reviewer||"Manjunath",actorRole:"Reviewer",projectId:t.projectId,taskId,details:`QA score ${r.score ?? "—"}${r.comment ? ` · ${r.comment}` : ""}`,timestamp:r.reviewedAt||new Date(now-i*600000).toISOString()}); });
+    setAuditEvents(seed.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp)));
+  }, []);
+
+  useEffect(() => { localStorage.setItem(OPERATIONS_KEY, JSON.stringify(operationRead)); }, [operationRead]);
+  useEffect(() => {
+    setProjectConfigs(prev => {
+      const next = { ...prev }; let changed = false;
+      projectGroups.forEach(group => { if (!next[group.id]) { next[group.id] = makeDefaultProjectConfig(group); changed = true; } });
+      return changed ? next : prev;
+    });
+  }, [projectGroups]);
+  useEffect(() => {
+    const project = projects.find(p => p.id === workspaceProject) || projects[0];
+    const group = projectGroups.find(g => g.id === project?.groupId) || projectGroups[0];
+    const config = (group && projectConfigs[group.id]) || (group ? makeDefaultProjectConfig(group) : null);
+    setLabels(config?.labels || []);
+    setSelectedLabel(config?.labels?.[0]?.id || null);
+  }, [workspaceProject, projectConfigs, projects, projectGroups]);
+
+  const flashWorkload = (msg) => { setWorkloadMessage(msg); window.setTimeout(() => setWorkloadMessage(""), 2400); };
+  const workloadProjects = useMemo(() => ["All Projects", ...projects.map(p => p.id)], [projects]);
+  const workloadRows = useMemo(() => {
+    const members = teamMembers.filter(m => m.status === "Active" && (m.role === workloadRole || workloadRole === "All Roles"));
+    return members.map(member => {
+      const memberTasks = tasks.filter(t => t.assigneeId === member.id && (workloadFilter === "All Projects" || t.projectId === workloadFilter));
+      const assigned = memberTasks.length;
+      const inProgress = memberTasks.filter(t => t.status === "In Progress").length;
+      const submitted = memberTasks.filter(t => ["Submitted", "QA Review"].includes(t.status)).length;
+      const completed = memberTasks.filter(t => ["Approved", "Completed"].includes(t.status)).length;
+      const capacity = Number(member.capacity) || workloadSettings.defaultDailyCapacity || 8;
+      const load = capacity ? Math.round((assigned / capacity) * 100) : 0;
+      return { member, memberTasks, assigned, inProgress, submitted, completed, capacity, load: Math.min(100, load) };
+    });
+  }, [teamMembers, tasks, workloadFilter, workloadRole, workloadSettings]);
+  const workloadSummary = useMemo(() => {
+    const active = workloadRows.length;
+    const assigned = workloadRows.reduce((n, r) => n + r.assigned, 0);
+    const capacity = workloadRows.reduce((n, r) => n + r.capacity, 0);
+    const unassigned = tasks.filter(t => (workloadFilter === "All Projects" || t.projectId === workloadFilter) && !t.assigneeId).length;
+    const overloaded = workloadRows.filter(r => r.assigned > r.capacity).length;
+    return { active, assigned, capacity, unassigned, overloaded, utilization: capacity ? Math.round((assigned / capacity) * 100) : 0 };
+  }, [workloadRows, tasks, workloadFilter]);
+  function autoBalanceWorkload() {
+    const pool = teamMembers.filter(m => m.status === "Active" && m.role === "Annotator" && (workloadFilter === "All Projects" || m.projects?.includes(workloadFilter)));
+    if (!pool.length) { flashWorkload("No eligible annotators for this project"); return; }
+    const candidates = tasks.filter(t => (workloadFilter === "All Projects" || t.projectId === workloadFilter) && !t.assigneeId && t.status === "Pending");
+    if (!candidates.length) { flashWorkload("No unassigned pending tasks to balance"); return; }
+    const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.assigneeId === m.id).length]));
+    const next = [...tasks];
+    candidates.forEach(task => {
+      const target = [...pool].sort((a,b) => (counts[a.id]||0) - (counts[b.id]||0))[0];
+      if (!target) return;
+      const idx = next.findIndex(t => t.id === task.id);
+      if (idx >= 0) next[idx] = { ...next[idx], assigneeId: target.id, priority: next[idx].priority || "MEDIUM", queue: next[idx].queue || "Now", status: "In Progress" };
+      syncUpdate("tasks", task.id, { status: "In Progress", assignee_id: target.id, priority: next[idx]?.priority || "MEDIUM", queue: next[idx]?.queue || "Now" });
+      counts[target.id] = (counts[target.id] || 0) + 1;
+    });
+    setTasks(next);
+    flashWorkload(`Balanced ${candidates.length} task${candidates.length === 1 ? "" : "s"} across ${pool.length} annotators`);
+  }
+  function updateMemberCapacity(memberId, value) {
+    const capacity = Math.max(1, Number(value) || 1);
+    setTeamMembers(prev => prev.map(m => m.id === memberId ? { ...m, capacity } : m));
+  }
+  const currentTask = tasks[selectedTaskIndex] || tasks[0];
+  const taskSettingsTask = projects.find(p => p.id === taskSettingsId) || null;
+  const currentAnnotations = annotationsByTask[currentTask?.id] || [];
+  const currentLabel = labels.find((l) => l.id === selectedLabel) || labels[0];
+
+  useEffect(() => {
+    if (!session?.user || !presenceChannelRef.current) return;
+    presenceChannelRef.current.track({ user_id: session.user.id, name: currentUserName, online_at: new Date().toISOString(), current_task_id: activePage === "Annotation Workspace" ? (currentTask?.id || null) : null });
+  }, [currentTask?.id, activePage, session?.user?.id]);
+
+  const coEditors = onlineUsers.filter(u => u.user_id !== session?.user?.id && u.current_task_id && u.current_task_id === currentTask?.id);
+
+  const dashboardStats = useMemo(() => {
+    const active = projects.filter(p => p.status !== "Completed").length;
+    const total = projects.reduce((s, p) => s + Number(p.totalImages || 0), 0);
+    const completed = projects.reduce((s, p) => s + Number(p.completedImages || 0), 0);
+    return { active, total, remaining: Math.max(0, total - completed), completed };
+  }, [projects]);
+
+  const filteredProjects = useMemo(() => projects.filter(p => {
+    const q = projectSearch.toLowerCase();
+    const matchesSearch = !q || `${p.name} ${p.client} ${p.team}`.toLowerCase().includes(q);
+    const matchesStatus = projectStatusFilter === "All" || p.status === projectStatusFilter;
+    return matchesSearch && matchesStatus;
+  }), [projects, projectSearch, projectStatusFilter]);
+
+  const filteredTasks = useMemo(() => tasks.filter(t => taskFilter === "All" || t.status === taskFilter), [tasks, taskFilter]);
+
+  function navigate(page) {
+    setActivePage(page);
+    setSidebarOpen(false);
+  }
+
+  // ---- Build 38: Customizable Dashboard ----
+  const activeDashboardLayout = dashboardLayouts[activeDashboardLayoutId] || dashboardLayouts.overview || Object.values(dashboardLayouts)[0];
+  function toggleDashboardWidget(widgetId) {
+    setDashboardLayouts(prev => {
+      const layout = prev[activeDashboardLayoutId];
+      if (!layout) return prev;
+      const has = layout.widgets.includes(widgetId);
+      const widgets = has ? layout.widgets.filter(w => w !== widgetId) : [...layout.widgets, widgetId];
+      return { ...prev, [activeDashboardLayoutId]: { ...layout, widgets } };
+    });
+  }
+  function moveDashboardWidget(widgetId, direction) {
+    setDashboardLayouts(prev => {
+      const layout = prev[activeDashboardLayoutId];
+      if (!layout) return prev;
+      const idx = layout.widgets.indexOf(widgetId);
+      const next = idx + direction;
+      if (idx < 0 || next < 0 || next >= layout.widgets.length) return prev;
+      const widgets = [...layout.widgets];
+      [widgets[idx], widgets[next]] = [widgets[next], widgets[idx]];
+      return { ...prev, [activeDashboardLayoutId]: { ...layout, widgets } };
+    });
+  }
+  function saveDashboardLayoutAs(name) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    const id = `layout-${Date.now()}`;
+    setDashboardLayouts(prev => ({ ...prev, [id]: { name: trimmed, widgets: [...(activeDashboardLayout?.widgets || [])], builtIn: false } }));
+    setActiveDashboardLayoutId(id);
+  }
+  function deleteDashboardLayout(id) {
+    if (Object.keys(dashboardLayouts).length <= 1) return;
+    setDashboardLayouts(prev => { const next = { ...prev }; delete next[id]; return next; });
+    if (activeDashboardLayoutId === id) setActiveDashboardLayoutId(Object.keys(dashboardLayouts).find(k => k !== id) || "overview");
+  }
+  function renameDashboardLayout(id, name) {
+    setDashboardLayouts(prev => ({ ...prev, [id]: { ...prev[id], name } }));
+  }
+
+  // ---- Build 40: API & Integrations ----
+  function generateApiToken(name, scopes) {
+    const token = `apk_${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
+    const entry = { id: `tok-${Date.now()}`, name: (name || "").trim() || "Unnamed token", token, scopes: scopes || ["read"], createdBy: currentUserName, createdAt: new Date().toISOString(), lastUsedAt: null, revoked: false };
+    setApiTokens(prev => [entry, ...prev]);
+    if (session) supabase.from("api_tokens").upsert({ id: entry.id, name: entry.name, token: entry.token, scopes: entry.scopes, created_by: entry.createdBy, created_at: entry.createdAt, revoked: false }).then(({ error }) => { if (error) console.warn("[Cloud] api_tokens upsert failed:", error.message); });
+    logAudit("API Token Created", null, null, `Token "${entry.name}" generated by ${currentUserName}.`);
+    return entry;
+  }
+  function revokeApiToken(id) {
+    setApiTokens(prev => prev.map(t => t.id === id ? { ...t, revoked: true } : t));
+    if (session) supabase.from("api_tokens").update({ revoked: true }).eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] token revoke failed:", error.message); });
+    logAudit("API Token Revoked", null, null, "A token was revoked.");
+  }
+  function deleteApiToken(id) {
+    setApiTokens(prev => prev.filter(t => t.id !== id));
+    if (session) supabase.from("api_tokens").delete().eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] token delete failed:", error.message); });
+  }
+
+  function createWebhook(webhook) {
+    const entry = { id: `wh-${Date.now()}`, name: (webhook.name || "").trim() || "Webhook", url: webhook.url, events: webhook.events || [], enabled: true, createdAt: new Date().toISOString(), lastTriggeredAt: null, lastStatus: null };
+    setWebhooks(prev => [entry, ...prev]);
+    if (session) supabase.from("webhooks").upsert({ id: entry.id, name: entry.name, url: entry.url, events: entry.events, enabled: true, created_at: entry.createdAt }).then(({ error }) => { if (error) console.warn("[Cloud] webhooks upsert failed:", error.message); });
+    logAudit("Webhook Created", null, null, `Webhook "${entry.name}" registered for ${entry.events.join(", ") || "no events"}.`);
+    return entry;
+  }
+  function updateWebhook(id, patch) {
+    setWebhooks(prev => prev.map(w => w.id === id ? { ...w, ...patch } : w));
+    if (session) supabase.from("webhooks").update({ name: patch.name, url: patch.url, events: patch.events, enabled: patch.enabled }).eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] webhook update failed:", error.message); });
+  }
+  function deleteWebhook(id) {
+    setWebhooks(prev => prev.filter(w => w.id !== id));
+    if (session) supabase.from("webhooks").delete().eq("id", id).then(({ error }) => { if (error) console.warn("[Cloud] webhook delete failed:", error.message); });
+  }
+  async function sendWebhookPayload(webhook, eventType, payload) {
+    try {
+      const res = await fetch(webhook.url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event: eventType, timestamp: new Date().toISOString(), workspace: appSettings?.workspaceName || "AnnotatePro", data: payload }) });
+      setWebhooks(prev => prev.map(w => w.id === webhook.id ? { ...w, lastTriggeredAt: new Date().toISOString(), lastStatus: res.ok ? "Success" : `Error ${res.status}` } : w));
+    } catch (err) {
+      setWebhooks(prev => prev.map(w => w.id === webhook.id ? { ...w, lastTriggeredAt: new Date().toISOString(), lastStatus: `Failed: ${err.message}` } : w));
+    }
+  }
+  const webhookRateLimitRef = useRef(new Map());
+  function fireWebhooks(eventType, payload) {
+    const now = Date.now();
+    webhooks.filter(w => w.enabled && (w.events || []).includes(eventType)).forEach(w => {
+      const lastFired = webhookRateLimitRef.current.get(w.id) || 0;
+      if (now - lastFired < 2000) { // max ~1 call per webhook per 2s — protects the receiving endpoint from bulk-action bursts
+        logAudit("Webhook Rate-Limited", null, null, `"${w.name}" skipped a rapid duplicate trigger for ${eventType}.`, "System", "Automation");
+        return;
+      }
+      webhookRateLimitRef.current.set(w.id, now);
+      sendWebhookPayload(w, eventType, payload);
+    });
+  }
+  function testWebhook(id) {
+    const wh = webhooks.find(w => w.id === id);
+    if (wh) sendWebhookPayload(wh, "test", { message: "Test payload from AnnotatePro", sentBy: currentUserName });
+  }
+
+  function importMlPredictions(groupId, targetProjectId, predictions) {
+    let matchedTasks = 0, importedAnnotations = 0, unmatched = [];
+    predictions.forEach(entry => {
+      const task = tasks.find(t => t.projectId === targetProjectId && t.name === entry.fileName);
+      if (!task) { unmatched.push(entry.fileName); return; }
+      matchedTasks++;
+      const shapes = (entry.predictions || []).map((p, i) => {
+        const labelId = ensureLabelForClass(groupId, p.label);
+        importedAnnotations++;
+        return { id: `${task.id}-model-${Date.now()}-${i}`, type: "rectangle", labelId, x: p.bbox[0], y: p.bbox[1], w: p.bbox[2], h: p.bbox[3], source: "model", confidence: p.confidence ?? null, reviewState: "pending" };
+      });
+      if (shapes.length) setAnnotationsByTask(prev => ({ ...prev, [task.id]: [...(prev[task.id] || []), ...shapes] }));
+    });
+    logAudit("ML Predictions Imported", null, targetProjectId, `${importedAnnotations} prediction${importedAnnotations===1?"":"s"} imported across ${matchedTasks} task${matchedTasks===1?"":"s"}${unmatched.length ? ` · ${unmatched.length} file${unmatched.length===1?"":"s"} unmatched` : ""}.`);
+    return { matchedTasks, importedAnnotations, unmatched };
+  }
+
+  function exportProjectJson(projectId) {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+    const projectTasks = tasks.filter(t => t.projectId === projectId);
+    const payload = {
+      exportedAt: new Date().toISOString(),
+      project,
+      tasks: projectTasks.map(t => ({ ...t, annotations: annotationsByTask[t.id] || [], qaReview: qaReviews[t.id] || null }))
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `${project.name.toLowerCase().replace(/\s+/g,"-")}-export.json`; a.click();
+    logAudit("Project JSON Exported", null, projectId, `Full data export for ${project.name}.`);
+  }
+
+  // ---- Build 41: AI-Assisted Annotation ----
+  function acceptPrediction(taskId, annotationId) {
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).map(a => a.id === annotationId ? { ...a, reviewState: "accepted" } : a) }));
+  }
+  function rejectPrediction(taskId, annotationId) {
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).filter(a => a.id !== annotationId) }));
+  }
+  function acceptAllPredictions(taskId) {
+    const pendingCount = (annotationsByTask[taskId] || []).filter(a => a.reviewState === "pending").length;
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).map(a => a.reviewState === "pending" ? { ...a, reviewState: "accepted" } : a) }));
+    if (pendingCount) logAudit("AI Predictions Accepted", taskId, tasks.find(t => t.id === taskId)?.projectId, `${pendingCount} pre-labeled region${pendingCount===1?"":"s"} accepted.`);
+  }
+  function rejectAllPredictions(taskId) {
+    const pendingCount = (annotationsByTask[taskId] || []).filter(a => a.reviewState === "pending").length;
+    setAnnotationsByTask(prev => ({ ...prev, [taskId]: (prev[taskId] || []).filter(a => a.reviewState !== "pending") }));
+    if (pendingCount) logAudit("AI Predictions Rejected", taskId, tasks.find(t => t.id === taskId)?.projectId, `${pendingCount} pre-labeled region${pendingCount===1?"":"s"} rejected.`);
+  }
+
+  // Suggested labels: a frequency-based heuristic (not a real model) — the labels
+  // most used so far in this task's dataset, surfaced first in the label picker.
+  function suggestedLabelIds(datasetId, labels) {
+    const counts = {};
+    tasks.filter(t => t.datasetId === datasetId).forEach(t => (annotationsByTask[t.id] || []).forEach(a => { counts[a.labelId] = (counts[a.labelId] || 0) + 1; }));
+    return [...labels].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0)).filter(l => counts[l.id]).slice(0, 3).map(l => l.id);
+  }
+
+  // ---- Build 42: Security & Production Hardening ----
+  function exportWorkspaceBackup() {
+    const payload = {
+      exportedAt: new Date().toISOString(), workspaceName: appSettings?.workspaceName || "AnnotatePro", version: "backup-v1",
+      projectGroups, projects, datasets, tasks, teamMembers, projectConfigs, annotationsByTask, qaReviews,
+      notifications, auditEvents: auditEvents.slice(0, 500), appSettings
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `annotatepro-backup-${new Date().toISOString().slice(0,10)}.json`; a.click();
+    logAudit("Workspace Backup Exported", null, null, `Full backup: ${projects.length} projects, ${tasks.length} tasks.`, currentUserName, "Admin");
+  }
+  function restoreWorkspaceBackup(file, onDone) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data || data.version !== "backup-v1") throw new Error("This file isn't a recognized AnnotatePro backup.");
+        if (!window.confirm(`Restore this backup? It will replace ${projects.length} current projects and ${tasks.length} tasks with ${data.projects?.length || 0} projects and ${data.tasks?.length || 0} tasks from the backup (dated ${new Date(data.exportedAt).toLocaleString()}). This can't be undone locally — run Migration afterward to push it to the cloud.`)) { onDone?.({ ok: false, message: "Cancelled" }); return; }
+        if (data.projectGroups) setProjectGroups(data.projectGroups);
+        if (data.projects) setProjects(data.projects);
+        if (data.datasets) setDatasets(data.datasets);
+        if (data.tasks) setTasks(data.tasks);
+        if (data.teamMembers) setTeamMembers(data.teamMembers);
+        if (data.projectConfigs) setProjectConfigs(data.projectConfigs);
+        if (data.annotationsByTask) setAnnotationsByTask(data.annotationsByTask);
+        if (data.qaReviews) setQaReviews(data.qaReviews);
+        if (data.notifications) setNotifications(data.notifications);
+        logAudit("Workspace Backup Restored", null, null, `Restored backup from ${new Date(data.exportedAt).toLocaleString()}.`, currentUserName, "Admin");
+        onDone?.({ ok: true, message: `Restored ${data.projects?.length || 0} projects and ${data.tasks?.length || 0} tasks. Run Migration to push this to the cloud.` });
+      } catch (err) {
+        onDone?.({ ok: false, message: `Restore failed: ${err.message}` });
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Error log: captured to localStorage even if the app crashes (see logClientError
+  // near the top of the file); this just surfaces it in the UI and, best-effort,
+  // syncs unsynced entries to the cloud once a session and table exist.
+  const [errorLogEntries, setErrorLogEntries] = useState(() => readStorage(ERROR_LOG_KEY, []));
+  function refreshErrorLog() { setErrorLogEntries(readStorage(ERROR_LOG_KEY, [])); }
+  function clearErrorLog() { localStorage.setItem(ERROR_LOG_KEY, "[]"); setErrorLogEntries([]); }
+  useEffect(() => {
+    if (!session) return;
+    const unsynced = errorLogEntries.filter(e => !e.synced);
+    if (!unsynced.length) return;
+    Promise.all(unsynced.map(e => supabase.from("error_logs").insert({ id: e.id, message: e.message, stack: e.stack, context: e.context, occurred_at: e.timestamp }))).then(results => {
+      const anySucceeded = results.some(r => !r.error);
+      if (anySucceeded) {
+        const next = errorLogEntries.map(e => unsynced.some(u => u.id === e.id) ? { ...e, synced: true } : e);
+        localStorage.setItem(ERROR_LOG_KEY, JSON.stringify(next));
+        setErrorLogEntries(next);
+      }
+    }).catch(() => {});
+  }, [session, errorLogEntries]);
+
+  // ---- Build 43: Testing & Regression — live data-integrity health check ----
+  function runHealthCheck() {
+    const results = [];
+    const push = (area, label, status, detail) => results.push({ id: `${area}-${label}`.toLowerCase().replace(/\s+/g,"-"), area, label, status, detail });
+
+    // Projects
+    const groupIds = new Set(projectGroups.map(g => g.id));
+    const badProjects = projects.filter(p => p.groupId && !groupIds.has(p.groupId));
+    push("Projects", "Project → group references", badProjects.length ? "fail" : "pass", badProjects.length ? `${badProjects.length} project(s) reference a group that no longer exists.` : `All ${projects.length} projects reference a valid group.`);
+    const dupProjectIds = projects.length - new Set(projects.map(p=>p.id)).size;
+    push("Projects", "Duplicate project IDs", dupProjectIds ? "fail" : "pass", dupProjectIds ? `${dupProjectIds} duplicate ID(s) found.` : "No duplicate project IDs.");
+
+    // Datasets
+    const projectIds = new Set(projects.map(p => p.id));
+    const badDatasets = datasets.filter(d => d.projectId && !projectIds.has(d.projectId));
+    push("Datasets", "Dataset → project references", badDatasets.length ? "fail" : "pass", badDatasets.length ? `${badDatasets.length} dataset(s) reference a missing project.` : `All ${datasets.length} datasets reference a valid project.`);
+
+    // Tasks
+    const datasetIds = new Set(datasets.map(d => d.id));
+    const badTaskProject = tasks.filter(t => t.projectId && !projectIds.has(t.projectId));
+    push("Tasks", "Task → project references", badTaskProject.length ? "fail" : "pass", badTaskProject.length ? `${badTaskProject.length} task(s) reference a missing project.` : `All ${tasks.length} tasks reference a valid project.`);
+    const badTaskDataset = tasks.filter(t => t.datasetId && !datasetIds.has(t.datasetId));
+    push("Tasks", "Task → dataset references", badTaskDataset.length ? "warn" : "pass", badTaskDataset.length ? `${badTaskDataset.length} task(s) reference a missing dataset.` : "All task-dataset references resolve.");
+    const dupTaskIds = tasks.length - new Set(tasks.map(t=>t.id)).size;
+    push("Tasks", "Duplicate task IDs", dupTaskIds ? "fail" : "pass", dupTaskIds ? `${dupTaskIds} duplicate ID(s) found.` : "No duplicate task IDs.");
+
+    // Annotation
+    const taskIdSet = new Set(tasks.map(t => t.id));
+    const orphanAnnotationKeys = Object.keys(annotationsByTask).filter(id => !taskIdSet.has(id) && (annotationsByTask[id]||[]).length);
+    push("Annotation", "Orphaned annotation sets", orphanAnnotationKeys.length ? "warn" : "pass", orphanAnnotationKeys.length ? `${orphanAnnotationKeys.length} task ID(s) with saved annotations no longer have a matching task.` : "No orphaned annotation data.");
+    let badLabelRefs = 0;
+    Object.entries(annotationsByTask).forEach(([tid, list]) => {
+      const t = tasks.find(x => x.id === tid);
+      if (!t) return;
+      const config = getGroupConfig(getGroupIdForTask(t));
+      const labelIds = new Set((config.labels||[]).map(l=>l.id));
+      (list||[]).forEach(a => { if (!labelIds.has(a.labelId)) badLabelRefs++; });
+    });
+    push("Annotation", "Annotation → label references", badLabelRefs ? "warn" : "pass", badLabelRefs ? `${badLabelRefs} annotation(s) reference a label no longer in that project's schema.` : "All annotations reference a valid label.");
+
+    // QA
+    const orphanReviews = Object.keys(qaReviews).filter(id => !taskIdSet.has(id));
+    push("QA", "Orphaned QA reviews", orphanReviews.length ? "warn" : "pass", orphanReviews.length ? `${orphanReviews.length} review(s) reference a task that no longer exists.` : "No orphaned QA reviews.");
+
+    // Team
+    const emailCounts = {};
+    teamMembers.forEach(m => { if (m.email) emailCounts[m.email] = (emailCounts[m.email]||0)+1; });
+    const dupEmails = Object.values(emailCounts).filter(c=>c>1).length;
+    push("Team", "Duplicate member emails", dupEmails ? "warn" : "pass", dupEmails ? `${dupEmails} email address(es) used by more than one member.` : "No duplicate member emails.");
+    const memberIdSet = new Set(teamMembers.map(m=>m.id));
+    const badAssignee = tasks.filter(t => t.assigneeId && !memberIdSet.has(t.assigneeId));
+    const badReviewer = tasks.filter(t => t.reviewerId && !memberIdSet.has(t.reviewerId));
+    push("Team", "Task → assignee/reviewer references", (badAssignee.length+badReviewer.length) ? "warn" : "pass", (badAssignee.length+badReviewer.length) ? `${badAssignee.length} assignee + ${badReviewer.length} reviewer reference(s) point to a removed member.` : "All assignee/reviewer references resolve.");
+
+    // Workload
+    const zeroCapacity = teamMembers.filter(m => m.status === "Active" && (Number(m.capacity)||0) <= 0);
+    push("Workload", "Active members with zero capacity", zeroCapacity.length ? "warn" : "pass", zeroCapacity.length ? `${zeroCapacity.length} active member(s) have 0 task capacity, so they'll never receive auto-assignments.` : "All active members have usable capacity.");
+
+    // Notifications / Audit — informational size checks
+    push("Notifications", "Notification volume", notifications.length > 500 ? "warn" : "pass", `${notifications.length} notifications stored.`);
+    push("Audit", "Audit log size", auditEvents.length >= 2000 ? "warn" : "pass", `${auditEvents.length} / 2000 audit events (oldest entries drop off past the cap).`);
+
+    // Authentication / Permissions
+    push("Authentication", "Session present", session ? "pass" : "fail", session ? `Signed in as ${currentUserEmail}.` : "No active session.");
+    push("Permissions", "Recognized role", ["Admin","Team Lead","Reviewer","Annotator"].includes(currentUserRole) ? "pass" : "warn", `Current role: ${currentUserRole || "unset"}.`);
+
+    // Cloud storage
+    const base64Count = tasks.filter(t => t.image && t.image.startsWith("data:")).length;
+    push("Cloud Storage", "Images not yet migrated", base64Count ? "warn" : "pass", base64Count ? `${base64Count} task image(s) are still stored inline (base64) instead of Supabase Storage.` : "All task images are in Supabase Storage.");
+
+    // Performance & Scalability (Build 44)
+    push("Performance", "Task volume", tasks.length > 5000 ? "warn" : "pass", `${tasks.length.toLocaleString()} tasks in memory. Paginated views (Import, Audit Trail, Notifications) stay fast at any size; unpaginated dashboards and filters may slow down past ~5,000.`);
+    push("Performance", "Audit log volume", auditEvents.length >= 1800 ? "warn" : "pass", `${auditEvents.length.toLocaleString()} / 2,000 audit events. Nearing the cap means older history is about to start dropping off.`);
+    const largeAnnotationTasks = Object.values(annotationsByTask).filter(l => (l||[]).length > 150).length;
+    push("Performance", "Very dense annotation sets", largeAnnotationTasks ? "warn" : "pass", largeAnnotationTasks ? `${largeAnnotationTasks} task(s) have 150+ regions — canvas panning/dragging may feel slower on those specific images.` : "No unusually dense annotation sets.");
+
+    logAudit("Health Check Run", null, null, `${results.filter(r=>r.status==="fail").length} failing, ${results.filter(r=>r.status==="warn").length} warnings, ${results.filter(r=>r.status==="pass").length} passing.`, currentUserName, "Admin");
+    return results;
+  }
+
+  // ---- Build 39: Global Search & Command Center ----
+  function labelNameFor(labelId) {
+    for (const cfg of Object.values(projectConfigs)) {
+      const l = (cfg.labels || []).find(x => x.id === labelId);
+      if (l) return l.name;
+    }
+    return labelId;
+  }
+
+  function getSearchResults(query) {
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return null;
+    const match = (s) => (s || "").toLowerCase().includes(q);
+    const projectResults = projectGroups.filter(g => match(g.name) || match(g.description)).slice(0, 6)
+      .map(g => ({ type: "project", id: g.id, title: g.name, subtitle: `Project · ${g.status}`, icon: FolderKanban }));
+    const taskResults = tasks.filter(t => match(t.name)).slice(0, 6)
+      .map(t => ({ type: "task", id: t.id, projectId: t.projectId, title: t.name, subtitle: `Task · ${t.status}`, icon: ImageIcon }));
+    const userResults = teamMembers.filter(m => match(m.name) || match(m.email)).slice(0, 6)
+      .map(m => ({ type: "user", id: m.id, title: m.name, subtitle: `${m.role} · ${m.email}`, icon: Users }));
+    const datasetResults = datasets.filter(d => match(d.name)).slice(0, 6)
+      .map(d => ({ type: "dataset", id: d.id, title: d.name, subtitle: `Dataset · v${d.version || 1}`, icon: Database }));
+    const reviewResults = Object.entries(qaReviews).filter(([taskId, r]) => { const t = tasks.find(x => x.id === taskId); return match(t?.name) || match(r.reviewer) || match(r.decision); }).slice(0, 6)
+      .map(([taskId, r]) => { const t = tasks.find(x => x.id === taskId); return { type: "review", id: taskId, projectId: t?.projectId, title: `Review: ${t?.name || taskId}`, subtitle: `${r.decision || "Pending"} · ${r.reviewer || "Unassigned"}`, icon: ClipboardCheck }; });
+    const annotationResults = [];
+    outer: for (const [taskId, list] of Object.entries(annotationsByTask)) {
+      for (const a of (list || [])) {
+        const name = labelNameFor(a.labelId);
+        if (match(name)) {
+          const t = tasks.find(x => x.id === taskId);
+          annotationResults.push({ type: "annotation", id: `${taskId}-${a.id}`, taskId, projectId: t?.projectId, title: `${name} — in ${t?.name || taskId}`, subtitle: "Annotation", icon: Brush });
+          if (annotationResults.length >= 6) break outer;
+        }
+      }
+    }
+    const auditResults = auditEvents.filter(e => match(e.action) || match(e.details) || match(e.actor)).slice(0, 6)
+      .map(e => ({ type: "audit", id: e.id, title: e.action, subtitle: `${e.actor} · ${timeAgo(e.timestamp)}`, icon: FileText }));
+    const notificationResults = notifications.filter(n => match(n.title) || match(n.message)).slice(0, 6)
+      .map(n => ({ type: "notification", id: n.id, title: n.title, subtitle: n.message, icon: Bell }));
+    return { project: projectResults, task: taskResults, user: userResults, dataset: datasetResults, review: reviewResults, annotation: annotationResults, audit: auditResults, notification: notificationResults };
+  }
+
+  const quickActions = [
+    { type: "action", id: "create-project", title: "Create Project", subtitle: "Quick action", icon: Plus, run: () => { navigate("Projects"); openCreateGroup(); } },
+    { type: "action", id: "start-annotating", title: "Start Annotating", subtitle: "Quick action", icon: Play, run: () => openWorkstation(null, "Annotation") },
+    { type: "action", id: "pending-reviews", title: "Pending Reviews", subtitle: "Quick action", icon: ClipboardCheck, run: () => openWorkstation(null, "Review") },
+    { type: "action", id: "task-planner", title: "Task Planner", subtitle: "Quick action", icon: Target, run: () => navigate("Task Planner") },
+    { type: "action", id: "deadlines", title: "Deadlines", subtitle: "Quick action", icon: Calendar, run: () => navigate("Deadlines") },
+    { type: "action", id: "qa-quality", title: "QA & Quality", subtitle: "Quick action", icon: ShieldCheck, run: () => navigate("QA & Quality") },
+    { type: "action", id: "reports", title: "Reports", subtitle: "Quick action", icon: TrendingUp, run: () => navigate("Reports") },
+    { type: "action", id: "analytics", title: "Analytics", subtitle: "Quick action", icon: BarChart3, run: () => navigate("Analytics") },
+    { type: "action", id: "workload", title: "Workload", subtitle: "Quick action", icon: Layers, run: () => navigate("Workload") },
+    { type: "action", id: "team", title: "Team", subtitle: "Quick action", icon: Users, run: () => navigate("Team") },
+    { type: "action", id: "audit-trail", title: "Audit Trail", subtitle: "Quick action", icon: FileText, run: () => navigate("Audit Trail") },
+    { type: "action", id: "settings", title: "Settings", subtitle: "Quick action", icon: Settings, run: () => navigate("Settings") }
+  ];
+
+  function recordRecentItem(item) {
+    if (item.type === "action") return;
+    const entry = { type: item.type, id: item.id, title: item.title, subtitle: item.subtitle, projectId: item.projectId, taskId: item.taskId, visitedAt: new Date().toISOString() };
+    setRecentItems(prev => [entry, ...prev.filter(i => !(i.type === item.type && i.id === item.id))].slice(0, 12));
+  }
+  function isFavorite(item) { return favoriteItems.some(f => f.type === item.type && f.id === item.id); }
+  function toggleFavorite(item) {
+    setFavoriteItems(prev => isFavorite(item) ? prev.filter(f => !(f.type === item.type && f.id === item.id)) : [{ type: item.type, id: item.id, title: item.title, subtitle: item.subtitle, projectId: item.projectId, taskId: item.taskId }, ...prev].slice(0, 30));
+  }
+  function openSearchResult(item) {
+    if (item.type === "action") { item.run(); setCommandOpen(false); return; }
+    recordRecentItem(item);
+    setCommandOpen(false);
+    switch (item.type) {
+      case "project": navigate("Projects"); break;
+      case "task": openWorkstation(item.projectId, "Annotation", item.id); break;
+      case "annotation": openWorkstation(item.projectId, "Annotation", item.taskId); break;
+      case "user": navigate("Team"); break;
+      case "dataset": navigate("Projects"); break;
+      case "review": { const t = tasks.find(x => x.id === item.id); openWorkstation(t?.projectId, "Review", item.id); break; }
+      case "audit": navigate("Audit Trail"); break;
+      case "notification": navigate("Notifications"); break;
+      default: break;
+    }
+  }
+
+  function openCreateProject(groupId) {
+    setEditingProjectId(null);
+    setProjectForm(groupId ? { ...emptyProject, groupId } : emptyProject);
+    setProjectModalOpen(true);
+  }
+
+  function openEditProject(p) {
+    setEditingProjectId(p.id);
+    setProjectForm({ ...emptyProject, ...p });
+    setProjectModalOpen(true);
+  }
+
+  function saveProject(e) {
+    e.preventDefault();
+    if (!projectForm.name.trim() || !projectForm.client.trim()) return;
+    const total = Math.max(1, Number(projectForm.totalImages) || 1);
+    const completed = Math.min(total, Math.max(0, Number(projectForm.completedImages) || 0));
+    const next = { ...projectForm, totalImages: total, completedImages: completed };
+    if (editingProjectId) {
+      const updated = { ...(projects.find(p => p.id === editingProjectId) || {}), ...next, id: editingProjectId };
+      setProjects(prev => prev.map(p => p.id === editingProjectId ? { ...p, ...next } : p));
+      syncUpsert("projects", projectToRow(updated));
+    } else {
+      const created = { ...next, id: `p-${Date.now()}` };
+      setProjects(prev => [...prev, created]);
+      syncUpsert("projects", projectToRow(created));
+    }
+    setProjectModalOpen(false);
+  }
+
+
+  function deleteProject(id) {
+    const orphanedTasks = tasks.filter(t => t.projectId === id);
+    const confirmMsg = orphanedTasks.length
+      ? `Delete this project? Its ${orphanedTasks.length} task${orphanedTasks.length===1?"":"s"} will be deleted too — this can't be undone.`
+      : "Delete this project?";
+    if (!window.confirm(confirmMsg)) return;
+    const removedIdSet = new Set(orphanedTasks.map(t => t.id));
+    setProjects(prev => prev.filter(p => p.id !== id));
+    setTasks(prev => prev.filter(t => t.projectId !== id));
+    setAnnotationsByTask(prev => Object.fromEntries(Object.entries(prev).filter(([tid]) => !removedIdSet.has(tid))));
+    setQaReviews(prev => Object.fromEntries(Object.entries(prev).filter(([tid]) => !removedIdSet.has(tid))));
+    syncDelete("projects", id);
+    if (session) orphanedTasks.forEach(t => syncDelete("tasks", t.id));
+    if (workspaceProject === id) setWorkspaceProject(projects.find(p => p.id !== id)?.id || "");
+  }
+
+  function pushHistory(nextAnnotations) {
+    setHistory(prev => [...prev, currentAnnotations]);
+    setFuture([]);
+    setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: nextAnnotations }));
+  }
+
+  function updateCurrentAnnotations(next) {
+    setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: next }));
+  }
+
+  function undo() {
+    if (!history.length) return;
+    const previous = history[history.length - 1];
+    setFuture(prev => [currentAnnotations, ...prev]);
+    setHistory(prev => prev.slice(0, -1));
+    updateCurrentAnnotations(previous);
+    setSelectedAnnotationId(null);
+  }
+
+  function redo() {
+    if (!future.length) return;
+    const next = future[0];
+    setHistory(prev => [...prev, currentAnnotations]);
+    setFuture(prev => prev.slice(1));
+    updateCurrentAnnotations(next);
+  }
+
+  function selectAnnotation(id, shiftKey = false) {
+    if (shiftKey) {
+      if (id === selectedAnnotationId) {
+        const [next, ...rest] = additionalSelectedIds;
+        setSelectedAnnotationId(next || null);
+        setAdditionalSelectedIds(rest);
+      } else if (additionalSelectedIds.includes(id)) {
+        setAdditionalSelectedIds(prev => prev.filter(x => x !== id));
+      } else if (selectedAnnotationId) {
+        setAdditionalSelectedIds(prev => [...prev, id]);
+      } else {
+        setSelectedAnnotationId(id);
+      }
+    } else {
+      setSelectedAnnotationId(id);
+      setAdditionalSelectedIds([]);
+    }
+    setTool("select");
+  }
+
+  function annotationBounds(a) {
+    if (a.type === "rectangle") return { minX: a.x, minY: a.y, maxX: a.x + a.w, maxY: a.y + a.h };
+    if (a.points?.length) {
+      const xs = a.points.map(p => p.x), ys = a.points.map(p => p.y);
+      return { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) };
+    }
+    return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  }
+
+  function copySelection() {
+    if (!selectedIds.length) return;
+    clipboardRef.current = selectedIds.map(id => currentAnnotations.find(a => a.id === id)).filter(Boolean).map(a => JSON.parse(JSON.stringify(a)));
+    setWorkspaceMessage(`Copied ${clipboardRef.current.length} object${clipboardRef.current.length > 1 ? "s" : ""}`);
+    setTimeout(() => setWorkspaceMessage(""), 1600);
+  }
+
+  function pasteClipboard() {
+    if (!clipboardRef.current.length) return;
+    const copies = clipboardRef.current.map((a, i) => ({
+      ...a,
+      id: `${a.type}-${Date.now()}-${i}`,
+      x: a.x == null ? a.x : Math.min(94, a.x + 3),
+      y: a.y == null ? a.y : Math.min(94, a.y + 3),
+      points: a.points?.map(p => ({ x: Math.min(96, p.x + 3), y: Math.min(96, p.y + 3) }))
+    }));
+    pushHistory([...currentAnnotations, ...copies]);
+    setSelectedAnnotationId(copies[0]?.id || null);
+    setAdditionalSelectedIds(copies.slice(1).map(c => c.id));
+  }
+
+  function eraseAt(point) {
+    if (!currentTask) return;
+    const ERASE_RADIUS = 3;
+    setAnnotationsByTask(prev => {
+      const list = prev[currentTask.id] || [];
+      const next = list
+        .map(a => {
+          if (a.type !== "brush" || a.locked) return a;
+          const points = a.points.filter(p => distance(p, point) > ERASE_RADIUS);
+          return points.length >= 2 ? { ...a, points } : null;
+        })
+        .filter(Boolean);
+      return { ...prev, [currentTask.id]: next };
+    });
+  }
+
+  function selectAll() {
+    if (!currentAnnotations.length) return;
+    setSelectedAnnotationId(currentAnnotations[0].id);
+    setAdditionalSelectedIds(currentAnnotations.slice(1).map(a => a.id));
+  }
+
+  function deleteSelected() {
+    if (!selectedIds.length) return;
+    const targets = selectedIds.map(id => currentAnnotations.find(a => a.id === id)).filter(Boolean);
+    const lockedCount = targets.filter(a => a.locked).length;
+    if (lockedCount === targets.length) {
+      setWorkspaceMessage("These objects are locked — unlock them first");
+      setTimeout(() => setWorkspaceMessage(""), 2000);
+      return;
+    }
+    const removeIds = new Set(targets.filter(a => !a.locked).map(a => a.id));
+    const next = currentAnnotations.filter(a => !removeIds.has(a.id));
+    pushHistory(next);
+    setSelectedAnnotationId(null);
+    setAdditionalSelectedIds([]);
+    if (lockedCount) { setWorkspaceMessage(`${lockedCount} locked object${lockedCount>1?"s were":" was"} skipped`); setTimeout(() => setWorkspaceMessage(""), 2000); }
+  }
+
+  function duplicateSelected() {
+    if (!selectedIds.length) return;
+    const items = selectedIds.map(id => currentAnnotations.find(a => a.id === id)).filter(Boolean);
+    if (!items.length) return;
+    const copies = items.map((item, i) => ({
+      ...item,
+      id: `${item.type}-${Date.now()}-${i}`,
+      x: item.x == null ? item.x : Math.min(94, item.x + 3),
+      y: item.y == null ? item.y : Math.min(94, item.y + 3),
+      points: item.points?.map(p => ({ x: Math.min(96, p.x + 3), y: Math.min(96, p.y + 3) }))
+    }));
+    pushHistory([...currentAnnotations, ...copies]);
+    setSelectedAnnotationId(copies[0]?.id || null);
+    setAdditionalSelectedIds(copies.slice(1).map(c => c.id));
+  }
+
+  function updateAnnotation(id, patch) {
+    updateCurrentAnnotations(currentAnnotations.map(a => a.id === id ? { ...a, ...patch } : a));
+  }
+
+  function toggleAnnotationLock(id) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item) return;
+    pushHistory(currentAnnotations.map(a => a.id === id ? { ...a, locked: !a.locked } : a));
+  }
+
+  function toggleAnnotationVisible(id) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item) return;
+    pushHistory(currentAnnotations.map(a => a.id === id ? { ...a, hidden: !a.hidden } : a));
+  }
+
+  function moveAnnotationOrder(id, delta) {
+    const index = currentAnnotations.findIndex(a => a.id === id);
+    const target = index + delta;
+    if (index < 0 || target < 0 || target >= currentAnnotations.length) return;
+    const next = [...currentAnnotations];
+    [next[index], next[target]] = [next[target], next[index]];
+    pushHistory(next);
+  }
+
+  function insertVertex(id, afterIndex) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item?.points?.length) return;
+    const points = item.points;
+    const a = points[afterIndex];
+    const b = points[(afterIndex + 1) % points.length];
+    if (!b) return;
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    const nextPoints = [...points.slice(0, afterIndex + 1), mid, ...points.slice(afterIndex + 1)];
+    pushHistory(currentAnnotations.map(x => x.id === id ? { ...x, points: nextPoints } : x));
+  }
+
+  function deleteVertex(id, vertexIndex) {
+    const item = currentAnnotations.find(a => a.id === id);
+    if (!item?.points?.length) return;
+    const minPoints = item.type === "polygon" ? 3 : 2;
+    if (item.points.length <= minPoints) {
+      setWorkspaceMessage(`A ${item.type} needs at least ${minPoints} points`);
+      setTimeout(() => setWorkspaceMessage(""), 2000);
+      return;
+    }
+    const nextPoints = item.points.filter((_, i) => i !== vertexIndex);
+    pushHistory(currentAnnotations.map(x => x.id === id ? { ...x, points: nextPoints } : x));
+  }
+
+  function imagePoint(e) {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100)),
+      y: Math.max(0, Math.min(100, ((e.clientY - rect.top) / rect.height) * 100))
+    };
+  }
+
+  function onCanvasPointerDown(e) {
+    if (tool === "select") {
+      const hit = [...currentAnnotations].reverse().find(a => hitTest(a, imagePoint(e)));
+      if (hit) { selectAnnotation(hit.id, e.shiftKey); return; }
+      if (!e.shiftKey) { setSelectedAnnotationId(null); setAdditionalSelectedIds([]); }
+      const point = imagePoint(e);
+      setMarquee({ start: point, current: point, additive: e.shiftKey });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    if (tool === "pan") {
+      panStart.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    if (tool === "eraser") {
+      setHistory(prev => [...prev, currentAnnotations]);
+      setFuture([]);
+      setDrawing({ type: "eraser" });
+      eraseAt(imagePoint(e));
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    const point = imagePoint(e);
+    if (tool === "keypoint") {
+      const annotation = { id: `keypoint-${Date.now()}`, type: "keypoint", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: [point] };
+      pushHistory([...currentAnnotations, annotation]);
+      setSelectedAnnotationId(annotation.id);
+      return;
+    }
+    if (tool === "polygon" || tool === "polyline") {
+      if (drawing?.type === tool) {
+        const points = [...drawing.points, point];
+        if (tool === "polygon" && points.length >= 3 && distance(points[0], point) < 2.5) {
+          const annotation = { id: `${tool}-${Date.now()}`, type: tool, labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: points.slice(0, -1) };
+          pushHistory([...currentAnnotations, annotation]);
+          setSelectedAnnotationId(annotation.id);
+          setDrawing(null);
+        } else {
+          setDrawing({ ...drawing, points });
+        }
+      } else {
+        setDrawing({ type: tool, points: [point] });
+      }
+      return;
+    }
+    if (tool === "brush") {
+      setDrawing({ type: "brush", points: [point] });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+      return;
+    }
+    if (tool === "rectangle" || tool === "line") {
+      setDrawing({ type: tool, start: point, current: point });
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    }
+  }
+
+  function finishPathDrawing() {
+    if (!drawing || !["polygon", "polyline"].includes(drawing.type)) return;
+    const minPoints = drawing.type === "polygon" ? 3 : 2;
+    if (drawing.points.length < minPoints) { setDrawing(null); return; }
+    const annotation = { id: `${drawing.type}-${Date.now()}`, type: drawing.type, labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: drawing.points };
+    pushHistory([...currentAnnotations, annotation]);
+    setSelectedAnnotationId(annotation.id);
+    setDrawing(null);
+  }
+
+  function onCanvasDoubleClick(e) {
+    e.preventDefault();
+    if (drawing && ["polygon", "polyline"].includes(drawing.type)) finishPathDrawing();
+  }
+
+  function onCanvasPointerMove(e) {
+    if (panStart.current && tool === "pan") {
+      setPan({ x: panStart.current.px + (e.clientX - panStart.current.x), y: panStart.current.py + (e.clientY - panStart.current.y) });
+      return;
+    }
+    if (marquee) {
+      setMarquee(prev => ({ ...prev, current: imagePoint(e) }));
+      return;
+    }
+    if (editRef.current) {
+      const edit = editRef.current;
+      const rect = canvasRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const dx = ((e.clientX - edit.startClientX) / rect.width) * 100;
+      const dy = ((e.clientY - edit.startClientY) / rect.height) * 100;
+      if (edit.mode === "rotate") {
+        const a = edit.originals[0];
+        const cx = a.type === "rectangle" ? a.x + a.w / 2 : a.points.reduce((s,p)=>s+p.x,0)/a.points.length;
+        const cy = a.type === "rectangle" ? a.y + a.h / 2 : a.points.reduce((s,p)=>s+p.y,0)/a.points.length;
+        const cxPx = rect.left + (cx / 100) * rect.width, cyPx = rect.top + (cy / 100) * rect.height;
+        const angle = Math.atan2(e.clientY - cyPx, e.clientX - cxPx) * 180 / Math.PI + 90;
+        const next = { ...a, rotation: Math.round(angle) };
+        setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(item => item.id === a.id ? next : item) }));
+        return;
+      }
+      const updates = {};
+      edit.originals.forEach(a => {
+        let next = { ...a };
+        if (a.type === "rectangle") {
+          if (edit.mode === "move") {
+            next.x = Math.max(0, Math.min(100 - a.w, a.x + dx));
+            next.y = Math.max(0, Math.min(100 - a.h, a.y + dy));
+          } else {
+            const minSize = 1.2;
+            let left = a.x, top = a.y, right = a.x + a.w, bottom = a.y + a.h;
+            if (edit.mode.includes("w")) left = Math.min(right - minSize, Math.max(0, a.x + dx));
+            if (edit.mode.includes("e")) right = Math.max(left + minSize, Math.min(100, a.x + a.w + dx));
+            if (edit.mode.includes("n")) top = Math.min(bottom - minSize, Math.max(0, a.y + dy));
+            if (edit.mode.includes("s")) bottom = Math.max(top + minSize, Math.min(100, a.y + a.h + dy));
+            next = { ...a, x: left, y: top, w: right - left, h: bottom - top };
+          }
+        } else if (a.points?.length) {
+          if (edit.mode.startsWith("vertex:")) {
+            const vi = Number(edit.mode.split(":")[1]);
+            next.points = a.points.map((p, i) => i === vi
+              ? { x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }
+              : p);
+          } else {
+            next.points = a.points.map(p => ({ x: Math.max(0, Math.min(100, p.x + dx)), y: Math.max(0, Math.min(100, p.y + dy)) }));
+          }
+        }
+        updates[a.id] = next;
+      });
+      setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(item => updates[item.id] || item) }));
+      return;
+    }
+    if (drawing && drawing.type === "eraser") {
+      eraseAt(imagePoint(e));
+      return;
+    }
+    if (drawing && drawing.type === "brush") {
+      const point = imagePoint(e);
+      setDrawing(prev => ({ ...prev, points: [...prev.points, point] }));
+      return;
+    }
+    if (drawing && (drawing.type === "rectangle" || drawing.type === "line")) {
+      setDrawing(prev => ({ ...prev, current: imagePoint(e) }));
+    }
+  }
+
+  function onCanvasPointerUp() {
+    if (panStart.current) { panStart.current = null; return; }
+    if (marquee) {
+      const { start, current, additive } = marquee;
+      const minX = Math.min(start.x, current.x), maxX = Math.max(start.x, current.x);
+      const minY = Math.min(start.y, current.y), maxY = Math.max(start.y, current.y);
+      setMarquee(null);
+      if (maxX - minX < 0.6 && maxY - minY < 0.6) return;
+      const hits = currentAnnotations.filter(a => {
+        const b = annotationBounds(a);
+        return b.minX <= maxX && b.maxX >= minX && b.minY <= maxY && b.maxY >= minY;
+      }).map(a => a.id);
+      if (!hits.length) return;
+      if (additive) {
+        setAdditionalSelectedIds(prev => [...new Set([...prev, ...hits.filter(id=>id!==selectedAnnotationId)])]);
+        if (!selectedAnnotationId) setSelectedAnnotationId(hits[0]);
+      } else {
+        setSelectedAnnotationId(hits[0]);
+        setAdditionalSelectedIds(hits.slice(1));
+      }
+      return;
+    }
+    if (editRef.current) {
+      const { originals } = editRef.current;
+      const changedModelIds = originals.filter(o => {
+        if (o.source !== "model" || o.corrected) return false;
+        const live = currentAnnotations.find(a => a.id === o.id);
+        if (!live) return false;
+        const key = (a) => JSON.stringify({ x: a.x, y: a.y, w: a.w, h: a.h, points: a.points, labelId: a.labelId });
+        return key(live) !== key(o);
+      }).map(o => o.id);
+      if (changedModelIds.length && currentTask) {
+        setAnnotationsByTask(prev => ({ ...prev, [currentTask.id]: (prev[currentTask.id] || []).map(a => changedModelIds.includes(a.id) ? { ...a, corrected: true } : a) }));
+      }
+      editRef.current = null;
+      return;
+    }
+    if (drawing && drawing.type === "eraser") { setDrawing(null); return; }
+    if (!drawing) return;
+    if (drawing.type === "brush") {
+      if (drawing.points.length >= 2) {
+        const annotation = { id: `brush-${Date.now()}`, type: "brush", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: drawing.points };
+        pushHistory([...currentAnnotations, annotation]);
+        setSelectedAnnotationId(annotation.id);
+      }
+      setDrawing(null);
+      return;
+    }
+    if (!["rectangle", "line"].includes(drawing.type)) return;
+    const s = drawing.start, c = drawing.current;
+    if (Math.abs(c.x - s.x) < 1.2 || Math.abs(c.y - s.y) < 1.2) { setDrawing(null); return; }
+    const annotation = drawing.type === "rectangle"
+      ? { id: `box-${Date.now()}`, type: "rectangle", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", x: Math.min(s.x, c.x), y: Math.min(s.y, c.y), w: Math.abs(c.x - s.x), h: Math.abs(c.y - s.y) }
+      : { id: `line-${Date.now()}`, type: "line", labelId: selectedLabel, color: currentLabel?.color || "#2563eb", points: [s, c] };
+    pushHistory([...currentAnnotations, annotation]);
+    setSelectedAnnotationId(annotation.id);
+    setDrawing(null);
+  }
+
+  function startAnnotationEdit(id, e, mode = "move") {
+    e.stopPropagation();
+    const original = currentAnnotations.find(a => a.id === id);
+    if (!original) return;
+    const isBatchMove = mode === "move" && selectedIds.includes(id) && selectedIds.length > 1;
+    if (!isBatchMove) selectAnnotation(id, e.shiftKey);
+    setTool("select");
+    if (original.locked && !isBatchMove) return;
+    const targetIds = isBatchMove ? selectedIds : [id];
+    const originals = targetIds
+      .map(tid => currentAnnotations.find(a => a.id === tid))
+      .filter(a => a && !a.locked)
+      .map(a => JSON.parse(JSON.stringify(a)));
+    if (!originals.length) return;
+    editRef.current = { mode, originals, startClientX: e.clientX, startClientY: e.clientY };
+    setHistory(prev => [...prev, currentAnnotations]);
+    setFuture([]);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  }
+
+  function hitTest(a, p) {
+    if (a.type === "rectangle") return p.x >= a.x && p.x <= a.x + a.w && p.y >= a.y && p.y <= a.y + a.h;
+    if (a.points?.length) {
+      if (a.type === "keypoint") return distance(a.points[0], p) <= 3;
+      const xs = a.points.map(v => v.x), ys = a.points.map(v => v.y);
+      return p.x >= Math.min(...xs) - 2 && p.x <= Math.max(...xs) + 2 && p.y >= Math.min(...ys) - 2 && p.y <= Math.max(...ys) + 2;
+    }
+    return false;
+  }
+
+  function distance(a, b) {
+    return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2);
+  }
+
+  function resetView() {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }
+
+  function changeTask(delta) {
+    setDrawing(null);
+    setSelectedAnnotationId(null);
+    setSelectedTaskIndex(i => Math.max(0, Math.min(tasks.length - 1, i + delta)));
+    resetView();
+    setQaCriteriaScores({});
+    setQaErrors([]);
+  }
+
+  function logAudit(action, taskId=null, projectId=null, details="", actor=currentUserName, actorRole="Team Lead") {
+    const event = { id:`audit-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, action, actor, actorRole, projectId:projectId || tasks.find(t=>t.id===taskId)?.projectId || workspaceProject, taskId, details, timestamp:new Date().toISOString() };
+    setAuditEvents(prev => [event, ...prev].slice(0, 2000));
+    if (session) {
+      supabase.from("audit_events").insert({
+        id: event.id, action: event.action, actor: event.actor, actor_role: event.actorRole,
+        project_id: event.projectId, task_id: event.taskId, details: event.details, timestamp: event.timestamp
+      }).then(({ error }) => { if (error) console.warn("[Realtime] audit sync failed:", error.message); });
+    }
+  }
+
+  function pushNotification(type, title, message, projectId=null, taskId=null) {
+    const note = { id:`notif-${Date.now()}-${Math.random().toString(36).slice(2,7)}`, type, title, message, read:false, projectId, taskId, createdAt:new Date().toISOString() };
+    setNotifications(prev => [note, ...prev]);
+    if (session) {
+      supabase.from("notifications").insert({
+        id: note.id, type: note.type, title: note.title, message: note.message, read: false,
+        project_id: note.projectId, task_id: note.taskId, created_at: note.createdAt
+      }).then(({ error }) => { if (error) console.warn("[Realtime] notification sync failed:", error.message); });
+    }
+  }
+
+  function saveTask() {
+    if (!currentTask) return;
+    const nextStatus = currentAnnotations.length ? "In Progress" : currentTask.status;
+    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: nextStatus } : t));
+    if (nextStatus !== currentTask.status) syncUpdate("tasks", currentTask.id, { status: nextStatus });
+    logAudit("Annotation Saved", currentTask.id, currentTask.projectId, `${currentAnnotations.length} annotation${currentAnnotations.length===1?"":"s"} saved.`);
+    setWorkspaceMessage("Task saved");
+    setTimeout(() => setWorkspaceMessage(""), 1800);
+  }
+
+  function submitTask() {
+    if (!currentTask) return;
+    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: "Submitted" } : t));
+    syncUpdate("tasks", currentTask.id, { status: "Submitted" });
+    logAudit("Task Submitted", currentTask.id, currentTask.projectId, "Task submitted for QA review.");
+    fireWebhooks("task.submitted", { taskId: currentTask.id, taskName: currentTask.name, projectId: currentTask.projectId });
+    setWorkspaceMessage("Task submitted for QA review");
+    setTimeout(() => setWorkspaceMessage(""), 1800);
+  }
+
+  function skipTask() {
+    if (!currentTask) return;
+    logAudit("Task Skipped", currentTask.id, currentTask.projectId, "Annotator skipped this task.");
+    setWorkspaceMessage("Task skipped");
+    setTimeout(() => setWorkspaceMessage(""), 1600);
+    changeTask(1);
+  }
+
+  function openWorkstation(projectId, mode = "Annotation", taskId = null) {
+    if (projectId) setWorkspaceProject(projectId);
+    const idx = taskId ? tasks.findIndex(t => t.id === taskId) : tasks.findIndex(t => !projectId || t.projectId === projectId);
+    if (idx >= 0) setSelectedTaskIndex(idx);
+    setWorkstationMode(mode);
+    setSelectedAnnotationId(null);
+    setDrawing(null);
+    resetView();
+    setQaCriteriaScores({});
+    setQaErrors([]);
+    navigate("Annotation Workspace");
+  }
+
+  // Review decisions issued from inside the workstation (same layout as annotation).
+  function reviewCurrentTask(decision) {
+    if (!currentTask) return;
+    const now = new Date().toISOString();
+    const existing = qaReviews[currentTask.id];
+    const annotationCount = (annotationsByTask[currentTask.id] || []).length;
+    const groupConfig = getGroupConfig(getGroupIdForTask(currentTask));
+    const criteria = groupConfig.qaCriteria || [];
+    const hasScorecardInput = criteria.length && Object.keys(qaCriteriaScores).length;
+    const computedScore = hasScorecardInput ? weightedQaScore(criteria, qaCriteriaScores) : Number(existing?.score ?? qaScore ?? 96);
+    const review = {
+      decision,
+      score: computedScore,
+      reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "",
+      comment: (qaComment || "").trim(),
+      reviewer: currentUserName,
+      reviewedAt: now,
+      annotationCount,
+      criteriaScores: hasScorecardInput ? { ...qaCriteriaScores } : (existing?.criteriaScores || {}),
+      errors: qaErrors.length ? qaErrors : (existing?.errors || []),
+      history: [
+        ...(existing?.history || []),
+        { decision, score: computedScore, reason: decision === "Rejected" ? (qaReason || "Incorrect label") : "", comment: (qaComment || "").trim(), reviewer: currentUserName, reviewedAt: now }
+      ]
+    };
+    setQaReviews(prev => ({ ...prev, [currentTask.id]: review }));
+    const nextStatus = decision === "Approved" ? "Approved" : "Rejected";
+    setTasks(prev => prev.map((t, i) => i === selectedTaskIndex ? { ...t, status: nextStatus } : t));
+    syncUpdate("tasks", currentTask.id, { status: nextStatus });
+    logAudit(`QA ${decision}`, currentTask.id, currentTask.projectId, `QA score ${review.score ?? "—"}${review.errors.length ? ` · ${review.errors.length} error${review.errors.length===1?"":"s"} logged` : ""}${review.comment ? ` · ${review.comment}` : ""}`, currentUserName, "Reviewer");
+    if (session) {
+      supabase.from("qa_reviews").upsert({
+        task_id: currentTask.id, decision: review.decision, score: review.score, reviewer: review.reviewer,
+        comment: review.comment, reason: review.reason, annotation_count: review.annotationCount,
+        criteria_scores: review.criteriaScores || {}, errors: review.errors || [],
+        history: review.history, reviewed_at: review.reviewedAt
+      }).then(({ error }) => { if (error) console.warn("[Realtime] QA review sync failed:", error.message); });
+    }
+    if (decision === "Rejected") {
+      pushNotification("qa", "QA Rejected", `${currentTask.name} was rejected by ${currentUserName}${review.reason ? ` — ${review.reason}` : ""}`, currentTask.projectId, currentTask.id);
+    }
+    fireWebhooks(decision === "Approved" ? "qa.approved" : "qa.rejected", { taskId: currentTask.id, taskName: currentTask.name, projectId: currentTask.projectId, score: review.score, reviewer: review.reviewer, reason: review.reason });
+    setQaCriteriaScores({});
+    setQaErrors([]);
+    setWorkspaceMessage(`${currentTask.name} ${decision.toLowerCase()}`);
+    setTimeout(() => setWorkspaceMessage(""), 1800);
+  }
+
+  async function importImages(files) {
+    const selectedFiles = Array.from(files || []).filter(file => file.type.startsWith("image/"));
+    if (!selectedFiles.length) return;
+    const targetDatasetId = importTargetDataset || datasets.find(d => d.projectId === workspaceProject)?.id || datasets[0]?.id;
+    const targetDataset = datasets.find(d => d.id === targetDatasetId);
+    const targetProjectId = targetDataset?.projectId || workspaceProject;
+    const existingNames = new Set(tasks.filter(t => t.datasetId === targetDatasetId).map(t => t.name));
+    const duplicateNames = selectedFiles.filter(f => existingNames.has(f.name)).map(f => f.name);
+    const newFiles = selectedFiles.filter(f => !existingNames.has(f.name));
+
+    const readAsDataUrl = file => new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = () => resolve(null);
+      reader.readAsDataURL(file);
+    });
+
+    const uploadFile = async file => {
+      const compressed = await compressImageBlob(file);
+      const path = `${targetProjectId || "unassigned"}/${targetDatasetId || "unassigned"}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${file.name}`;
+      const { error } = await supabase.storage.from("task-images").upload(path, compressed, { cacheControl: "3600", upsert: false });
+      if (error) {
+        console.warn("[Storage] upload failed, falling back to local base64:", error.message);
+        return { image: await readAsDataUrl(file), source: "Local upload (offline)" };
+      }
+      const { data } = supabase.storage.from("task-images").getPublicUrl(path);
+      return { image: data.publicUrl, source: "Cloud Storage" };
+    };
+
+    const buildTask = async file => {
+      const { image, source } = await uploadFile(file);
+      if (!image) return null;
+      return {
+        id: `upload-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name, status: "Pending", image, size: file.size,
+        source, projectId: targetProjectId, datasetId: targetDatasetId, createdAt: new Date().toISOString()
+      };
+    };
+
+    const next = (await Promise.all(newFiles.map(buildTask))).filter(Boolean);
+    if (next.length) {
+      const startIndex = tasks.length;
+      setTasks(prev => [...prev, ...next]);
+      setSelectedTaskIndex(startIndex);
+    }
+    setImageUploadOpen(false);
+    const skippedNote = duplicateNames.length ? `, skipped ${duplicateNames.length} duplicate${duplicateNames.length > 1 ? "s" : ""}` : "";
+    setDatasetToast(next.length ? `${next.length} image${next.length > 1 ? "s" : ""} imported${skippedNote}` : `No new images imported${skippedNote}`);
+    setTimeout(() => setDatasetToast(""), 2600);
+    if (next.length && !importTargetDataset) navigate("Annotation Workspace");
+    setImportTargetDataset(null);
+  }
+
+  function removeTask(id) {
+    const index = tasks.findIndex(t => t.id === id);
+    if (index < 0) return;
+    if (!window.confirm(`Remove ${tasks[index].name} from the dataset?`)) return;
+    setTasks(prev => prev.filter(t => t.id !== id));
+    setAnnotationsByTask(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setQaReviews(prev => { const next = { ...prev }; delete next[id]; return next; });
+    syncDelete("tasks", id);
+    setSelectedTaskIndex(prev => Math.max(0, Math.min(prev, tasks.length - 2)));
+    setDatasetToast("Image removed");
+    setTimeout(() => setDatasetToast(""), 1800);
+  }
+
+  function clearDataset(datasetId) {
+    const count = tasks.filter(t => t.datasetId === datasetId).length;
+    if (!count) return;
+    if (!window.confirm(`Remove all ${count} image${count>1?"s":""} in this dataset?`)) return;
+    const removedIds = tasks.filter(t => t.datasetId === datasetId).map(t => t.id);
+    const removedIdSet = new Set(removedIds);
+    setTasks(prev => prev.filter(t => t.datasetId !== datasetId));
+    setAnnotationsByTask(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !removedIdSet.has(id))));
+    setQaReviews(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !removedIdSet.has(id))));
+    if (session) removedIds.forEach(id => syncDelete("tasks", id));
+    setSelectedTaskIndex(0);
+    setDatasetToast("Dataset images cleared");
+    setTimeout(() => setDatasetToast(""), 1800);
+  }
+
+  function updateTaskStatus(id, status) {
+    setTasks(prev => prev.map(t => t.id === id ? { ...t, status } : t));
+    if (session) {
+      supabase.from("tasks").update({ status }).eq("id", id).then(({ error }) => {
+        if (error) console.warn("[Realtime] task status sync failed:", error.message);
+      });
+    }
+  }
+
+  function exportTasksCsv() {
+    const rows = [
+      ["id", "name", "status", "image"],
+      ...tasks.map(t => [t.id, t.name, t.status, t.image])
+    ];
+    const csv = rows.map(row => row.map(v => `"${String(v ?? "").replaceAll('"','""')}"`).join(",")).join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "annotatepro-tasks.csv"; a.click();
+  }
+
+
+  const exportTasks = useMemo(() => {
+    const q = exportSearch.trim().toLowerCase();
+    return tasks.filter(task => {
+      const review = qaReviews[task.id];
+      const annotations = annotationsByTask[task.id] || [];
+        const matchesSearch = !q || `${task.name} ${task.id}`.toLowerCase().includes(q);
+      const matchesProject = exportProject === "All Projects" || (task.projectId || workspaceProject) === exportProject;
+      const matchesScope = exportScope === "All Tasks"
+        || (exportScope === "Annotated Only" && annotations.length > 0)
+        || (exportScope === "Completed Only" && ["Completed","Submitted","QA Review","Approved","Rejected"].includes(task.status))
+        || (exportScope === "QA Approved" && review?.decision === "Approved");
+      return matchesSearch && matchesProject && matchesScope;
+    });
+  }, [tasks, qaReviews, annotationsByTask, projects, workspaceProject, exportSearch, exportProject, exportScope]);
+
+  function downloadText(filename, content, type) {
+    const blob = new Blob([content], { type });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = filename; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  function csvEscape(value) {
+    return `"${String(value ?? "").replaceAll('"', '""')}"`;
+  }
+
+  function buildTaskCsv(list) {
+    const rows = [["task_id","task_name","status","annotation_count","qa_decision","qa_score","reviewer","image_source","created_at"]];
+    list.forEach(task => {
+      const review = qaReviews[task.id] || {};
+      rows.push([task.id, task.name, task.status, (annotationsByTask[task.id] || []).length, review.decision || "", review.score ?? "", review.reviewer || "", task.source || "Sample", task.createdAt || ""]);
+    });
+    return rows.map(row => row.map(csvEscape).join(",")).join("\n");
+  }
+
+  function buildAnnotationCsv(list) {
+    const rows = [["task_id","task_name","annotation_id","label_id","type","x","y","width","height","points","color"]];
+    list.forEach(task => {
+      (annotationsByTask[task.id] || []).forEach(a => {
+        const xs = (a.points || []).map(p => p.x);
+        const ys = (a.points || []).map(p => p.y);
+        const x = a.x ?? (xs.length ? Math.min(...xs) : "");
+        const y = a.y ?? (ys.length ? Math.min(...ys) : "");
+        rows.push([task.id, task.name, a.id, a.labelId || "", a.type, x, y, a.w ?? "", a.h ?? "", JSON.stringify(a.points || []), a.color || ""]);
+      });
+    });
+    return rows.map(row => row.map(csvEscape).join(",")).join("\n");
+  }
+
+  function buildCoco(list) {
+    const categories = [];
+    const categoryMap = new Map();
+    let nextCategory = 1;
+    const images = [];
+    const anns = [];
+    let nextAnn = 1;
+    list.forEach((task, imageIndex) => {
+      images.push({ id: imageIndex + 1, file_name: task.name, width: task.width || 1000, height: task.height || 1000 });
+      (annotationsByTask[task.id] || []).forEach(a => {
+        const label = a.labelId || "unlabeled";
+        if (!categoryMap.has(label)) {
+          categoryMap.set(label, nextCategory);
+          categories.push({ id: nextCategory, name: label });
+          nextCategory += 1;
+        }
+        if (a.type === "rectangle") {
+          const w = (a.w || 0) / 100 * (task.width || 1000);
+          const h = (a.h || 0) / 100 * (task.height || 1000);
+          const x = (a.x || 0) / 100 * (task.width || 1000);
+          const y = (a.y || 0) / 100 * (task.height || 1000);
+          anns.push({ id: nextAnn++, image_id: imageIndex + 1, category_id: categoryMap.get(label), bbox: [x,y,w,h], area: Math.max(0,w*h), iscrowd: 0 });
+        }
+      });
+    });
+    return JSON.stringify({ info: { description: "AnnotatePro COCO export", version: "5.0", exported_at: new Date().toISOString() }, images, annotations: anns, categories }, null, 2);
+  }
+
+  function buildYoloManifest(list) {
+    const lines = ["# AnnotatePro YOLO manifest", "# task | class | center_x | center_y | width | height (all normalized 0-1)"];
+    list.forEach(task => {
+      (annotationsByTask[task.id] || []).forEach(a => {
+        if (a.type !== "rectangle") return;
+        const cx = ((a.x || 0) + (a.w || 0) / 2) / 100;
+        const cy = ((a.y || 0) + (a.h || 0) / 2) / 100;
+        lines.push([task.name, a.labelId || "unlabeled", cx.toFixed(6), cy.toFixed(6), ((a.w||0)/100).toFixed(6), ((a.h||0)/100).toFixed(6)].join(" | "));
+      });
+    });
+    return lines.join("\n");
+  }
+
+  function performExport() {
+    const list = exportTasks;
+    if (!list.length) {
+      setExportMessage("No tasks match the selected export filters.");
+      setTimeout(() => setExportMessage(""), 2200);
+      return;
+    }
+    let filename = "annotatepro-export";
+    let content = "";
+    let type = "application/json;charset=utf-8";
+    if (exportFormat === "AnnotatePro JSON") {
+      filename += ".json";
+      content = JSON.stringify({ version: "5.0", exportedAt: new Date().toISOString(), project: exportProject, tasks: list, annotations: Object.fromEntries(list.map(t => [t.id, annotationsByTask[t.id] || []])), qaReviews: Object.fromEntries(list.map(t => [t.id, qaReviews[t.id] || null])) }, null, 2);
+    } else if (exportFormat === "Task CSV") {
+      filename += "-tasks.csv"; content = buildTaskCsv(list); type = "text/csv;charset=utf-8";
+    } else if (exportFormat === "Annotation CSV") {
+      filename += "-annotations.csv"; content = buildAnnotationCsv(list); type = "text/csv;charset=utf-8";
+    } else if (exportFormat === "COCO JSON") {
+      filename += "-coco.json"; content = buildCoco(list);
+    } else {
+      filename += "-yolo-manifest.txt"; content = buildYoloManifest(list); type = "text/plain;charset=utf-8";
+    }
+    downloadText(filename, content, type);
+    logAudit("Export Created", null, exportProject === "All Projects" ? null : exportProject, `${filename} exported with ${list.length} task${list.length===1?"":"s"}.`);
+    const entry = { id: Date.now(), format: exportFormat, scope: exportScope, tasks: list.length, annotations: list.reduce((n,t) => n + (annotationsByTask[t.id] || []).length, 0), at: new Date().toISOString() };
+    setExportHistory(prev => [entry, ...prev].slice(0, 12));
+    setExportMessage(`${exportFormat} exported successfully.`);
+    setTimeout(() => setExportMessage(""), 2200);
+  }
+
+  function clearExportHistory() {
+    setExportHistory([]);
+  }
+
+  const qaQueue = useMemo(() => {
+    const q = qaSearch.toLowerCase();
+    return tasks.filter(task => {
+      const review = qaReviews[task.id];
+      const reviewStatus = review?.decision || "Pending Review";
+      const matchesSearch = !q || `${task.name} ${task.id}`.toLowerCase().includes(q);
+      const matchesFilter = qaFilter === "All" || reviewStatus === qaFilter;
+      return matchesSearch && matchesFilter;
+    });
+  }, [tasks, qaReviews, qaSearch, qaFilter]);
+
+  const qaStats = useMemo(() => {
+    const reviews = tasks.map(t => qaReviews[t.id]).filter(Boolean);
+    const approved = reviews.filter(r => r.decision === "Approved").length;
+    const rejected = reviews.filter(r => r.decision === "Rejected").length;
+    const changes = reviews.filter(r => r.decision === "Changes Requested").length;
+    const pending = tasks.filter(t => !qaReviews[t.id]?.decision || qaReviews[t.id]?.decision === "Changes Requested").length;
+    const average = reviews.length ? Math.round(reviews.reduce((s, r) => s + Number(r.score || 0), 0) / reviews.length) : 0;
+    return { pending, approved, rejected, changes, average, reviewed: reviews.length };
+  }, [tasks, qaReviews]);
+
+  const qaSelectedTask = tasks.find(t => t.id === qaSelectedTaskId) || qaQueue[0] || tasks[0];
+  const qaSelectedAnnotations = qaSelectedTask ? (annotationsByTask[qaSelectedTask.id] || []) : [];
+  const qaSelectedReview = qaSelectedTask ? qaReviews[qaSelectedTask.id] : null;
+
+  function selectQaTask(id) {
+    setQaSelectedTaskId(id);
+    const review = qaReviews[id];
+    setQaScore(review?.score ?? 96);
+    setQaReason(review?.reason || "Incorrect label");
+    setQaComment(review?.comment || "");
+  }
+
+  function completeQaReview(decision) {
+    if (!qaSelectedTask) return;
+    const now = new Date().toISOString();
+    const review = {
+      decision,
+      score: Number(qaScore),
+      reason: decision === "Rejected" || decision === "Changes Requested" ? qaReason : "",
+      comment: qaComment.trim(),
+      reviewer: currentUserName,
+      reviewedAt: now,
+      annotationCount: qaSelectedAnnotations.length,
+      criteriaScores: qaSelectedReview?.criteriaScores || {},
+      errors: qaSelectedReview?.errors || [],
+      history: [
+        ...(qaSelectedReview?.history || []),
+        { decision, score: Number(qaScore), reason: decision === "Approved" ? "" : qaReason, comment: qaComment.trim(), reviewer: currentUserName, reviewedAt: now }
+      ]
+    };
+    setQaReviews(prev => ({ ...prev, [qaSelectedTask.id]: review }));
+    const nextStatus = decision === "Approved" ? "Approved" : decision === "Rejected" ? "Rejected" : "QA Review";
+    setTasks(prev => prev.map(t => t.id === qaSelectedTask.id ? { ...t, status: nextStatus } : t));
+    syncUpdate("tasks", qaSelectedTask.id, { status: nextStatus });
+    logAudit(`QA ${decision}`, qaSelectedTask.id, qaSelectedTask.projectId, `QA score ${qaScore}${qaComment.trim() ? ` · ${qaComment.trim()}` : ""}`, currentUserName, "Reviewer");
+    if (session) {
+      supabase.from("qa_reviews").upsert({
+        task_id: qaSelectedTask.id, decision: review.decision, score: review.score, reviewer: review.reviewer,
+        comment: review.comment, reason: review.reason, annotation_count: review.annotationCount,
+        criteria_scores: review.criteriaScores, errors: review.errors,
+        history: review.history, reviewed_at: review.reviewedAt
+      }).then(({ error }) => { if (error) console.warn("[Realtime] QA review sync failed:", error.message); });
+    }
+    if (decision === "Changes Requested" || decision === "Rejected") {
+      pushNotification("qa", `QA ${decision}`, `${qaSelectedTask.name} was ${decision.toLowerCase()} by ${currentUserName}${review.reason ? ` — ${review.reason}` : ""}`, qaSelectedTask.projectId, qaSelectedTask.id);
+    }
+    setQaMessage(`${qaSelectedTask.name} marked ${decision.toLowerCase()}`);
+    setTimeout(() => setQaMessage(""), 2200);
+  }
+
+  function handleImageError() {
+    setWorkspaceMessage("Sample image could not be loaded. Use Import Images to add local images.");
+  }
+
+  useEffect(() => {
+    function keydown(e) {
+      const tag = document.activeElement?.tagName;
+      if (["INPUT", "TEXTAREA", "SELECT"].includes(tag)) return;
+      if (e.key === "Delete" || e.key === "Backspace") deleteSelected();
+      else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); redo(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "z") { e.preventDefault(); undo(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "c") { e.preventDefault(); copySelection(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "v") { e.preventDefault(); pasteClipboard(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "a") { e.preventDefault(); selectAll(); }
+      else if (e.ctrlKey && e.key.toLowerCase() === "d") { e.preventDefault(); duplicateSelected(); }
+      else if (e.key === "Escape") { setDrawing(null); setSelectedAnnotationId(null); setAdditionalSelectedIds([]); }
+      else if (e.key.toLowerCase() === "v") setTool("select");
+      else if (e.key.toLowerCase() === "b") setTool("rectangle");
+      else if (e.key.toLowerCase() === "p") setTool("polygon");
+      else if (e.key.toLowerCase() === "l") setTool("line");
+      else if (e.key.toLowerCase() === "k") setTool("keypoint");
+      else if (e.key.toLowerCase() === "g") setTool("polyline");
+      else if (e.key.toLowerCase() === "r") setTool("brush");
+      else if (e.key.toLowerCase() === "e") setTool("eraser");
+      else if (e.key === "+" || e.key === "=") setZoom(z => Math.min(4, +(z + 0.1).toFixed(2)));
+      else if (e.key === "-") setZoom(z => Math.max(0.25, +(z - 0.1).toFixed(2)));
+      else if (e.key === "ArrowRight") changeTask(1);
+      else if (e.key === "ArrowLeft") changeTask(-1);
+      else if (e.key === " ") { e.preventDefault(); setTool("pan"); }
+      else {
+        const key = e.key.toLowerCase();
+        if (!RESERVED_SHORTCUTS.includes(key)) {
+          const match = labels.find(l => (l.shortcut || "").toLowerCase() === key);
+          if (match) setSelectedLabel(match.id);
+        }
+      }
+    }
+    window.addEventListener("keydown", keydown);
+    return () => window.removeEventListener("keydown", keydown);
+  });
+
+  const datasetFilteredTasks = useMemo(() => tasks.filter(t => {
+    const q = datasetSearch.toLowerCase();
+    return t.datasetId === activeDatasetId && (!q || `${t.name} ${t.id}`.toLowerCase().includes(q)) && (datasetStatus === "All" || t.status === datasetStatus);
+  }), [tasks, datasetSearch, datasetStatus, activeDatasetId]);
+
+  useEffect(() => {
+    const handler = (e) => {
+      const index = Number(e.detail);
+      if (Number.isFinite(index)) { setSelectedTaskIndex(index); setWorkstationMode("Annotation"); setActivePage("Annotation Workspace"); }
+    };
+    window.addEventListener("annotatepro-open-task", handler);
+    return () => window.removeEventListener("annotatepro-open-task", handler);
+  }, []);
+
+  const teamFilteredMembers = useMemo(() => teamMembers.filter(member => {
+    const q = teamSearch.trim().toLowerCase();
+    const matchesSearch = !q || `${member.name} ${member.email} ${member.role}`.toLowerCase().includes(q);
+    const matchesRole = teamRoleFilter === "All Roles" || member.role === teamRoleFilter;
+    const matchesStatus = teamStatusFilter === "All Status" || member.status === teamStatusFilter;
+    return matchesSearch && matchesRole && matchesStatus;
+  }), [teamMembers, teamSearch, teamRoleFilter, teamStatusFilter]);
+
+  const teamStats = useMemo(() => {
+    const active = teamMembers.filter(m => m.status === "Active").length;
+    const annotators = teamMembers.filter(m => m.role === "Annotator" && m.status === "Active").length;
+    const reviewers = teamMembers.filter(m => m.role === "Reviewer" && m.status === "Active").length;
+    const assigned = tasks.filter(t => t.assigneeId).length;
+    const avgQuality = teamMembers.length ? Math.round(teamMembers.reduce((s,m) => s + Number(m.qaScore || 0), 0) / teamMembers.length) : 0;
+    return { active, annotators, reviewers, assigned, avgQuality };
+  }, [teamMembers, tasks]);
+
+  function openCreateMember() {
+    setEditingMemberId(null);
+    setTeamForm({ name: "", email: "", role: "Annotator", status: "Active", projects: projects[0] ? [projects[0].id] : [], capacity: 6 });
+    setTeamModalOpen(true);
+  }
+
+  function openEditMember(member) {
+    setEditingMemberId(member.id);
+    setTeamForm({ name: member.name, email: member.email || "", role: member.role, status: member.status, projects: member.projects || [], capacity: member.capacity || 6 });
+    setTeamModalOpen(true);
+  }
+
+  function saveMember(e) {
+    e.preventDefault();
+    if (!teamForm.name.trim() || !teamForm.email.trim()) return;
+    if (editingMemberId) {
+      const updated = { ...(teamMembers.find(m => m.id === editingMemberId) || {}), ...teamForm, id: editingMemberId, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0) };
+      setTeamMembers(prev => prev.map(m => m.id === editingMemberId ? { ...m, ...teamForm, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0) } : m));
+      syncUpsert("team_members", memberToRow(updated));
+      setTeamMessage("Team member updated successfully");
+    } else {
+      const member = { id: `member-${Date.now()}`, ...teamForm, name: teamForm.name.trim(), email: teamForm.email.trim(), capacity: Math.max(0, Number(teamForm.capacity) || 0), completed: 0, qaScore: 0 };
+      setTeamMembers(prev => [member, ...prev]);
+      syncUpsert("team_members", memberToRow(member));
+      setTeamMessage("Team member added successfully");
+    }
+    setTeamModalOpen(false);
+    setTimeout(() => setTeamMessage(""), 2600);
+  }
+
+  function toggleMemberStatus(member) {
+    const next = member.status === "Active" ? "Inactive" : "Active";
+    setTeamMembers(prev => prev.map(m => m.id === member.id ? { ...m, status: next } : m));
+    syncUpdate("team_members", member.id, { status: next });
+    setTeamMessage(`${member.name} is now ${next.toLowerCase()}`);
+    setTimeout(() => setTeamMessage(""), 2600);
+  }
+
+  function deleteMember(member) {
+    if (member.id === "m1") return;
+    const affectedAssignee = tasks.filter(t => t.assigneeId === member.id).map(t => t.id);
+    const affectedReviewer = tasks.filter(t => t.reviewerId === member.id).map(t => t.id);
+    setTeamMembers(prev => prev.filter(m => m.id !== member.id));
+    setTasks(prev => prev.map(t => (t.assigneeId === member.id || t.reviewerId === member.id) ? { ...t, assigneeId: t.assigneeId === member.id ? null : t.assigneeId, reviewerId: t.reviewerId === member.id ? null : t.reviewerId } : t));
+    affectedAssignee.forEach(id => syncUpdate("tasks", id, { assignee_id: null }));
+    affectedReviewer.forEach(id => syncUpdate("tasks", id, { reviewer_id: null }));
+    syncDelete("team_members", member.id);
+    setTeamMessage(`${member.name} removed from the workspace`);
+    setTimeout(() => setTeamMessage(""), 2600);
+  }
+
+  function assignTask(taskId, memberId) {
+    const prevTask = tasks.find(t => t.id === taskId);
+    const nextTaskStatus = memberId && prevTask?.status === "Pending" ? "In Progress" : prevTask?.status;
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, assigneeId: memberId || null, status: memberId && t.status === "Pending" ? "In Progress" : t.status } : t));
+    const syncPatch = { assignee_id: memberId || null };
+    if (nextTaskStatus && nextTaskStatus !== prevTask?.status) syncPatch.status = nextTaskStatus;
+    syncUpdate("tasks", taskId, syncPatch);
+    const member = teamMembers.find(m => m.id === memberId);
+    logAudit(member ? "Task Assigned" : "Task Unassigned", taskId, tasks.find(t=>t.id===taskId)?.projectId, member ? `Assigned to ${member.name}.` : "Assignment cleared.");
+    setTeamMessage(member ? `Task assigned to ${member.name}` : "Task assignment cleared");
+    setTimeout(() => setTeamMessage(""), 2200);
+  }
+
+  function openTaskPlanner(projectId = null) {
+    setPlannerProjectId(projectId);
+    setPlannerPriority("MEDIUM");
+    setPlannerQueue("Now");
+    setPlannerReworkSelection([]);
+    navigate("Task Planner");
+  }
+
+  function openPlannerAssignment(taskIds = [], memberId = "") {
+    const ids = Array.isArray(taskIds) ? taskIds : [taskIds];
+    const first = tasks.find(t => ids.includes(t.id));
+    setPlannerAssignmentTaskIds(ids.filter(Boolean));
+    setPlannerAssignmentAssignee(memberId || first?.assigneeId || "");
+    setPlannerAssignmentReviewer(first?.reviewerId || "");
+    setPlannerAssignmentPriority(first?.priority || plannerPriority || "MEDIUM");
+    setPlannerAssignmentQueue(first?.queue || plannerQueue || "Now");
+    setPlannerAssignmentOpen(true);
+  }
+
+  function savePlannerAssignments() {
+    if (!plannerAssignmentTaskIds.length) { flashPlanner("Select at least one task"); return; }
+    setTasks(prev => prev.map(task => {
+      if (!plannerAssignmentTaskIds.includes(task.id)) return task;
+      let status = task.status;
+      if (plannerAssignmentAssignee && status === "Pending") status = "In Progress";
+      if (!plannerAssignmentAssignee && status === "In Progress") status = "Pending";
+      syncUpdate("tasks", task.id, {
+        assignee_id: plannerAssignmentAssignee || null,
+        reviewer_id: plannerAssignmentReviewer || null,
+        priority: plannerAssignmentPriority,
+        queue: plannerAssignmentQueue,
+        ...(status !== task.status ? { status } : {})
+      });
+      return {
+        ...task,
+        assigneeId: plannerAssignmentAssignee || null,
+        reviewerId: plannerAssignmentReviewer || null,
+        priority: plannerAssignmentPriority,
+        queue: plannerAssignmentQueue,
+        status
+      };
+    }));
+    plannerAssignmentTaskIds.forEach(id => { const t=tasks.find(x=>x.id===id); logAudit(plannerAssignmentAssignee ? "Task Assigned" : "Task Unassigned", id, t?.projectId, plannerAssignmentAssignee ? `Assigned to ${teamMembers.find(m=>m.id===plannerAssignmentAssignee)?.name || plannerAssignmentAssignee}; reviewer ${teamMembers.find(m=>m.id===plannerAssignmentReviewer)?.name || plannerAssignmentReviewer || "None"}.` : "Assignment cleared."); });
+    const count = plannerAssignmentTaskIds.length;
+    const member = teamMembers.find(m => m.id === plannerAssignmentAssignee);
+    flashPlanner(member ? `${count} task${count === 1 ? "" : "s"} assigned to ${member.name}` : `${count} task${count === 1 ? "" : "s"} unassigned`);
+    setPlannerAssignmentOpen(false);
+    setPlannerAssignmentTaskIds([]);
+  }
+
+  function setPlannerTarget(role, memberId, field, value) {
+    setPlannerTargets(prev => ({
+      ...prev,
+      [role]: {
+        ...(prev[role] || {}),
+        [memberId]: { ...(prev[role]?.[memberId] || {}), [field]: Math.max(0, Number(value) || 0) }
+      }
+    }));
+  }
+
+  function flashPlanner(message) {
+    setPlannerMessage(message);
+    setTimeout(() => setPlannerMessage(""), 2400);
+  }
+
+  function applyPlannerRework(action) {
+    if (!plannerReworkSelection.length) { flashPlanner("Select at least one task first"); return; }
+    const reworkStatus = action === "rework" ? "Changes Requested" : "Pending";
+    setTasks(prev => prev.map(task => plannerReworkSelection.includes(task.id)
+      ? { ...task, status: reworkStatus }
+      : task
+    ));
+    plannerReworkSelection.forEach(id => syncUpdate("tasks", id, { status: reworkStatus }));
+    flashPlanner(`${plannerReworkSelection.length} task${plannerReworkSelection.length === 1 ? "" : "s"} moved to ${action === "rework" ? "rework" : "the original queue"}`);
+    setPlannerReworkSelection([]);
+  }
+
+  const updateAppSetting = (patch) => {
+    setAppSettings(prev => ({ ...prev, ...patch }));
+    setSettingsMessage("Settings saved automatically");
+    window.setTimeout(() => setSettingsMessage(""), 1800);
+  };
+
+  const resetAppSettings = () => {
+    const defaults = { workspaceName: "Production Workspace", timezone: "Asia/Kolkata", theme: "System", autosave: true, autosaveInterval: 10, confirmSubmit: true, showObjectIds: true, keyboardShortcuts: true, compactMode: false, emailAssignments: true, emailQa: true, emailRework: true, defaultPage: "Dashboard" };
+    setAppSettings(defaults);
+    setSettingsMessage("Settings restored to defaults");
+    window.setTimeout(() => setSettingsMessage(""), 1800);
+  };
+
+  const navItems = [
+    ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers],
+    ["Team", Users], ["Deadlines", Calendar], ["QA & Quality", ShieldCheck], ["Reports", TrendingUp], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
+    ["Settings", Settings]
+  ];
+
+  const currentConfig = projectConfigs[configProject] || makeDefaultProjectConfig(projectGroups.find(g => g.id === configProject) || projectGroups[0] || defaultProjectGroups[0]);
+  const openCreateLabel = (parentId = null) => { setEditingLabelId(null); setLabelForm({ ...emptyLabelForm, color: labelPalette[currentConfig.labels.length % labelPalette.length], parentId: parentId || "" }); setLabelEditorOpen(true); };
+  const openEditLabel = (label) => { setEditingLabelId(label.id); setLabelForm({ name: label.name, color: label.color || labelPalette[0], type: label.type || "Rectangle", parentId: label.parentId || "", groupId: label.groupId || "", shortcut: label.shortcut || "", attributes: (label.attributes || []).map(a => ({ ...a })) }); setLabelEditorOpen(true); };
+  const [labelSchemaError, setLabelSchemaError] = useState("");
+  const saveProjectLabel = (e) => {
+    e.preventDefault();
+    const name = labelForm.name.trim();
+    if (!name) return;
+    const shortcut = (labelForm.shortcut || "").trim().toLowerCase().slice(0, 1);
+    if (shortcut && RESERVED_SHORTCUTS.includes(shortcut)) { setLabelSchemaError(`"${shortcut.toUpperCase()}" is reserved for a workspace tool shortcut.`); return; }
+    const cleanAttributes = (labelForm.attributes || []).filter(a => a.name.trim()).map(a => ({ id: a.id || `attr-${Date.now()}-${Math.random().toString(36).slice(2,5)}`, name: a.name.trim(), type: a.type || "Text", options: a.type === "Select" ? (a.options || "").split(",").map(o => o.trim()).filter(Boolean) : [], required: !!a.required }));
+    setProjectConfigs(prev => {
+      const cfg = prev[configProject] || currentConfig;
+      const duplicateShortcut = shortcut && cfg.labels.some(l => l.id !== editingLabelId && (l.shortcut || "").toLowerCase() === shortcut);
+      if (duplicateShortcut) { setLabelSchemaError(`Shortcut "${shortcut.toUpperCase()}" is already used by another label.`); return prev; }
+      setLabelSchemaError("");
+      const payload = { name, color: labelForm.color, type: labelForm.type, parentId: labelForm.parentId || null, groupId: labelForm.groupId || null, shortcut: shortcut || null, attributes: cleanAttributes };
+      const nextLabels = editingLabelId
+        ? cfg.labels.map(l => l.id === editingLabelId ? { ...l, ...payload } : l)
+        : [...cfg.labels, { id: `${configProject}-label-${Date.now()}`, ...payload }];
+      return { ...prev, [configProject]: { ...cfg, labels: nextLabels } };
+    });
+    if (labelSchemaError) return;
+    setLabelEditorOpen(false);
+    setConfigMessage(editingLabelId ? "Label updated" : "Label added");
+    setTimeout(() => setConfigMessage(""), 2200);
+  };
+  const deleteProjectLabel = (labelId) => {
+    const childCount = currentConfig.labels.filter(l => l.parentId === labelId).length;
+    if (childCount && !window.confirm(`This label has ${childCount} child label${childCount===1?"":"s"}. Delete it and promote its children to top-level?`)) return;
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: currentConfig.labels.filter(l => l.id !== labelId).map(l => l.parentId === labelId ? { ...l, parentId: null } : l) } }));
+    setConfigMessage("Label removed");
+    setTimeout(() => setConfigMessage(""), 2200);
+  };
+
+  // ---- Build 32: label groups ----
+  function createLabelGroup(name) {
+    const trimmed = (name || "").trim();
+    if (!trimmed) return;
+    const group = { id: `lg-${Date.now()}`, name: trimmed, color: labelPalette[(currentConfig.labelGroups?.length || 0) % labelPalette.length] };
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labelGroups: [...(currentConfig.labelGroups || []), group] } }));
+  }
+  function renameLabelGroup(id, name) {
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labelGroups: (currentConfig.labelGroups || []).map(g => g.id === id ? { ...g, name } : g) } }));
+  }
+  function deleteLabelGroup(id) {
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labelGroups: (currentConfig.labelGroups || []).filter(g => g.id !== id), labels: currentConfig.labels.map(l => l.groupId === id ? { ...l, groupId: null } : l) } }));
+  }
+
+  // ---- Build 32: label schema versioning ----
+  function saveLabelSchemaVersion(note) {
+    const version = (currentConfig.schemaVersion || 1) + 1;
+    const snapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: note || "", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, schemaVersion: version, schemaHistory: [snapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
+    setConfigMessage(`Saved as schema v${snapshot.version} — now editing v${version}`);
+    setTimeout(() => setConfigMessage(""), 2400);
+  }
+  function restoreLabelSchemaVersion(snapshot) {
+    if (!window.confirm(`Restore schema v${snapshot.version}? This replaces the current label set (current labels are kept in history).`)) return;
+    const currentSnapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: "Replaced by restore", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
+    setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: snapshot.labels, labelGroups: snapshot.labelGroups || [], schemaVersion: (currentConfig.schemaVersion || 1) + 1, schemaHistory: [currentSnapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
+    setConfigMessage(`Restored schema v${snapshot.version}`);
+    setTimeout(() => setConfigMessage(""), 2400);
+  }
+
+  // ---- Build 32: schema import / export ----
+  function exportLabelSchema() {
+    const payload = { exportedAt: new Date().toISOString(), projectName: (projectGroups.find(g => g.id === configProject) || {}).name || configProject, schemaVersion: currentConfig.schemaVersion || 1, labelGroups: currentConfig.labelGroups || [], labels: currentConfig.labels };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = `${(payload.projectName||"labels").toLowerCase().replace(/\s+/g,"-")}-label-schema-v${payload.schemaVersion}.json`; a.click();
+    URL.revokeObjectURL(url);
+  }
+  function importLabelSchema(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        const importedLabels = Array.isArray(parsed.labels) ? parsed.labels : [];
+        if (!importedLabels.length) { setConfigMessage("Import failed: no labels found in file"); setTimeout(() => setConfigMessage(""), 2600); return; }
+        const idPrefix = `${configProject}-import-${Date.now()}`;
+        const idMap = {};
+        const newLabels = importedLabels.map((l, i) => { const nid = `${idPrefix}-${i}`; idMap[l.id] = nid; return { id: nid, name: l.name || "Untitled", color: l.color || labelPalette[i % labelPalette.length], type: l.type || "Rectangle", parentId: l.parentId || null, groupId: l.groupId || null, shortcut: l.shortcut || null, attributes: l.attributes || [] }; });
+        newLabels.forEach(l => { if (l.parentId) l.parentId = idMap[l.parentId] || null; });
+        const groupIdMap = {};
+        const newGroups = (Array.isArray(parsed.labelGroups) ? parsed.labelGroups : []).map((g, i) => { const nid = `${idPrefix}-grp-${i}`; groupIdMap[g.id] = nid; return { ...g, id: nid }; });
+        newLabels.forEach(l => { if (l.groupId) l.groupId = groupIdMap[l.groupId] || null; });
+        const currentSnapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: "Replaced by import", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
+        setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: [...currentConfig.labels, ...newLabels], labelGroups: [...(currentConfig.labelGroups || []), ...newGroups], schemaVersion: (currentConfig.schemaVersion || 1) + 1, schemaHistory: [currentSnapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
+        setConfigMessage(`Imported ${newLabels.length} label${newLabels.length===1?"":"s"}`);
+        setTimeout(() => setConfigMessage(""), 2600);
+      } catch (err) {
+        setConfigMessage("Import failed: file isn't valid label schema JSON");
+        setTimeout(() => setConfigMessage(""), 2600);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // ---- Build 32: label usage statistics ----
+  const labelUsageStats = useMemo(() => {
+    const groupProjectIds = new Set(projects.filter(p => p.groupId === configProject).map(p => p.id));
+    const groupTaskIds = new Set(tasks.filter(t => groupProjectIds.has(t.projectId)).map(t => t.id));
+    const counts = {};
+    Object.entries(annotationsByTask).forEach(([taskId, list]) => {
+      if (!groupTaskIds.has(taskId)) return;
+      (list || []).forEach(a => { counts[a.labelId] = (counts[a.labelId] || 0) + 1; });
+    });
+    return counts;
+  }, [projects, tasks, annotationsByTask, configProject]);
+  const updateProjectConfig = (patch) => { setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, ...patch } })); setConfigMessage("Project configuration saved"); setTimeout(() => setConfigMessage(""), 2200); };
+
+  // ---- Build 33: Workflow Automation ----
+  function getGroupIdForTask(task) { return projects.find(p => p.id === task?.projectId)?.groupId || null; }
+  function statusAuditActions(status) {
+    switch (status) {
+      case "Submitted": case "QA Review": return ["Task Submitted"];
+      case "Rejected": case "Changes Requested": return ["QA Rejected"];
+      case "Approved": return ["QA Approved"];
+      case "Pending": return ["Task Unassigned"];
+      default: return [];
+    }
+  }
+  function getTaskStatusSince(task) {
+    const actions = statusAuditActions(task.status);
+    const match = auditEvents.find(e => e.taskId === task.id && actions.includes(e.action));
+    return match?.timestamp || task.createdAt || new Date().toISOString();
+  }
+
+  function createAutomationRule(groupId) {
+    const rule = { id: `rule-${Date.now()}`, name: "New rule", enabled: true, whenStatus: "Pending", afterHours: 0, action: "auto_assign", note: "" };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), automationRules: [...(prev[groupId]?.automationRules || []), rule] } }));
+    return rule.id;
+  }
+  function updateAutomationRule(groupId, ruleId, patch) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], automationRules: (prev[groupId]?.automationRules || []).map(r => r.id === ruleId ? { ...r, ...patch } : r) } }));
+  }
+  function deleteAutomationRule(groupId, ruleId) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], automationRules: (prev[groupId]?.automationRules || []).filter(r => r.id !== ruleId) } }));
+  }
+  function addSuggestedRule(groupId, template) {
+    const rule = { id: `rule-${Date.now()}`, ...template };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), automationRules: [...(prev[groupId]?.automationRules || []), rule] } }));
+  }
+
+  function runAutomationAction(rule, task) {
+    const groupId = getGroupIdForTask(task);
+    const group = projectGroups.find(g => g.id === groupId);
+    const eligible = (role) => teamMembers.filter(m => m.status === "Active" && m.role === role && (!group?.teamIds?.length || group.teamIds.includes(m.id)));
+    switch (rule.action) {
+      case "auto_assign": {
+        if (task.assigneeId) return;
+        const pool = eligible("Annotator");
+        if (!pool.length) return;
+        const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.assigneeId === m.id && ["Pending", "In Progress"].includes(t.status)).length]));
+        const target = [...pool].sort((a, b) => (counts[a.id] || 0) - (counts[b.id] || 0))[0];
+        assignTask(task.id, target.id);
+        pushNotification("Assignment", "Auto-assigned by workflow", `${task.name} was auto-assigned to ${target.name} by rule "${rule.name}".`, task.projectId, task.id);
+        break;
+      }
+      case "auto_route_qa": {
+        const pool = eligible("Reviewer");
+        if (!pool.length) return;
+        const counts = Object.fromEntries(pool.map(m => [m.id, tasks.filter(t => t.reviewerId === m.id && ["Submitted", "QA Review"].includes(t.status)).length]));
+        const target = [...pool].sort((a, b) => (counts[a.id] || 0) - (counts[b.id] || 0))[0];
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, reviewerId: target.id } : t));
+        syncUpdate("tasks", task.id, { reviewer_id: target.id });
+        logAudit("Task Routed to QA", task.id, task.projectId, `Routed to reviewer ${target.name} by rule "${rule.name}".`);
+        pushNotification("QA", "Routed for review", `${task.name} was routed to ${target.name} for QA by rule "${rule.name}".`, task.projectId, task.id);
+        break;
+      }
+      case "auto_route_rework": {
+        if (!task.assigneeId) { runAutomationAction({ ...rule, action: "auto_assign" }, task); return; }
+        const assignee = teamMembers.find(m => m.id === task.assigneeId);
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "In Progress" } : t));
+        syncUpdate("tasks", task.id, { status: "In Progress" });
+        logAudit("Task Routed for Rework", task.id, task.projectId, `Sent back to ${assignee?.name || "annotator"} by rule "${rule.name}".`);
+        pushNotification("Rework", "Rework routed", `${task.name} was sent back to ${assignee?.name || "the assignee"} for rework.`, task.projectId, task.id);
+        break;
+      }
+      case "escalate": {
+        const owner = teamMembers.find(m => m.id === group?.ownerId);
+        logAudit("Task Escalated", task.id, task.projectId, `Escalated after sitting in "${task.status}" past the threshold for rule "${rule.name}".`);
+        pushNotification("Alert", "Task escalated", `${task.name} has been stuck in ${task.status}${owner ? ` — escalated to ${owner.name}` : " and was escalated"}.`, task.projectId, task.id);
+        break;
+      }
+      case "auto_complete": {
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "Completed" } : t));
+        syncUpdate("tasks", task.id, { status: "Completed" });
+        logAudit("Task Completed", task.id, task.projectId, `Auto-completed by rule "${rule.name}".`);
+        pushNotification("System", "Task completed", `${task.name} was automatically marked complete.`, task.projectId, task.id);
+        break;
+      }
+      case "notify": {
+        pushNotification("System", rule.name || "Workflow notification", rule.note || `${task.name} matched workflow rule "${rule.name}".`, task.projectId, task.id);
+        break;
+      }
+      default: break;
+    }
+  }
+
+  // Immediate rules: fire once when a task's status transitions into rule.whenStatus.
+  const prevTaskStatusRef = useRef({});
+  useEffect(() => {
+    const prevMap = prevTaskStatusRef.current;
+    tasks.forEach(task => {
+      const prevStatus = prevMap[task.id];
+      if (prevStatus !== undefined && prevStatus !== task.status) {
+        const groupId = getGroupIdForTask(task);
+        const rules = (projectConfigs[groupId]?.automationRules || []).filter(r => r.enabled && r.whenStatus === task.status && (!r.afterHours || r.afterHours <= 0));
+        rules.forEach(rule => runAutomationAction(rule, task));
+      }
+    });
+    const nextMap = {};
+    tasks.forEach(t => { nextMap[t.id] = t.status; });
+    prevTaskStatusRef.current = nextMap;
+  }, [tasks]);
+
+  // Time-based rules (escalation, auto-complete): checked periodically against
+  // how long a task has sat in its current status, derived from the audit log.
+  const firedTimedRulesRef = useRef(new Set());
+  useEffect(() => {
+    const check = () => {
+      tasks.forEach(task => {
+        const groupId = getGroupIdForTask(task);
+        const rules = (projectConfigs[groupId]?.automationRules || []).filter(r => r.enabled && r.whenStatus === task.status && r.afterHours > 0);
+        rules.forEach(rule => {
+          const since = getTaskStatusSince(task);
+          const key = `${task.id}:${rule.id}:${since}`;
+          if (firedTimedRulesRef.current.has(key)) return;
+          const hoursElapsed = (Date.now() - new Date(since).getTime()) / 3600000;
+          if (hoursElapsed >= rule.afterHours) {
+            firedTimedRulesRef.current.add(key);
+            runAutomationAction(rule, task);
+          }
+        });
+      });
+    };
+    check();
+    const id = setInterval(check, 60000);
+    return () => clearInterval(id);
+  }, [tasks, projectConfigs, auditEvents]);
+
+  // ---- Build 34: SLA & Deadline Management ----
+  const OPEN_TASK_STATUSES = ["Pending", "In Progress", "Submitted", "QA Review", "Rejected", "Changes Requested"];
+  function getGroupConfig(groupId) { return projectConfigs[groupId] || makeDefaultProjectConfig({ id: groupId }); }
+  function taskSlaHours(task, config) { return ["Submitted", "QA Review"].includes(task.status) ? (config.reviewerSlaHours ?? 12) : (config.annotatorSlaHours ?? 24); }
+  function taskDeadline(task) {
+    if (!OPEN_TASK_STATUSES.includes(task.status)) return null;
+    if (task.dueDate) return new Date(task.dueDate).getTime();
+    const config = getGroupConfig(getGroupIdForTask(task));
+    const since = new Date(getTaskStatusSince(task)).getTime();
+    return since + taskSlaHours(task, config) * 3600000;
+  }
+  function taskHoursOverdue(task) { const dl = taskDeadline(task); return dl === null ? 0 : Math.max(0, (Date.now() - dl) / 3600000); }
+  function taskAgingHours(task) { return Math.max(0, (Date.now() - new Date(getTaskStatusSince(task)).getTime()) / 3600000); }
+  function setTaskDueDate(taskId, dateStr) {
+    setTasks(prev => prev.map(t => t.id === taskId ? { ...t, dueDate: dateStr || null } : t));
+    syncUpdate("tasks", taskId, { due_date: dateStr || null });
+  }
+  function escalateTaskNow(task) {
+    const groupId = getGroupIdForTask(task);
+    const group = projectGroups.find(g => g.id === groupId);
+    const owner = teamMembers.find(m => m.id === group?.ownerId);
+    logAudit("Task Escalated", task.id, task.projectId, "Manually escalated from the Deadlines dashboard.");
+    pushNotification("Alert", "Task escalated", `${task.name} was escalated${owner ? ` to ${owner.name}` : ""}.`, task.projectId, task.id);
+    fireWebhooks("task.escalated", { taskId: task.id, taskName: task.name, projectId: task.projectId, escalatedTo: owner?.name || null, manual: true });
+  }
+
+  const slaAlertedRef = useRef(new Set());
+  const slaEscalatedRef = useRef(new Set());
+  useEffect(() => {
+    const check = () => {
+      tasks.forEach(task => {
+        if (!OPEN_TASK_STATUSES.includes(task.status)) return;
+        const groupId = getGroupIdForTask(task);
+        const config = getGroupConfig(groupId);
+        const overdueHours = taskHoursOverdue(task);
+        if (overdueHours <= 0) return;
+        const since = getTaskStatusSince(task);
+        const alertKey = `${task.id}:${since}`;
+        if (!slaAlertedRef.current.has(alertKey)) {
+          slaAlertedRef.current.add(alertKey);
+          logAudit("Task Overdue", task.id, task.projectId, `Passed its SLA deadline (${taskSlaHours(task, config)}h target).`);
+          pushNotification("Alert", "SLA breached", `${task.name} is now overdue.`, task.projectId, task.id);
+          fireWebhooks("sla.breach", { taskId: task.id, taskName: task.name, projectId: task.projectId, status: task.status });
+        }
+        const escalateAfter = config.escalateAfterHours ?? 24;
+        if (overdueHours >= escalateAfter) {
+          const escKey = `${alertKey}:esc`;
+          if (!slaEscalatedRef.current.has(escKey)) {
+            slaEscalatedRef.current.add(escKey);
+            const group = projectGroups.find(g => g.id === groupId);
+            const owner = teamMembers.find(m => m.id === group?.ownerId);
+            logAudit("Task Escalated", task.id, task.projectId, `Escalated — ${overdueHours.toFixed(1)}h past its SLA deadline.`);
+            pushNotification("Alert", "Task escalated (SLA)", `${task.name} is ${overdueHours.toFixed(1)}h overdue${owner ? ` — escalated to ${owner.name}` : ""}.`, task.projectId, task.id);
+            fireWebhooks("task.escalated", { taskId: task.id, taskName: task.name, projectId: task.projectId, escalatedTo: owner?.name || null, overdueHours, manual: false });
+          }
+        }
+      });
+      projects.forEach(p => {
+        if (!p.dueDate) return;
+        const total = Number(p.totalImages) || 0, completed = Number(p.completedImages) || 0;
+        if (total && completed >= total) return;
+        if (Date.now() <= new Date(p.dueDate).getTime()) return;
+        const key = `project:${p.id}:${p.dueDate}`;
+        if (slaAlertedRef.current.has(key)) return;
+        slaAlertedRef.current.add(key);
+        logAudit("Project Overdue", null, p.id, `Passed its due date (${p.dueDate}).`);
+        pushNotification("Alert", "Project deadline passed", `${p.name} passed its due date and isn't complete yet.`, p.id, null);
+      });
+    };
+    check();
+    const id = setInterval(check, 120000);
+    return () => clearInterval(id);
+  }, [tasks, projects, projectConfigs]);
+
+  const deadlineOverview = useMemo(() => {
+    const now = Date.now();
+    const rows = tasks.filter(t => OPEN_TASK_STATUSES.includes(t.status)).map(t => {
+      const groupId = getGroupIdForTask(t);
+      const config = getGroupConfig(groupId);
+      const deadline = taskDeadline(t);
+      const overdueHours = deadline !== null ? Math.max(0, (now - deadline) / 3600000) : 0;
+      const agingHours = taskAgingHours(t);
+      return { task: t, groupId, deadline, overdueHours, agingHours, isOverdue: deadline !== null && now > deadline, slaHours: taskSlaHours(t, config) };
+    });
+    const overdue = rows.filter(r => r.isOverdue).sort((a, b) => b.overdueHours - a.overdueHours);
+    const dueToday = rows.filter(r => !r.isOverdue && r.deadline && (r.deadline - now) <= 24 * 3600000);
+    const dueWeek = rows.filter(r => !r.isOverdue && r.deadline && (r.deadline - now) <= 7 * 24 * 3600000);
+    const agingBuckets = [
+      { label: "0–24h", count: rows.filter(r => r.agingHours < 24).length },
+      { label: "24–48h", count: rows.filter(r => r.agingHours >= 24 && r.agingHours < 48).length },
+      { label: "48–72h", count: rows.filter(r => r.agingHours >= 48 && r.agingHours < 72).length },
+      { label: "72h+", count: rows.filter(r => r.agingHours >= 72).length }
+    ];
+    let compliant = 0, measured = 0;
+    tasks.filter(t => ["Approved", "Completed"].includes(t.status)).forEach(t => {
+      const submitEvt = auditEvents.find(e => e.taskId === t.id && e.action === "Task Submitted");
+      const approveEvt = auditEvents.find(e => e.taskId === t.id && e.action === "QA Approved");
+      if (!submitEvt || !approveEvt) return;
+      measured++;
+      const config = getGroupConfig(getGroupIdForTask(t));
+      const hoursTaken = (new Date(approveEvt.timestamp) - new Date(submitEvt.timestamp)) / 3600000;
+      if (hoursTaken <= (config.reviewerSlaHours ?? 12)) compliant++;
+    });
+    const slaCompliance = measured ? Math.round((compliant / measured) * 100) : null;
+    const upcomingProjects = projects.filter(p => p.dueDate).map(p => ({ project: p, daysLeft: Math.ceil((new Date(p.dueDate).getTime() - now) / 86400000), progress: progressOf(p) })).sort((a, b) => a.daysLeft - b.daysLeft);
+    return { rows, overdue, dueToday, dueWeek, agingBuckets, slaCompliance, measured, upcomingProjects };
+  }, [tasks, projects, projectConfigs, projectGroups, auditEvents]);
+
+  // ---- Build 35: Advanced QA & Quality Scoring ----
+  function createQaCriterion(groupId) {
+    const criterion = { id: `crit-${Date.now()}`, name: "New criterion", weight: 10 };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), qaCriteria: [...(prev[groupId]?.qaCriteria || []), criterion] } }));
+  }
+  function updateQaCriterion(groupId, id, patch) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], qaCriteria: (prev[groupId]?.qaCriteria || []).map(c => c.id === id ? { ...c, ...patch } : c) } }));
+  }
+  function deleteQaCriterion(groupId, id) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], qaCriteria: (prev[groupId]?.qaCriteria || []).filter(c => c.id !== id) } }));
+  }
+  function createErrorCategory(groupId) {
+    const category = { id: `err-${Date.now()}`, name: "New error type", severity: "Minor" };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), errorCategories: [...(prev[groupId]?.errorCategories || []), category] } }));
+  }
+  function updateErrorCategory(groupId, id, patch) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], errorCategories: (prev[groupId]?.errorCategories || []).map(c => c.id === id ? { ...c, ...patch } : c) } }));
+  }
+  function deleteErrorCategory(groupId, id) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], errorCategories: (prev[groupId]?.errorCategories || []).filter(c => c.id !== id) } }));
+  }
+  function addCalibrationEntry(groupId, taskId, goldScore, notes) {
+    if (!taskId) return;
+    const entry = { id: `cal-${Date.now()}`, taskId, goldScore: Math.max(0, Math.min(100, Number(goldScore) || 0)), notes: notes || "", addedAt: new Date().toISOString() };
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...(prev[groupId] || makeDefaultProjectConfig({ id: groupId })), calibrationSet: [...(prev[groupId]?.calibrationSet || []), entry] } }));
+  }
+  function deleteCalibrationEntry(groupId, id) {
+    setProjectConfigs(prev => ({ ...prev, [groupId]: { ...prev[groupId], calibrationSet: (prev[groupId]?.calibrationSet || []).filter(e => e.id !== id) } }));
+  }
+
+  function weightedQaScore(criteria, criteriaScores) {
+    if (!criteria?.length || !criteriaScores) return null;
+    const totalWeight = criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0) || 1;
+    const weighted = criteria.reduce((s, c) => s + ((criteriaScores[c.id] ?? 100) * (Number(c.weight) || 0)), 0);
+    return Math.round(weighted / totalWeight);
+  }
+
+  // Sampling: when a task first becomes Submitted, decide whether it needs full QA
+  // or can be auto-approved outside the review sample, based on the project's sampling rate.
+  const samplingProcessedRef = useRef(new Set());
+  useEffect(() => {
+    tasks.forEach(task => {
+      if (task.status !== "Submitted") return;
+      if (qaReviews[task.id]) return;
+      const groupId = getGroupIdForTask(task);
+      const config = getGroupConfig(groupId);
+      const rate = config.samplingRate ?? 100;
+      if (rate >= 100) return;
+      const key = task.id;
+      if (samplingProcessedRef.current.has(key)) return;
+      samplingProcessedRef.current.add(key);
+      if (Math.random() * 100 >= rate) {
+        const now = new Date().toISOString();
+        const review = { decision: "Approved", score: null, reason: "", comment: "Outside QA sample — auto-approved.", reviewer: "System", reviewedAt: now, annotationCount: (annotationsByTask[task.id] || []).length, criteriaScores: {}, errors: [], history: [{ decision: "Approved", score: null, reason: "", comment: "Auto-approved (sampling)", reviewer: "System", reviewedAt: now }] };
+        setQaReviews(prev => ({ ...prev, [task.id]: review }));
+        setTasks(prev => prev.map(t => t.id === task.id ? { ...t, status: "Approved" } : t));
+        syncUpdate("tasks", task.id, { status: "Approved" });
+        logAudit("QA Sampling Skip", task.id, task.projectId, `Outside the ${rate}% QA sample — auto-approved.`, "System", "Automation");
+        if (session) supabase.from("qa_reviews").upsert({ task_id: task.id, decision: review.decision, score: review.score, reviewer: review.reviewer, comment: review.comment, reason: review.reason, annotation_count: review.annotationCount, criteria_scores: {}, errors: [], history: review.history, reviewed_at: review.reviewedAt }).then(({ error }) => { if (error) console.warn("[Cloud] qa_reviews upsert failed:", error.message); });
+      }
+    });
+  }, [tasks, projectConfigs]);
+
+  // Quality analytics: trends, rankings, agreement, calibration drift — computed
+  // once per relevant change rather than re-derived inline in the page component.
+  const qualityAnalytics = useMemo(() => {
+    const reviewEntries = Object.entries(qaReviews).map(([taskId, r]) => ({ taskId, task: tasks.find(t => t.id === taskId), ...r }));
+    const scored = reviewEntries.filter(r => r.score !== null && r.score !== undefined);
+
+    // Quality trend: weekly average score over the last 8 weeks
+    const now = Date.now();
+    const weeks = Array.from({ length: 8 }, (_, i) => 7 - i).map(weeksAgo => {
+      const end = now - weeksAgo * 7 * 86400000;
+      const start = end - 7 * 86400000;
+      const inWeek = scored.filter(r => { const t = new Date(r.reviewedAt).getTime(); return t >= start && t < end; });
+      const avg = inWeek.length ? Math.round(inWeek.reduce((s, r) => s + r.score, 0) / inWeek.length) : null;
+      return { label: new Date(end).toLocaleDateString(undefined, { month: "short", day: "numeric" }), avg, count: inWeek.length };
+    });
+
+    // Annotator quality ranking
+    const annotators = teamMembers.filter(m => m.role === "Annotator");
+    const annotatorStats = annotators.map(m => {
+      const mine = reviewEntries.filter(r => r.task && r.task.assigneeId === m.id);
+      const mineScored = mine.filter(r => r.score !== null && r.score !== undefined);
+      const approved = mine.filter(r => r.decision === "Approved").length;
+      const errorCount = mine.reduce((s, r) => s + (r.errors?.length || 0), 0);
+      return {
+        member: m, reviewCount: mine.length,
+        avgScore: mineScored.length ? Math.round(mineScored.reduce((s, r) => s + r.score, 0) / mineScored.length) : null,
+        approvalRate: mine.length ? Math.round((approved / mine.length) * 100) : null,
+        errorCount
+      };
+    }).filter(a => a.reviewCount > 0).sort((a, b) => (b.avgScore ?? -1) - (a.avgScore ?? -1));
+
+    // Reviewer performance
+    const reviewerNames = [...new Set(reviewEntries.map(r => r.reviewer).filter(Boolean))];
+    const reviewerStats = reviewerNames.map(name => {
+      const mine = reviewEntries.filter(r => r.reviewer === name);
+      const mineScored = mine.filter(r => r.score !== null && r.score !== undefined);
+      const rejected = mine.filter(r => r.decision === "Rejected").length;
+      const turnarounds = mine.map(r => {
+        const submitEvt = auditEvents.find(e => e.taskId === r.taskId && e.action === "Task Submitted");
+        if (!submitEvt) return null;
+        return (new Date(r.reviewedAt) - new Date(submitEvt.timestamp)) / 3600000;
+      }).filter(h => h !== null && h >= 0);
+      return {
+        name, reviewCount: mine.length,
+        avgScoreGiven: mineScored.length ? Math.round(mineScored.reduce((s, r) => s + r.score, 0) / mineScored.length) : null,
+        rejectionRate: mine.length ? Math.round((rejected / mine.length) * 100) : null,
+        avgTurnaroundHours: turnarounds.length ? (turnarounds.reduce((s, h) => s + h, 0) / turnarounds.length) : null
+      };
+    }).filter(r => r.name !== "System").sort((a, b) => b.reviewCount - a.reviewCount);
+
+    // Reviewer agreement: among tasks reviewed more than once, how often every
+    // round agreed with the final decision — a data-grounded proxy for inter-rater
+    // consistency given the app's single-reviewer-per-round model.
+    const multiReviewed = reviewEntries.filter(r => (r.history || []).length > 1);
+    let agreeCount = 0;
+    multiReviewed.forEach(r => { if ((r.history || []).every(h => h.decision === r.decision)) agreeCount++; });
+    const agreementRate = multiReviewed.length ? Math.round((agreeCount / multiReviewed.length) * 100) : null;
+
+    // Error category breakdown — resolved to names/severity here since each task's
+    // group can define its own category set, so a raw categoryId isn't safe to
+    // display without its owning config.
+    const errorTally = {};
+    reviewEntries.forEach(r => {
+      if (!r.errors?.length || !r.task) return;
+      const groupConfig = getGroupConfig(getGroupIdForTask(r.task));
+      r.errors.forEach(e => {
+        const cat = (groupConfig.errorCategories || []).find(c => c.id === e.categoryId);
+        const name = cat?.name || "Unknown";
+        const key = name;
+        if (!errorTally[key]) errorTally[key] = { name, severity: cat?.severity || e.severity || "Minor", count: 0 };
+        errorTally[key].count++;
+      });
+    });
+    const errorTallyList = Object.values(errorTally).sort((a, b) => b.count - a.count);
+
+    // Calibration drift per group
+    const calibrationRows = [];
+    projectGroups.forEach(g => {
+      const config = projectConfigs[g.id];
+      (config?.calibrationSet || []).forEach(entry => {
+        const review = qaReviews[entry.taskId];
+        calibrationRows.push({ group: g, entry, review, drift: review && review.score !== null && review.score !== undefined ? review.score - entry.goldScore : null });
+      });
+    });
+
+    return { reviewEntries, scored, weeks, annotatorStats, reviewerStats, agreementRate, multiReviewedCount: multiReviewed.length, errorTally: errorTallyList, calibrationRows };
+  }, [qaReviews, tasks, teamMembers, auditEvents, projectGroups, projectConfigs]);
+
+  // ---- Build 37: Advanced Analytics & Reporting ----
+  const reportingAnalytics = useMemo(() => {
+    const now = Date.now();
+    const DONE_STATUSES = ["Approved", "Completed"];
+
+    // Throughput: tasks completed (Approved/Completed) per day over the last 30 days,
+    // derived from the audit log so it reflects when work actually finished.
+    const completionEvents = auditEvents.filter(e => e.action === "QA Approved" || e.action === "Task Completed");
+    const throughputDays = Array.from({ length: 30 }, (_, i) => 29 - i).map(daysAgo => {
+      const dayStart = now - daysAgo * 86400000;
+      const dayEnd = dayStart + 86400000;
+      const count = completionEvents.filter(e => { const t = new Date(e.timestamp).getTime(); return t >= dayStart - (dayStart % 86400000) && t < dayEnd; }).length;
+      return { label: new Date(dayStart).toLocaleDateString(undefined, { month: "short", day: "numeric" }), count };
+    });
+    const last7 = throughputDays.slice(-7).reduce((s, d) => s + d.count, 0);
+    const prev7 = throughputDays.slice(-14, -7).reduce((s, d) => s + d.count, 0);
+    const throughputTrendPct = prev7 ? Math.round(((last7 - prev7) / prev7) * 100) : null;
+    const dailyVelocity = last7 / 7;
+
+    // Production
+    const totalImages = tasks.length;
+    const processedImages = tasks.filter(t => t.status !== "Pending").length;
+    const totalAnnotationsCount = Object.values(annotationsByTask).reduce((s, l) => s + (l?.length || 0), 0);
+    const avgAnnotationsPerTask = processedImages ? (totalAnnotationsCount / processedImages) : 0;
+
+    // Team analytics: utilization per member across all roles
+    const teamUtilization = teamMembers.filter(m => m.status === "Active").map(m => {
+      const assigned = tasks.filter(t => t.assigneeId === m.id && ["Pending", "In Progress"].includes(t.status)).length;
+      const capacity = Number(m.capacity) || 1;
+      return { member: m, assigned, capacity, utilization: Math.round((assigned / capacity) * 100) };
+    }).sort((a, b) => b.utilization - a.utilization);
+
+    // Accuracy & rework, from QA review history
+    const reviewed = Object.values(qaReviews);
+    const finalApproved = reviewed.filter(r => r.decision === "Approved").length;
+    const finalRejected = reviewed.filter(r => r.decision === "Rejected").length;
+    const accuracyRate = (finalApproved + finalRejected) ? Math.round((finalApproved / (finalApproved + finalRejected)) * 100) : null;
+    const firstPassApproved = reviewed.filter(r => r.decision === "Approved" && (r.history || []).length <= 1).length;
+    const firstPassYield = reviewed.length ? Math.round((firstPassApproved / reviewed.length) * 100) : null;
+    const reworkedCount = reviewed.filter(r => (r.history || []).length > 1).length;
+    const reworkRate = reviewed.length ? Math.round((reworkedCount / reviewed.length) * 100) : null;
+
+    // Forecasting: per active project, remaining work vs recent velocity
+    const forecasts = projects.filter(p => (Number(p.completedImages) || 0) < (Number(p.totalImages) || 0)).map(p => {
+      const projectTaskIds = new Set(tasks.filter(t => t.projectId === p.id).map(t => t.id));
+      const recentCompletions = completionEvents.filter(e => projectTaskIds.has(e.taskId) && (now - new Date(e.timestamp).getTime()) <= 7 * 86400000).length;
+      const velocity = recentCompletions / 7;
+      const remaining = Math.max(0, (Number(p.totalImages) || 0) - (Number(p.completedImages) || 0));
+      const daysLeft = velocity > 0 ? Math.ceil(remaining / velocity) : null;
+      const projectedDate = daysLeft !== null ? new Date(now + daysLeft * 86400000) : null;
+      return { project: p, remaining, velocity, daysLeft, projectedDate };
+    }).sort((a, b) => (a.daysLeft ?? Infinity) - (b.daysLeft ?? Infinity));
+
+    return { throughputDays, last7, prev7, throughputTrendPct, dailyVelocity, totalImages, processedImages, totalAnnotationsCount, avgAnnotationsPerTask, teamUtilization, accuracyRate, firstPassYield, reworkRate, reworkedCount, reviewedCount: reviewed.length, forecasts };
+  }, [tasks, projects, teamMembers, qaReviews, auditEvents, annotationsByTask]);
+
+  function exportCustomReport(sections, projectFilter, rangeDays) {
+    const lines = [];
+    const push = (row) => lines.push(row.map(v => `"${String(v ?? "").replaceAll('"', '""')}"`).join(","));
+    push([`AnnotatePro Custom Report — generated ${new Date().toLocaleString()}`]);
+    push([`Project filter: ${projectFilter === "All" ? "All Projects" : projects.find(p => p.id === projectFilter)?.name || projectFilter}`, `Range: last ${rangeDays} days`]);
+    push([]);
+    if (sections.production) {
+      push(["PRODUCTION"]);
+      push(["Total Images", reportingAnalytics.totalImages]);
+      push(["Processed Images", reportingAnalytics.processedImages]);
+      push(["Total Annotations", reportingAnalytics.totalAnnotationsCount]);
+      push(["Avg Annotations / Task", reportingAnalytics.avgAnnotationsPerTask.toFixed(2)]);
+      push(["Throughput (last 7 days)", reportingAnalytics.last7]);
+      push([]);
+    }
+    if (sections.team) {
+      push(["TEAM UTILIZATION"]);
+      push(["Name", "Role", "Assigned", "Capacity", "Utilization %"]);
+      reportingAnalytics.teamUtilization.forEach(u => push([u.member.name, u.member.role, u.assigned, u.capacity, u.utilization]));
+      push([]);
+    }
+    if (sections.qa) {
+      push(["QA & QUALITY"]);
+      push(["Accuracy Rate %", reportingAnalytics.accuracyRate ?? "—"]);
+      push(["First-Pass Yield %", reportingAnalytics.firstPassYield ?? "—"]);
+      push(["Rework Rate %", reportingAnalytics.reworkRate ?? "—"]);
+      push(["Reviewer Agreement %", qualityAnalytics.agreementRate ?? "—"]);
+      push([]);
+      push(["Annotator", "Reviews", "Avg Score", "Approval Rate %"]);
+      qualityAnalytics.annotatorStats.forEach(a => push([a.member.name, a.reviewCount, a.avgScore ?? "—", a.approvalRate ?? "—"]));
+      push([]);
+      push(["Reviewer", "Reviews", "Avg Score Given", "Rejection Rate %", "Avg Turnaround (h)"]);
+      qualityAnalytics.reviewerStats.forEach(r => push([r.name, r.reviewCount, r.avgScoreGiven ?? "—", r.rejectionRate ?? "—", r.avgTurnaroundHours !== null ? r.avgTurnaroundHours.toFixed(1) : "—"]));
+      push([]);
+    }
+    if (sections.sla) {
+      push(["SLA & DEADLINES"]);
+      push(["Overdue Tasks", deadlineOverview.overdue.length]);
+      push(["Due Today", deadlineOverview.dueToday.length]);
+      push(["Due This Week", deadlineOverview.dueWeek.length]);
+      push(["SLA Compliance %", deadlineOverview.slaCompliance ?? "—"]);
+      push([]);
+    }
+    if (sections.forecast) {
+      push(["FORECASTING"]);
+      push(["Project", "Remaining Images", "Velocity /day", "Est. Days Left", "Projected Completion"]);
+      reportingAnalytics.forecasts.forEach(f => push([f.project.name, f.remaining, f.velocity.toFixed(1), f.daysLeft ?? "—", f.projectedDate ? f.projectedDate.toLocaleDateString() : "—"]));
+      push([]);
+    }
+    const csv = lines.join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `annotatepro-report-${new Date().toISOString().slice(0,10)}.csv`; a.click();
+    logAudit("Custom Report Exported", null, projectFilter === "All" ? null : projectFilter, `Sections: ${Object.entries(sections).filter(([,v])=>v).map(([k])=>k).join(", ")}`);
+  }
+
+
+
+
+  if (authLoading) {
+    return <div className="auth-loading-screen"><div className="brand-mark"><Grid3X3 size={22}/></div><RefreshCw size={20} className="mig-spin"/><span>Loading AnnotatePro...</span></div>;
+  }
+  if (!session) {
+    return <AuthScreen/>;
+  }
+  if (passwordRecovery) {
+    return <UpdatePasswordScreen onDone={() => setPasswordRecovery(false)}/>;
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
+        <div className="brand">
+          <div className="brand-mark"><Grid3X3 size={20} /></div>
+          <div><strong>AnnotatePro</strong><span>Annotation Platform</span></div>
+        </div>
+
+        <div className="workspace-switcher">
+          <span>WORKSPACE</span>
+          <button><div className="workspace-avatar">A</div><div><b>Annotation Team</b><small>Production Workspace</small></div><ChevronDown size={15} /></button>
+        </div>
+
+        <nav className="sidebar-nav">
+          <p className="nav-label">MAIN MENU</p>
+          {navItems.map(([name, Icon]) => (
+            <button key={name} className={`nav-item ${activePage === name ? "active" : ""}`} onClick={() => navigate(name)}>
+              <Icon size={18} /><span>{name}</span>
+            </button>
+          ))}
+        </nav>
+
+        <div className="sidebar-bottom">
+          <div className="online-status"><span></span> System operational</div>
+          <div className="user-card">
+            <div className="user-avatar">{currentUserInitial}</div>
+            <div><b>{currentUserName}</b><span>{currentUserEmail}</span></div>
+            <button className="sidebar-signout" title="Sign out" onClick={signOut}><LogOut size={16}/></button>
+          </div>
+        </div>
+      </aside>
+
+      <main className="main-area">
+        <header className="topbar">
+          <button className="mobile-menu" onClick={() => setSidebarOpen(v => !v)}><Menu size={21} /></button>
+          <div className="breadcrumb">
+            {activePage === "Annotation Workspace"
+              ? <><button className="crumb-link" onClick={() => navigate("Projects")}>Projects</button><b>/</b><span>{projects.find(p => p.id === workspaceProject)?.name || "Tasks"}</span><b>/</b><strong>{workstationMode}</strong></>
+              : <><span>AnnotatePro</span><b>/</b><strong>{activePage}</strong></>}
+          </div>
+          <div className="top-actions">
+            <button className="global-search" onClick={() => setCommandOpen(true)}><Search size={17} /><span>Search…</span><kbd>{navigator.platform?.toLowerCase().includes("mac") ? "⌘K" : "Ctrl K"}</kbd></button>
+            {onlineUsers.length > 0 && <div className="presence-stack" title={onlineUsers.map(u=>u.name).join(", ")}>
+              {onlineUsers.slice(0,4).map(u => <div key={u.user_id} className="member-avatar small presence-avatar">{initials(u.name)}</div>)}
+              {onlineUsers.length > 4 && <div className="member-avatar small presence-avatar">+{onlineUsers.length-4}</div>}
+              <span className="presence-count">{onlineUsers.length} online</span>
+            </div>}
+            <button className="icon-btn notification-trigger" onClick={() => navigate("Notifications")}><Bell size={19} />{notifications.filter(n=>!n.read).length > 0 && <i>{notifications.filter(n=>!n.read).length > 9 ? "9+" : notifications.filter(n=>!n.read).length}</i>}</button>
+            <div className="profile-wrap">
+              <button className="profile-button" onClick={() => setProfileOpen(v => !v)}><div className="tiny-avatar">{currentUserInitial}</div><span>{currentUserName}</span><ChevronDown size={15} /></button>
+              {profileOpen && <div className="profile-menu"><b>{currentUserName}</b><span>{currentUserEmail}</span><hr /><button onClick={() => { setProfileOpen(false); navigate("Settings"); }}><Settings size={15}/> Settings</button><button onClick={signOut}><LogOut size={15}/> Sign out</button></div>}
+            </div>
+          </div>
+        </header>
+
+        {activePage === "Dashboard" && <Dashboard projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} auditEvents={auditEvents} stats={dashboardStats} reporting={reportingAnalytics} quality={qualityAnalytics} deadlines={deadlineOverview} onCreate={openCreateGroup} onNavigate={navigate} onOpenWorkstation={openWorkstation} userName={currentUserName}
+          layouts={dashboardLayouts} activeLayoutId={activeDashboardLayoutId} setActiveLayoutId={setActiveDashboardLayoutId} editing={dashboardEditing} setEditing={setDashboardEditing}
+          onToggleWidget={toggleDashboardWidget} onMoveWidget={moveDashboardWidget} onSaveLayoutAs={saveDashboardLayoutAs} onDeleteLayout={deleteDashboardLayout} onRenameLayout={renameDashboardLayout}
+        />}
+        {activePage === "Projects" && <ProjectsPage groups={projectGroups} projects={filteredProjects} teamMembers={teamMembers} projectConfigs={projectConfigs} auditEvents={auditEvents} search={projectSearch} setSearch={setProjectSearch} filter={projectStatusFilter} setFilter={setProjectStatusFilter} onCreate={openCreateProject} onEdit={openEditProject} onDelete={deleteProject} onDetails={setProjectDetails} onWorkspace={(id) => openWorkstation(id, "Annotation")} onReview={(id) => openWorkstation(id, "Review")} onPlanner={openTaskPlanner} onTaskSettings={(id) => { setTaskSettingsId(id); setImportTaskId(id); setExportProject(id); setTaskSettingsTab("General"); navigate("Task Settings"); }} onCreateGroup={openCreateGroup} onEditGroup={openEditGroup} onDeleteGroup={deleteGroup} onDuplicateGroup={duplicateGroup} onArchiveGroup={archiveGroup} onRestoreGroup={restoreGroup} onOpenConfig={(groupId) => { setConfigProject(groupId); navigate("Project Configuration"); }} groupMessage={groupMessage} canManage={canManage} canEditProject={canEditProject} />}
+        {activePage === "Project Configuration" && <ProjectConfigurationPage groups={projectGroups} flatProjects={projects} tasks={tasks} configProject={configProject} setConfigProject={setConfigProject} config={currentConfig} tab={configTab} setTab={setConfigTab} onAddLabel={openCreateLabel} onEditLabel={openEditLabel} onDeleteLabel={deleteProjectLabel} onUpdateConfig={updateProjectConfig} onUpdateProject={updateGroupMeta} onBack={()=>navigate("Projects")} message={configMessage} labelEditorOpen={labelEditorOpen} setLabelEditorOpen={setLabelEditorOpen} editingLabelId={editingLabelId} labelForm={labelForm} setLabelForm={setLabelForm} onSaveLabel={saveProjectLabel} labelSchemaError={labelSchemaError} setLabelSchemaError={setLabelSchemaError}
+          onCreateLabelGroup={createLabelGroup} onRenameLabelGroup={renameLabelGroup} onDeleteLabelGroup={deleteLabelGroup}
+          onSaveSchemaVersion={saveLabelSchemaVersion} onRestoreSchemaVersion={restoreLabelSchemaVersion}
+          onExportSchema={exportLabelSchema} onImportSchema={importLabelSchema} labelUsageStats={labelUsageStats}
+          teamMembers={teamMembers} onCreateRule={createAutomationRule} onUpdateRule={updateAutomationRule} onDeleteRule={deleteAutomationRule} onAddSuggestedRule={addSuggestedRule}
+          onCreateCriterion={createQaCriterion} onUpdateCriterion={updateQaCriterion} onDeleteCriterion={deleteQaCriterion}
+          onCreateErrorCategory={createErrorCategory} onUpdateErrorCategory={updateErrorCategory} onDeleteErrorCategory={deleteErrorCategory}
+          onAddCalibration={addCalibrationEntry} onDeleteCalibration={deleteCalibrationEntry} qaReviews={qaReviews}
+        />}
+        {activePage === "Task Planner" && <TaskPlannerPage
+          projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
+          selectedProjectId={plannerProjectId} setSelectedProjectId={setPlannerProjectId} priority={plannerPriority} setPriority={setPlannerPriority}
+          queue={plannerQueue} setQueue={setPlannerQueue} date={plannerDate} setDate={setPlannerDate}
+          targets={plannerTargets} setTarget={setPlannerTarget} reworkFilter={plannerReworkFilter} setReworkFilter={setPlannerReworkFilter}
+          selection={plannerReworkSelection} setSelection={setPlannerReworkSelection} onRework={applyPlannerRework} onRefresh={()=>flashPlanner("Task Planner refreshed")}
+          onBack={()=>setPlannerProjectId(null)} onOpenWorkspace={(id)=>openWorkstation(id, "Annotation")} onOpenReview={(id)=>openWorkstation(id, "Review")}
+          onAssign={openPlannerAssignment} onCloseAssignment={()=>setPlannerAssignmentOpen(false)} onSaveAssignment={savePlannerAssignments}
+          assignmentOpen={plannerAssignmentOpen} assignmentTaskIds={plannerAssignmentTaskIds} assignmentAssignee={plannerAssignmentAssignee} setAssignmentAssignee={setPlannerAssignmentAssignee}
+          assignmentReviewer={plannerAssignmentReviewer} setAssignmentReviewer={setPlannerAssignmentReviewer} assignmentPriority={plannerAssignmentPriority} setAssignmentPriority={setPlannerAssignmentPriority}
+          assignmentQueue={plannerAssignmentQueue} setAssignmentQueue={setPlannerAssignmentQueue} message={plannerMessage}
+        />}
+        {activePage === "Workload" && <WorkloadPage
+          projects={projects} rows={workloadRows} summary={workloadSummary} tasks={tasks}
+          project={workloadFilter} setProject={setWorkloadFilter} projectOptions={workloadProjects}
+          role={workloadRole} setRole={setWorkloadRole} capacityMode={workloadCapacityMode} setCapacityMode={setWorkloadCapacityMode}
+          settings={workloadSettings} setSettings={setWorkloadSettings} onBalance={autoBalanceWorkload}
+          onCapacity={updateMemberCapacity} message={workloadMessage} onOpenPlanner={openTaskPlanner}
+        />}
+        {activePage === "Annotation Workspace" && (
+          <Workspace
+            projects={projects} workspaceProject={workspaceProject} setWorkspaceProject={setWorkspaceProject}
+            tasks={tasks} currentTask={currentTask} selectedTaskIndex={selectedTaskIndex} setSelectedTaskIndex={setSelectedTaskIndex}
+            filteredTasks={filteredTasks} taskFilter={taskFilter} setTaskFilter={setTaskFilter}
+            tool={tool} setTool={setTool} labels={labels} selectedLabel={selectedLabel} setSelectedLabel={setSelectedLabel}
+            currentAnnotations={currentAnnotations} selectedAnnotationId={selectedAnnotationId} selectAnnotation={selectAnnotation}
+            selectedAnnotation={currentAnnotations.find(a => a.id === selectedAnnotationId)}
+            drawing={drawing} zoom={zoom} setZoom={setZoom} pan={pan} setPan={setPan}
+            canvasRef={canvasRef} imageRef={imageRef} onCanvasPointerDown={onCanvasPointerDown} onCanvasPointerMove={onCanvasPointerMove}
+            onCanvasPointerUp={onCanvasPointerUp} onCanvasDoubleClick={onCanvasDoubleClick} handleImageError={handleImageError}
+            onDelete={deleteSelected} onDuplicate={duplicateSelected} onUndo={undo} onRedo={redo}
+            onReset={resetView} onPrevious={() => changeTask(-1)} onNext={() => changeTask(1)}
+            onSave={saveTask} onSubmit={submitTask} message={workspaceMessage}
+            mode={workstationMode} setMode={setWorkstationMode} onSkip={skipTask}
+            onAccept={() => reviewCurrentTask("Approved")} onReject={() => reviewCurrentTask("Rejected")}
+            currentReview={currentTask ? qaReviews[currentTask.id] : null} canReview={canReview}
+            onBackToTasks={() => navigate("Projects")}
+            qaCriteria={(projectConfigs[getGroupIdForTask(currentTask||{})]||{}).qaCriteria || []}
+            errorCategories={(projectConfigs[getGroupIdForTask(currentTask||{})]||{}).errorCategories || []}
+            qaCriteriaScores={qaCriteriaScores} setQaCriteriaScores={setQaCriteriaScores}
+            qaErrors={qaErrors} setQaErrors={setQaErrors}
+            qaScorecardOpen={qaScorecardOpen} setQaScorecardOpen={setQaScorecardOpen}
+            onAcceptPrediction={acceptPrediction} onRejectPrediction={rejectPrediction} onAcceptAllPredictions={acceptAllPredictions} onRejectAllPredictions={rejectAllPredictions}
+            suggestedIds={currentTask ? suggestedLabelIds(currentTask.datasetId, (projectConfigs[getGroupIdForTask(currentTask)]||{}).labels || []) : []}
+            updateAnnotation={updateAnnotation} startAnnotationEdit={startAnnotationEdit} showShortcuts={showShortcuts} setShowShortcuts={setShowShortcuts}
+            onImport={() => imageInputRef.current?.click()}
+            imageInputRef={imageInputRef} importImages={importImages}
+            insertVertex={insertVertex} deleteVertex={deleteVertex} selectedIds={selectedIds} marquee={marquee}
+            onToggleVisible={toggleAnnotationVisible} onToggleLock={toggleAnnotationLock} onReorder={moveAnnotationOrder}
+            coEditors={coEditors}
+          />
+        )}
+        {activePage === "Team" && <TeamPage
+          members={teamFilteredMembers} allMembers={teamMembers} projects={projects} tasks={tasks}
+          stats={teamStats} search={teamSearch} setSearch={setTeamSearch}
+          roleFilter={teamRoleFilter} setRoleFilter={setTeamRoleFilter}
+          statusFilter={teamStatusFilter} setStatusFilter={setTeamStatusFilter}
+          onCreate={openCreateMember} onEdit={openEditMember} onToggleStatus={toggleMemberStatus} onDelete={deleteMember}
+          onAssign={assignTask} message={teamMessage} modalOpen={teamModalOpen} setModalOpen={setTeamModalOpen}
+          editing={!!editingMemberId} form={teamForm} setForm={setTeamForm} onSave={saveMember}
+          onInvite={inviteTeamMember} onSendReset={sendPasswordReset} accountActionStatus={accountActionStatus} isAdmin={isAdmin}
+        />}
+        {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} canReview={canReview} /> }
+        {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} auditEvents={auditEvents} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} onExport={exportCustomReport} />}
+        {activePage === "Operations" && <OperationsPage projects={projects} tasks={tasks} teamMembers={teamMembers} qaReviews={qaReviews} exportHistory={exportHistory} search={operationsSearch} setSearch={setOperationsSearch} filter={operationsFilter} setFilter={setOperationsFilter} project={operationsProject} setProject={setOperationsProject} showUnread={operationsShowUnread} setShowUnread={setOperationsShowUnread} readMap={operationRead} setReadMap={setOperationRead} />}
+        {activePage === "Deadlines" && <DeadlinesPage overview={deadlineOverview} projects={projects} teamMembers={teamMembers} onSetTaskDueDate={setTaskDueDate} onEscalate={escalateTaskNow} onOpenTask={(task) => openWorkstation(task.projectId, task.status === "Submitted" || task.status === "QA Review" ? "Review" : "Annotation", task.id)} />}
+        {activePage === "QA & Quality" && <QaQualityPage analytics={qualityAnalytics} projectGroups={projectGroups} />}
+        {activePage === "Reports" && <ReportsPage reporting={reportingAnalytics} quality={qualityAnalytics} deadlines={deadlineOverview} projects={projects} onExport={exportCustomReport} />}
+        {activePage === "Audit Trail" && <AuditTrailPage events={auditEvents} projects={projects} tasks={tasks} teamMembers={teamMembers} search={auditSearch} setSearch={setAuditSearch} filter={auditFilter} setFilter={setAuditFilter} project={auditProject} setProject={setAuditProject} user={auditUser} setUser={setAuditUser} task={auditTask} setTask={setAuditTask} date={auditDate} setDate={setAuditDate} selectedTask={auditSelectedTask} setSelectedTask={setAuditSelectedTask} onClear={()=>setAuditEvents([])} onSeed={()=>{ setAuditEvents([]); window.setTimeout(()=>window.location.reload(), 50); }} /> }
+        {activePage === "Notifications" && <NotificationsPage notifications={notifications} setNotifications={setNotifications} filter={notificationFilter} setFilter={setNotificationFilter} search={notificationSearch} setSearch={setNotificationSearch} tasks={tasks} projects={projects} teamMembers={teamMembers} />}
+        {activePage === "Task Settings" && taskSettingsTask && <TaskSettingsPage
+          task={taskSettingsTask} tab={taskSettingsTab} setTab={setTaskSettingsTab} subTab={taskSettingsSubTab} setSubTab={setTaskSettingsSubTab}
+          onBack={() => navigate("Projects")} onEditTask={() => openEditProject(taskSettingsTask)}
+          importProps={{projects, tasks, datasets, projectConfigs, importHistory, onClearHistory: () => setImportHistory([]), importTaskId, setImportTaskId, activeDatasetId, setActiveDatasetId, listSearch: datasetListSearch, setListSearch: setDatasetListSearch, listStatus: datasetListStatus, setListStatus: setDatasetListStatus, filteredTasks: datasetFilteredTasks, search: datasetSearch, setSearch: setDatasetSearch, status: datasetStatus, setStatus: setDatasetStatus, view: datasetView, setView: setDatasetView, onImport: (datasetId) => { setImportTargetDataset(datasetId); imageInputRef.current?.click(); }, onCsv: () => setImportOpen(true), onAdvImport: (datasetId) => { setImportTargetDataset(datasetId); resetAdvImportWizard(); setAdvImportOpen(true); }, onRemove: removeTask, onClear: clearDataset, onStatus: updateTaskStatus, onExport: exportTasksCsv, onCreateDataset: openCreateDataset, onEditDataset: openEditDataset, onArchiveDataset: archiveDataset, onRestoreDataset: restoreDataset, onDeleteDataset: deleteDataset, onSnapshotVersion: snapshotDatasetVersion, compareVersion, setCompareVersion}}
+          exportProps={{tasks: exportTasks, allTasks: tasks, annotations: annotationsByTask, qaReviews, format: exportFormat, setFormat: setExportFormat, scope: exportScope, setScope: setExportScope, project: exportProject, setProject: setExportProject, projects, search: exportSearch, setSearch: setExportSearch, history: exportHistory, onExport: performExport, onClearHistory: clearExportHistory, message: exportMessage, scopedToTask: true}}
+        />}
+        {activePage === "Settings" && <SettingsPage settings={appSettings} tab={settingsTab} setTab={setSettingsTab} onUpdate={updateAppSetting} onReset={resetAppSettings} message={settingsMessage}
+          migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={runMigration}
+          verifyStatus={verifyStatus} verifying={verifying} onVerify={verifyMigrationCounts} lastMigratedAt={lastMigratedAt}
+          migrationDomains={migrationDomains} migrationSingletons={migrationSingletons}
+          imageMigration={imageMigration} onMigrateImages={migrateImagesToStorage}
+          base64ImageCount={tasks.filter(t => t.image && t.image.startsWith("data:")).length}
+          userName={currentUserName} userEmail={currentUserEmail} userInitial={currentUserInitial} onSignOut={signOut}
+          isAdmin={isAdmin} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole}
+          apiTokens={apiTokens} onGenerateToken={generateApiToken} onRevokeToken={revokeApiToken} onDeleteToken={deleteApiToken}
+          webhooks={webhooks} onCreateWebhook={createWebhook} onUpdateWebhook={updateWebhook} onDeleteWebhook={deleteWebhook} onTestWebhook={testWebhook}
+          projects={projects} projectGroups={projectGroups} onImportMlPredictions={importMlPredictions} onExportProjectJson={exportProjectJson}
+          errorLogEntries={errorLogEntries} onRefreshErrorLog={refreshErrorLog} onClearErrorLog={clearErrorLog}
+          onExportBackup={exportWorkspaceBackup} onRestoreBackup={restoreWorkspaceBackup} onSignOutAllDevices={signOutAllDevices}
+          onRunHealthCheck={runHealthCheck} />}
+
+        <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
+        {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
+      </main>
+
+      {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} getResults={getSearchResults} quickActions={quickActions} recentItems={recentItems} favoriteItems={favoriteItems} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} onSelect={openSearchResult} />}
+      {projectModalOpen && <ProjectModal form={projectForm} setForm={setProjectForm} editing={!!editingProjectId} onClose={() => setProjectModalOpen(false)} onSave={saveProject} />}
+      {groupModalOpen && <GroupModal form={groupForm} setForm={setGroupForm} editing={!!editingGroupId} onClose={() => setGroupModalOpen(false)} onSave={saveGroup} teamMembers={teamMembers} />}
+      {datasetModalOpen && <DatasetModal form={datasetForm} setForm={setDatasetForm} editing={!!editingDatasetId} onClose={() => setDatasetModalOpen(false)} onSave={saveDataset} />}
+      {projectDetails && <ProjectDetails project={projectDetails} onClose={() => setProjectDetails(null)} onEdit={() => { setProjectDetails(null); openEditProject(projectDetails); }} />}
+      {importOpen && <ImportModal onClose={() => { setImportOpen(false); resetImportWizard(); }} onImport={() => { setImportOpen(false); resetImportWizard(); imageInputRef.current?.click(); }} step={importStep} setStep={setImportStep} fileName={importFileName} columns={importColumns} rows={importRows} mapping={importMapping} setMapping={setImportMapping} validation={importValidation} error={importError} duplicateMode={importDuplicateMode} setDuplicateMode={setImportDuplicateMode} datasets={datasets} projects={projects} targetDatasetId={importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id} setTargetDataset={setImportTargetDataset} onFile={handleStructuredFile} fileRef={structuredInputRef} onRun={runStructuredImport} />}
+      {advImportOpen && <AdvancedImportModal onClose={() => { setAdvImportOpen(false); resetAdvImportWizard(); }} step={advImportStep} setStep={setAdvImportStep} kind={advImportKind} fileName={advImportFileName} parsed={advImportParsed} mapping={advImportMapping} setMapping={setAdvImportMapping} error={advImportError} progress={advImportProgress} running={advImportRunning} datasets={datasets} projects={projects} projectConfigs={projectConfigs} targetDatasetId={importTargetDataset || datasets.find(d => d.projectId === importTaskId)?.id || datasets[0]?.id} setTargetDataset={setImportTargetDataset} onFile={handleAdvancedImportFile} fileRef={advImportInputRef} onRun={runAdvancedImport} />}
+    </div>
+  );
+}
+
+function timeAgo(timestamp) {
+  const diffMs = Date.now() - new Date(timestamp).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs} hr${hrs===1?"":"s"} ago`;
+  const days = Math.floor(hrs / 24);
+  return `${days} day${days===1?"":"s"} ago`;
+}
+
+const ACTIVITY_ICONS = { "QA Approved": CheckCircle2, "QA Rejected": AlertCircle, "Task Submitted": Upload, "Annotation Saved": Edit3, "Task Assigned": Users, "Task Escalated": AlertCircle, "Task Completed": ShieldCheck };
+
+const WIDGET_REGISTRY = [
+  { id: "kpi-active-projects", title: "Active Projects", category: "Overview", size: "kpi", icon: FolderKanban,
+    render: (d) => <StatCard icon={FolderKanban} label="Active Projects" value={d.stats.active} meta={`${d.projects.length} total projects`} /> },
+  { id: "kpi-images-remaining", title: "Images to Annotate", category: "Project", size: "kpi", icon: ImageIcon,
+    render: (d) => <StatCard icon={ImageIcon} label="Images to Annotate" value={d.stats.remaining.toLocaleString()} meta={`${d.stats.completed.toLocaleString()} completed`} /> },
+  { id: "kpi-team-members", title: "Team Members", category: "Team", size: "kpi", icon: Users,
+    render: (d) => <StatCard icon={Users} label="Team Members" value={d.teamMembers.length} meta={`${d.teamMembers.filter(m=>m.status==="Active").length} active`} /> },
+  { id: "kpi-quality-score", title: "Quality Score", category: "QA", size: "kpi", icon: ShieldCheck,
+    render: (d) => { const scored = Object.values(d.qaReviews).filter(r=>r.score!==null&&r.score!==undefined); const avg = scored.length?Math.round(scored.reduce((s,r)=>s+r.score,0)/scored.length):null; return <StatCard icon={ShieldCheck} label="Quality Score" value={avg===null?"—":`${avg}%`} meta={`${scored.length} scored review${scored.length===1?"":"s"}`} />; } },
+  { id: "kpi-throughput", title: "Throughput (7d)", category: "Project", size: "kpi", icon: TrendingUp,
+    render: (d) => <StatCard icon={TrendingUp} label="Throughput (7d)" value={d.reporting.last7} meta={d.reporting.throughputTrendPct===null?"vs prior week: —":`${d.reporting.throughputTrendPct>=0?"+":""}${d.reporting.throughputTrendPct}% vs prior week`} /> },
+  { id: "kpi-sla-compliance", title: "SLA Compliance", category: "SLA", size: "kpi", icon: Calendar,
+    render: (d) => <StatCard icon={Calendar} label="SLA Compliance" value={d.deadlines.slaCompliance===null?"—":`${d.deadlines.slaCompliance}%`} meta={`${d.deadlines.overdue.length} overdue now`} /> },
+  { id: "kpi-overdue", title: "Overdue Tasks", category: "SLA", size: "kpi", icon: AlertCircle,
+    render: (d) => <StatCard icon={AlertCircle} label="Overdue Tasks" value={d.deadlines.overdue.length} meta={`${d.deadlines.dueToday.length} due today`} /> },
+  { id: "kpi-pending-reviews", title: "Pending Reviews", category: "QA", size: "kpi", icon: ClipboardCheck,
+    render: (d) => <StatCard icon={ClipboardCheck} label="Pending Reviews" value={d.tasks.filter(t=>["Submitted","QA Review"].includes(t.status)).length} meta="Awaiting QA" /> },
+
+  { id: "panel-active-projects", title: "Active Projects", category: "Project", size: "large", icon: FolderKanban,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Active Projects</h2><p>Current annotation workload</p></div><button className="text-btn" onClick={() => d.onNavigate("Projects")}>View all <span>→</span></button></div><div className="table-wrap"><table><thead><tr><th>PROJECT</th><th>TYPE</th><th>TOTAL</th><th>PROGRESS</th><th>STATUS</th></tr></thead><tbody>
+      {d.projects.slice(0, 5).map(p => <tr key={p.id}><td><b>{p.name}</b><small>{p.client}</small></td><td>{p.annotationType}</td><td>{Number(p.totalImages).toLocaleString()}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><StatusBadge status={p.status}/></td></tr>)}
+    </tbody></table></div></section> },
+
+  { id: "panel-recent-activity", title: "Recent Activity", category: "Overview", size: "medium", icon: Activity,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Recent Activity</h2><p>Latest workspace events</p></div></div><div className="activity-list">
+      {d.auditEvents.length ? d.auditEvents.slice(0, 6).map(e => <ActivityRow key={e.id} icon={ACTIVITY_ICONS[e.action] || Activity} title={e.action} text={e.details || e.actor} time={timeAgo(e.timestamp)}/>) : <div className="analytics-empty">No activity yet.</div>}
+    </div></section> },
+
+  { id: "panel-quick-actions", title: "Quick Actions", category: "Overview", size: "medium", icon: Zap,
+    render: (d) => <section className="panel quick-panel"><div className="panel-head"><div><h2>Quick Actions</h2><p>Jump into common workflows</p></div></div><div className="quick-grid"><Quick icon={Play} title="Start Annotating" onClick={() => d.onOpenWorkstation(null, "Annotation")}/><Quick icon={Target} title="Task Planner" onClick={() => d.onNavigate("Task Planner")}/><Quick icon={ClipboardCheck} title="Pending Reviews" onClick={() => d.onOpenWorkstation(null, "Review")}/><Quick icon={TrendingUp} title="View Analytics" onClick={() => d.onNavigate("Analytics")}/><Quick icon={Upload} title="Import Images" onClick={() => d.onNavigate("Projects")}/></div></section> },
+
+  { id: "panel-team-utilization", title: "Team Utilization", category: "Team", size: "medium", icon: Users,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Team Utilization</h2><p>Workload against capacity</p></div></div>{d.reporting.teamUtilization.length ? <div className="utilization-list">{d.reporting.teamUtilization.slice(0,5).map(u => <div className="utilization-row" key={u.member.id}><div className="utilization-main"><b>{u.member.name}</b><span>{u.member.role} · {u.assigned}/{u.capacity}</span></div><div className="utilization-track"><i className={u.utilization>=100?"over":u.utilization>=75?"high":""} style={{width:`${Math.min(100,u.utilization)}%`}}/></div><span className="utilization-pct">{u.utilization}%</span></div>)}</div> : <div className="analytics-empty">No active team members.</div>}</section> },
+
+  { id: "panel-qa-distribution", title: "QA Distribution", category: "QA", size: "medium", icon: ClipboardCheck,
+    render: (d) => { const reviewed = Object.values(d.qaReviews); const approved = reviewed.filter(r=>r.decision==="Approved").length; const rejected = reviewed.filter(r=>r.decision==="Rejected").length; const changes = reviewed.filter(r=>r.decision==="Changes Requested").length; const scored = reviewed.filter(r=>r.score!==null&&r.score!==undefined); const avg = scored.length?Math.round(scored.reduce((s,r)=>s+r.score,0)/scored.length):null; return <section className="panel quality-panel"><div className="panel-head"><div><h2>QA Distribution</h2><p>Current review decisions</p></div><ClipboardCheck size={17}/></div><div className="quality-ring"><div><strong>{avg===null?"—":`${avg}%`}</strong><span>avg score</span></div></div><div className="quality-legend"><div><i className="approved-dot"></i><span>Approved</span><b>{approved}</b></div><div><i className="changes-dot"></i><span>Changes requested</span><b>{changes}</b></div><div><i className="rejected-dot"></i><span>Rejected</span><b>{rejected}</b></div></div></section>; } },
+
+  { id: "panel-upcoming-deadlines", title: "Upcoming Deadlines", category: "SLA", size: "medium", icon: Calendar,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Upcoming Deadlines</h2><p>Soonest project due dates</p></div></div>{d.deadlines.upcomingProjects.length ? <div className="upcoming-deadlines-list">{d.deadlines.upcomingProjects.slice(0,5).map(u => <div className="upcoming-deadline-row" key={u.project.id}><div><b>{u.project.name}</b><span>{new Date(u.project.dueDate).toLocaleDateString()}</span></div><div className="upcoming-progress"><div className="progress-track"><i style={{width:`${u.progress}%`}}/></div><small>{u.progress}%</small></div><span className={`days-left-badge ${u.daysLeft<0?"overdue":u.daysLeft<=3?"soon":""}`}>{u.daysLeft<0?`${Math.abs(u.daysLeft)}d overdue`:`${u.daysLeft}d left`}</span></div>)}</div> : <div className="analytics-empty">No project deadlines set.</div>}</section> },
+
+  { id: "panel-overdue-tasks", title: "Overdue Tasks", category: "SLA", size: "medium", icon: AlertCircle,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Overdue Tasks</h2><p>Past their SLA or due date</p></div></div>{d.deadlines.overdue.length ? <div className="overdue-task-list">{d.deadlines.overdue.slice(0,5).map(r => <div className="overdue-task-row" key={r.task.id}><div className="overdue-task-main"><b>{r.task.name}</b><span>{r.task.status}</span></div><span className="overdue-hours-badge">{r.overdueHours.toFixed(1)}h overdue</span></div>)}</div> : <div className="analytics-empty">Nothing overdue.</div>}</section> },
+
+  { id: "panel-quality-trend", title: "Quality Trend", category: "QA", size: "large", icon: TrendingUp,
+    render: (d) => { const weeks = d.quality.weeks; const maxAvg = Math.max(1, ...weeks.map(w=>w.avg||0)); return <section className="panel analytics-chart-panel"><div className="panel-head"><div><h2>Quality Trend</h2><p>Average QA score by week</p></div></div><div className="trend-chart"><div className="chart-y"><span>100</span><span>50</span><span>0</span></div><div className="chart-bars">{weeks.map((w,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${w.avg?Math.max(6,w.avg):3}%`}}></div><span>{w.label}</span></div>)}</div></div></section>; } },
+
+  { id: "panel-forecast", title: "Project Forecast", category: "Project", size: "large", icon: Target,
+    render: (d) => <section className="panel"><div className="panel-head"><div><h2>Project Forecast</h2><p>Projected completion at current velocity</p></div></div>{d.reporting.forecasts.length ? <div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>REMAINING</th><th>DAYS LEFT</th><th>PROJECTED</th></tr></thead><tbody>{d.reporting.forecasts.slice(0,5).map(f => <tr key={f.project.id}><td><b>{f.project.name}</b></td><td>{f.remaining.toLocaleString()}</td><td>{f.daysLeft??"—"}</td><td>{f.projectedDate?f.projectedDate.toLocaleDateString():<span className="forecast-stalled">Stalled</span>}</td></tr>)}</tbody></table></div> : <div className="analytics-empty">All projects complete.</div>}</section> }
+];
+
+const DASHBOARD_PRESETS = {
+  overview: { name: "Overview", builtIn: true, widgets: ["kpi-active-projects", "kpi-images-remaining", "kpi-team-members", "kpi-quality-score", "panel-active-projects", "panel-recent-activity", "panel-quick-actions"] },
+  team: { name: "Team Dashboard", builtIn: true, widgets: ["kpi-team-members", "kpi-pending-reviews", "panel-team-utilization", "panel-quick-actions"] },
+  project: { name: "Project Dashboard", builtIn: true, widgets: ["kpi-active-projects", "kpi-images-remaining", "kpi-throughput", "panel-active-projects", "panel-forecast"] },
+  qa: { name: "QA Dashboard", builtIn: true, widgets: ["kpi-quality-score", "kpi-pending-reviews", "panel-qa-distribution", "panel-quality-trend"] },
+  sla: { name: "SLA Dashboard", builtIn: true, widgets: ["kpi-sla-compliance", "kpi-overdue", "panel-upcoming-deadlines", "panel-overdue-tasks"] }
+};
+
+function Dashboard({ projects, tasks, teamMembers, qaReviews, auditEvents, stats, reporting, quality, deadlines, onCreate, onNavigate, onOpenWorkstation, userName,
+  layouts, activeLayoutId, setActiveLayoutId, editing, setEditing, onToggleWidget, onMoveWidget, onSaveLayoutAs, onDeleteLayout, onRenameLayout }) {
+  const [newLayoutName, setNewLayoutName] = useState("");
+  const layout = layouts[activeLayoutId] || Object.values(layouts)[0];
+  const data = { projects, tasks, teamMembers, qaReviews, auditEvents, stats, reporting, quality, deadlines, onNavigate, onOpenWorkstation };
+  const placed = layout.widgets.map(id => WIDGET_REGISTRY.find(w => w.id === id)).filter(Boolean);
+  const available = WIDGET_REGISTRY.filter(w => !layout.widgets.includes(w.id));
+
+  return (
+    <div className="page">
+      <div className="page-head">
+        <div><span className="eyebrow">OVERVIEW</span><h1>Good afternoon, {userName}</h1><p>Here's what's happening across your annotation workspace.</p></div>
+        <div className="dashboard-head-actions">
+          <select className="layout-switcher" value={activeLayoutId} onChange={e=>setActiveLayoutId(e.target.value)}>{Object.entries(layouts).map(([id,l])=><option key={id} value={id}>{l.name}</option>)}</select>
+          <button className={`secondary-btn ${editing?"active-toggle":""}`} onClick={()=>setEditing(v=>!v)}><SlidersHorizontal size={16}/> {editing?"Done":"Customize"}</button>
+          <button className="primary-btn" onClick={()=>onCreate()}><Plus size={17}/> Create Project</button>
+        </div>
+      </div>
+
+      {editing && <section className="panel dashboard-editor">
+        <div className="panel-head"><div><h2>Customize this layout</h2><p>Add, remove and reorder widgets, or save your own layout</p></div></div>
+        <div className="dashboard-editor-row">
+          <span className="section-label">ON THIS DASHBOARD ({placed.length})</span>
+          <div className="placed-widget-list">{placed.map((w,i) => <div className="placed-widget-chip" key={w.id}>
+            <w.icon size={13}/><span>{w.title}</span>
+            <button disabled={i===0} onClick={()=>onMoveWidget(w.id,-1)} title="Move earlier"><ChevronDown size={12} style={{transform:"rotate(90deg)"}}/></button>
+            <button disabled={i===placed.length-1} onClick={()=>onMoveWidget(w.id,1)} title="Move later"><ChevronDown size={12} style={{transform:"rotate(-90deg)"}}/></button>
+            <button className="chip-x" onClick={()=>onToggleWidget(w.id)} title="Remove"><X size={12}/></button>
+          </div>)}</div>
+        </div>
+        {!!available.length && <div className="dashboard-editor-row">
+          <span className="section-label">WIDGET LIBRARY</span>
+          <div className="widget-library-grid">{available.map(w => <button key={w.id} className="widget-library-card" onClick={()=>onToggleWidget(w.id)}><w.icon size={16}/><span>{w.title}</span><Plus size={13}/></button>)}</div>
+        </div>}
+        <div className="dashboard-editor-row layout-save-row">
+          <input value={newLayoutName} onChange={e=>setNewLayoutName(e.target.value)} placeholder="Save current arrangement as..."/>
+          <button className="ghost-btn" onClick={()=>{ onSaveLayoutAs(newLayoutName); setNewLayoutName(""); }}><Save size={13}/> Save as new layout</button>
+          {!layout.builtIn && <button className="ghost-btn" onClick={()=>{ const name = window.prompt("Rename layout", layout.name); if (name) onRenameLayout(activeLayoutId, name); }}><Edit3 size={13}/> Rename</button>}
+          {Object.keys(layouts).length > 1 && <button className="danger-icon" onClick={()=>onDeleteLayout(activeLayoutId)} title="Delete this layout"><Trash2 size={14}/></button>}
+        </div>
+      </section>}
+
+      <div className="widget-grid">
+        {placed.filter(w=>w.size==="kpi").length > 0 && <div className="stats-grid">{placed.filter(w=>w.size==="kpi").map(w => <React.Fragment key={w.id}>{w.render(data)}</React.Fragment>)}</div>}
+        {placed.filter(w=>w.size!=="kpi").map(w => <div className={`widget-slot widget-${w.size}`} key={w.id}>{w.render(data)}</div>)}
+        {!placed.length && <div className="config-empty"><LayoutDashboard size={34}/><h3>This layout is empty</h3><p>Click Customize to add widgets.</p></div>}
+      </div>
+    </div>
+  );
+}
+
+function AiQaInsightPanel({ annotations, labels }) {
+  const [open, setOpen] = useState(true);
+  const withConfidence = annotations.filter(a => a.confidence != null);
+  const avgConfidence = withConfidence.length ? Math.round((withConfidence.reduce((s, a) => s + a.confidence, 0) / withConfidence.length) * 100) : null;
+  const correctedCount = annotations.filter(a => a.corrected).length;
+  const lowConfidence = annotations.filter(a => a.confidence != null && a.confidence < 0.6);
+  return <div className="qa-scorecard-panel ai-qa-panel">
+    <button type="button" className="qa-scorecard-toggle" onClick={() => setOpen(v => !v)}>
+      <Zap size={14}/> AI-Assisted QA
+      <b className="qa-live-score">{annotations.length}</b>
+      <ChevronDown size={14} style={{ marginLeft: "auto", transform: open ? "rotate(180deg)" : "none" }}/>
+    </button>
+    {open && <div className="qa-scorecard-body">
+      <div className="ai-qa-stat-row"><span>Regions from AI</span><b>{annotations.length}</b></div>
+      <div className="ai-qa-stat-row"><span>Avg. confidence</span><b>{avgConfidence===null?"—":`${avgConfidence}%`}</b></div>
+      <div className="ai-qa-stat-row"><span>Corrected by annotator</span><b>{correctedCount}</b></div>
+      {lowConfidence.length > 0 && <div className="ai-qa-lowconf">
+        <span className="section-label">LOW CONFIDENCE — REVIEW CLOSELY</span>
+        {lowConfidence.map(a => <div key={a.id} className="ai-qa-lowconf-row"><span>{labels.find(l=>l.id===a.labelId)?.name || "Object"}</span><b>{Math.round(a.confidence*100)}%</b></div>)}
+      </div>}
+    </div>}
+  </div>;
+}
+
+function QaScorecardPanel({ criteria, categories, scores, setScores, errors, setErrors, open, setOpen }) {
+  const totalWeight = (criteria || []).reduce((s, c) => s + (Number(c.weight) || 0), 0) || 1;
+  const overallScore = criteria?.length ? Math.round((criteria || []).reduce((s, c) => s + ((scores[c.id] ?? 100) * (Number(c.weight) || 0)), 0) / totalWeight) : null;
+  return <div className="qa-scorecard-panel">
+    <button type="button" className="qa-scorecard-toggle" onClick={() => setOpen(v => !v)}>
+      <ShieldCheck size={14}/> QA Scorecard
+      {overallScore !== null && <b className="qa-live-score">{overallScore}</b>}
+      <ChevronDown size={14} style={{ marginLeft: "auto", transform: open ? "rotate(180deg)" : "none" }}/>
+    </button>
+    {open && <div className="qa-scorecard-body">
+      {criteria?.length ? criteria.map(c => <div className="qa-criterion-row" key={c.id}>
+        <span>{c.name}<small>{c.weight}%</small></span>
+        <input type="range" min="0" max="100" value={scores[c.id] ?? 100} onChange={e => setScores(prev => ({ ...prev, [c.id]: Number(e.target.value) }))}/>
+        <b>{scores[c.id] ?? 100}</b>
+      </div>) : <p className="qa-scorecard-empty">No scoring criteria configured — add some in Project Configuration → QA Scorecard.</p>}
+      <div className="qa-error-log">
+        <span className="section-label">ERRORS LOGGED ({errors.length})</span>
+        {errors.map(err => <div className="qa-error-chip" key={err.id}>
+          <b>{categories.find(c => c.id === err.categoryId)?.name || "Error"}</b>
+          <span className={`sev-badge sev-${(err.severity || "Minor").toLowerCase()}`}>{err.severity}</span>
+          <button type="button" onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}><X size={11}/></button>
+        </div>)}
+        {categories?.length ? <QaErrorAdder categories={categories} onAdd={(categoryId, severity) => setErrors(prev => [...prev, { id: `logged-${Date.now()}`, categoryId, severity }])}/> : null}
+      </div>
+    </div>}
+  </div>;
+}
+
+function QaErrorAdder({ categories, onAdd }) {
+  const [categoryId, setCategoryId] = useState(categories[0]?.id || "");
+  const cat = categories.find(c => c.id === categoryId);
+  return <div className="qa-error-adder">
+    <select value={categoryId} onChange={e => setCategoryId(e.target.value)}>{categories.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+    <button type="button" className="ghost-btn" onClick={() => categoryId && onAdd(categoryId, cat?.severity || "Minor")}><Plus size={12}/> Log</button>
+  </div>;
+}
+
+function Workspace({
+  projects, workspaceProject, setWorkspaceProject, tasks, currentTask, selectedTaskIndex, setSelectedTaskIndex,
+  filteredTasks, taskFilter, setTaskFilter, tool, setTool, labels, selectedLabel, setSelectedLabel,
+  currentAnnotations, selectedAnnotationId, selectAnnotation, selectedAnnotation, drawing, zoom, setZoom, pan, setPan,
+  canvasRef, imageRef, onCanvasPointerDown, onCanvasPointerMove, onCanvasPointerUp, onCanvasDoubleClick, handleImageError,
+  onDelete, onDuplicate, onUndo, onRedo, onReset, onPrevious, onNext, onSave, onSubmit, message,
+  updateAnnotation, startAnnotationEdit, showShortcuts, setShowShortcuts, onImport,
+  insertVertex, deleteVertex, onToggleVisible, onToggleLock, onReorder, selectedIds, marquee, coEditors,
+  mode = "Annotation", setMode, onSkip, onAccept, onReject, currentReview, canReview = true, onBackToTasks,
+  qaCriteria, errorCategories, qaCriteriaScores, setQaCriteriaScores, qaErrors, setQaErrors, qaScorecardOpen, setQaScorecardOpen,
+  onAcceptPrediction, onRejectPrediction, onAcceptAllPredictions, onRejectAllPredictions, suggestedIds
+}) {
+  const isReview = mode === "Review";
+  const pendingPredictions = currentAnnotations.filter(a => a.reviewState === "pending");
+  const modelAnnotations = currentAnnotations.filter(a => a.source === "model");
+  const [taskSearch, setTaskSearch] = useState("");
+  const [rightTab, setRightTab] = useState("Labels");
+  const [infoTab, setInfoTab] = useState("Info");
+  const [labelSearch, setLabelSearch] = useState("");
+  const workspaceTasks = useMemo(() => tasks.map((task, index) => ({ task, index })).filter(({ task }) => {
+    const projectMatch = !workspaceProject || task.projectId === workspaceProject;
+    const q = taskSearch.trim().toLowerCase();
+    const searchMatch = !q || `${task.name} ${task.id}`.toLowerCase().includes(q);
+    const statusMatch = taskFilter === "All" || task.status === taskFilter;
+    return projectMatch && searchMatch && statusMatch;
+  }), [tasks, workspaceProject, taskSearch, taskFilter]);
+  const filteredLabels = labels.filter(label => !labelSearch.trim() || label.name.toLowerCase().includes(labelSearch.trim().toLowerCase()));
+  const labelById = useMemo(() => Object.fromEntries(labels.map(l => [l.id, l])), [labels]);
+  const currentProject = projects.find(p => p.id === workspaceProject);
+  const selectedLabelObject = labels.find(l => l.id === selectedLabel);
+  const objectCountByLabel = currentAnnotations.reduce((acc, a) => { acc[a.labelId] = (acc[a.labelId] || 0) + 1; return acc; }, {});
+  const toolGroups = [
+    ["NAVIGATE", [["select", MousePointer2, "Select", "V"], ["pan", Move, "Pan", "Space"]]],
+    ["SHAPES", [["rectangle", Square, "Bounding Box", "B"], ["polygon", Grid3X3, "Polygon", "P"], ["polyline", Activity, "Polyline", "G"], ["line", Minus, "Line", "L"]]],
+    ["POINT / MASK", [["keypoint", Target, "Keypoint", "K"], ["brush", Edit3, "Brush", "R"], ["eraser", Eraser, "Eraser", "E"]]]
+  ];
+
+  return (
+    <div className="workspace-page build8-workspace">
+      <div className="workspace-top">
+        <button className="workstation-back" onClick={onBackToTasks} title="Back to tasks"><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Tasks</button>
+        <div className="workspace-project"><span>PROJECT</span><select value={workspaceProject} onChange={e => { const id=e.target.value; setWorkspaceProject(id); const first=tasks.findIndex(t=>!id || t.projectId===id); setSelectedTaskIndex(first>=0?first:0); setZoom(1); setPan({x:0,y:0}); }}><option value="">All Projects</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+        <div className="workspace-task-title"><b>{currentTask?.name || "No task loaded"}</b><span>{currentTask?.id || "—"} · {selectedTaskIndex + 1} / {tasks.length} tasks</span></div>
+        <div className="workspace-top-meta"><span className="workspace-live-dot"></span><span>{currentAnnotations.length} objects</span><span>{selectedLabelObject?.name || "No label selected"}</span></div>
+        <div className="workstation-mode-switch" role="tablist" aria-label="Task stage">
+          <button role="tab" aria-selected={!isReview} className={!isReview ? "active" : ""} onClick={()=>setMode && setMode("Annotation")}><Edit3 size={14}/> Annotation</button>
+          <button role="tab" aria-selected={isReview} className={isReview ? "active" : ""} onClick={()=>setMode && setMode("Review")}><ClipboardCheck size={14}/> Review</button>
+        </div>
+        <div className="workspace-actions">
+          <button className="secondary-btn" onClick={onSave}><Save size={16}/> Save</button>
+          {isReview
+            ? <><button className="secondary-btn reject-btn" onClick={onReject} disabled={!canReview || !currentTask}><AlertCircle size={16}/> Reject</button><button className="primary-btn accept-btn" onClick={onAccept} disabled={!canReview || !currentTask}><CheckCircle2 size={16}/> Accept</button></>
+            : <><button className="secondary-btn skip-btn" onClick={onSkip} disabled={!currentTask}><ChevronDown size={16} style={{transform:"rotate(-90deg)"}}/> Skip</button><button className="primary-btn" onClick={onSubmit} disabled={!currentTask}><CheckCircle2 size={16}/> Submit</button></>}
+        </div>
+      </div>
+      {coEditors?.length > 0 && <div className="co-edit-banner"><Users size={14}/><span>{coEditors.map(u=>u.name).join(", ")} {coEditors.length===1?"is":"are"} also viewing this task right now — coordinate before submitting to avoid overwriting each other's work.</span></div>}
+
+      <div className="annotation-shell build8-shell">
+        <aside className="task-queue-panel">
+          <div className="queue-head"><div><span className="panel-section-title">TASKS</span><b>{workspaceTasks.length} matching</b></div><button onClick={onImport} title="Import images"><Upload size={15}/></button></div>
+          <div className="queue-search"><Search size={14}/><input value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search task ID..."/></div>
+          <div className="queue-filter"><select value={taskFilter} onChange={e=>setTaskFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Submitted</option><option>QA Review</option><option>Approved</option><option>Rejected</option><option>Changes Requested</option></select><Filter size={13}/></div>
+          <div className="task-queue-list">
+            {workspaceTasks.map(({task,index}) => {
+              const active = index === selectedTaskIndex;
+              return <button key={task.id} className={`task-queue-row ${active ? "active" : ""}`} onClick={() => { setSelectedTaskIndex(index); setZoom(1); setPan({x:0,y:0}); }}>
+                <span className="task-check">{active ? <Check size={11}/> : <span/>}</span>
+                <div className="task-thumb"><img src={task.image} alt="" loading="lazy" decoding="async"/></div>
+                <div className="task-row-copy"><b>{task.id}</b><span>{task.name}</span><small>{task.status}</small></div>
+                <span className="task-row-count">{task.status === "Pending" ? "" : "•"}</span>
+              </button>;
+            })}
+            {!workspaceTasks.length && <div className="task-queue-empty"><ImageIcon size={26}/><b>No matching tasks</b><span>Import images or change the filters.</span></div>}
+          </div>
+          <div className="queue-footer"><span>Queue</span><b>{workspaceTasks.length} tasks</b></div>
+        </aside>
+
+        <section className="canvas-area build8-canvas-area">
+          <div className="canvas-toolbar build8-toolbar">
+            <div className="canvas-tool-status"><span className="tool-dot"></span><b>{toolGroups.flatMap(g=>g[1]).find(t=>t[0]===tool)?.[2] || "Select"}</b><small>{currentAnnotations.length} regions</small></div>
+            <div className="canvas-help"><span>Double-click to finish polygon/polyline</span><span>Drag objects to move</span></div>
+            <div className="canvas-controls"><button onClick={()=>setZoom(z=>Math.max(.25,+(z-.1).toFixed(2)))}><ZoomOut size={15}/></button><b>{Math.round(zoom*100)}%</b><button onClick={()=>setZoom(z=>Math.min(4,+(z+.1).toFixed(2)))}><ZoomIn size={15}/></button><button onClick={onReset}>Fit</button><button onClick={()=>document.documentElement.requestFullscreen?.()} title="Full screen"><Grid3X3 size={14}/></button></div>
+          </div>
+          <div className={`canvas-stage build8-stage ${tool === "pan" ? "pan-mode" : ""} ${tool === "eraser" ? "eraser-mode" : ""}`}>
+            {currentTask ? <div ref={canvasRef} className="annotation-canvas build8-canvas" style={{transform:`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={onCanvasPointerUp} onDoubleClick={onCanvasDoubleClick}>
+              <img ref={imageRef} src={currentTask.image} alt={currentTask.name} onError={handleImageError} draggable="false"/>
+              <div className="annotation-overlay">
+                {currentAnnotations.map((a,index)=><AnnotationShape key={a.id} a={a} index={index} selected={(selectedIds||[a.id===selectedAnnotationId?a.id:null]).includes(a.id)} onEditStart={startAnnotationEdit} label={labelById[a.labelId]} onInsertVertex={insertVertex} onDeleteVertex={deleteVertex}/>) }
+                {drawing && <DrawingPreview drawing={drawing} color={selectedLabelObject?.color || "#2563eb"}/>}
+                {marquee && <div className="marquee-box" style={{left:`${Math.min(marquee.start.x,marquee.current.x)}%`,top:`${Math.min(marquee.start.y,marquee.current.y)}%`,width:`${Math.abs(marquee.current.x-marquee.start.x)}%`,height:`${Math.abs(marquee.current.y-marquee.start.y)}%`}}/>}
+              </div>
+              <div className="canvas-crosshair"><span></span></div>
+            </div> : <div className="empty-canvas"><ImageIcon size={45}/><h3>No images yet</h3><p>Import images to start annotating.</p><button className="primary-btn" onClick={onImport}><Upload size={16}/> Import Images</button></div>}
+            {drawing && (drawing.type === "polygon" || drawing.type === "polyline") && <div className="drawing-hint">{drawing.points.length} points · double-click to finish · Esc to cancel</div>}
+            <div className="floating-tool-dock">
+              <div className="floating-zoom-slider" title={`Zoom ${Math.round(zoom*100)}%`}>
+                <input type="range" min="0.25" max="4" step="0.05" value={zoom} onChange={e=>setZoom(parseFloat(e.target.value))}/>
+              </div>
+              <div className="floating-tool-group">
+                {toolGroups.flatMap(g=>g[1]).map(([id,Icon,title,key]) => <button key={id} className={`floating-tool-btn ${tool===id?"active":""}`} title={`${title} (${key})`} onClick={()=>setTool(id)}><Icon size={16}/></button>)}
+              </div>
+              <div className="floating-tool-group">
+                <button className="floating-tool-btn" title="Undo (Ctrl+Z)" onClick={onUndo}><Undo2 size={16}/></button>
+                <button className="floating-tool-btn" title="Redo (Ctrl+Shift+Z)" onClick={onRedo}><Redo2 size={16}/></button>
+                <button className="floating-tool-btn" title="Duplicate" onClick={onDuplicate} disabled={!selectedAnnotation}><Copy size={16}/></button>
+                <button className="floating-tool-btn danger" title="Delete (Del)" onClick={onDelete} disabled={!selectedAnnotation}><Trash2 size={16}/></button>
+              </div>
+              <div className="floating-tool-group">
+                <button className="floating-tool-btn" title="Reset view" onClick={onReset}><RotateCcw size={16}/></button>
+                <button className="floating-tool-btn" title="Shortcuts" onClick={()=>setShowShortcuts(true)}><Target size={16}/></button>
+              </div>
+            </div>
+          </div>
+          <div className="canvas-bottom build8-bottom">
+            <button onClick={onPrevious} disabled={selectedTaskIndex<=0}>← Previous</button><div className="task-counter"><b>{selectedTaskIndex+1}</b> / {tasks.length}</div><button onClick={onNext} disabled={selectedTaskIndex>=tasks.length-1}>Next →</button>
+            <span className="bottom-spacer"></span><button className="bottom-action" onClick={onUndo}><Undo2 size={13}/> Undo</button><button className="bottom-action" onClick={onRedo}><Redo2 size={13}/> Redo</button><span className="canvas-status-note">{currentTask?.status || "Pending"}</span>
+          </div>
+        </section>
+
+        <aside className="right-panel build8-right-panel">
+          <div className="right-tabs build8-top-tabs"><button className={infoTab==="Info"?"active":""} onClick={()=>setInfoTab("Info")}>Info</button><button className={infoTab==="History"?"active":""} onClick={()=>setInfoTab("History")}>History</button></div>
+          {infoTab === "Info" ? <div className="region-info-card">
+            <div className="info-icon"><MousePointer2 size={20}/></div><b>{selectedAnnotation ? "View region details" : "Select a region"}</b><p>{selectedAnnotation ? `${selectedLabelObject?.name || "Object"} · ${selectedAnnotation.type}` : "Select an annotation to view its properties, metadata and available actions."}</p>
+            {selectedAnnotation && <div className="info-fields"><div><span>LABEL</span><b>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "—"}</b></div><div><span>TYPE</span><b>{selectedAnnotation.type}</b></div><div><span>REGION</span><b>#{currentAnnotations.findIndex(a=>a.id===selectedAnnotation.id)+1}</b></div></div>}
+          </div> : <div className="history-panel"><div className="history-entry"><Clock3 size={14}/><div><b>Current task</b><span>{currentTask?.name || "No task"}</span></div></div><div className="history-entry"><Save size={14}/><div><b>Local autosave</b><span>Changes persist in this browser</span></div></div></div>}
+          <div className="right-subtabs"><button className={rightTab==="Labels"?"active":""} onClick={()=>setRightTab("Labels")}>Labels</button><button className={rightTab==="Regions"?"active":""} onClick={()=>setRightTab("Regions")}>Regions <em>{currentAnnotations.length}</em></button><button>Relations</button></div>
+          <div className="right-content build8-right-content">
+            {rightTab === "Labels" ? <div className="right-section label-section-build8">
+              <div className="right-section-head"><div><b>LABELS</b><small>{labels.length} configured</small></div><button onClick={onImport} title="Import images"><Plus size={15}/></button></div>
+              <div className="label-search-build8"><Search size={13}/><input value={labelSearch} onChange={e=>setLabelSearch(e.target.value)} placeholder="Filter labels..."/></div>
+              <div className="label-list build8-label-list">{filteredLabels.map(label=><button key={label.id} className={`label-item build8-label-item ${selectedLabel===label.id?"selected":""}`} onClick={()=>setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span>{suggestedIds?.includes(label.id) && <i className="ai-suggested-badge" title="AI-suggested: frequently used in this dataset"><Zap size={10}/></i>}<b>{objectCountByLabel[label.id] || 0}</b><kbd>{label.type}</kbd></button>)}</div>
+              {!filteredLabels.length && <div className="empty-objects"><Target size={24}/><p>No labels found</p></div>}
+            </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>
+            {pendingPredictions.length > 0 && <div className="ai-review-banner"><Zap size={14}/><span>{pendingPredictions.length} AI-suggested region{pendingPredictions.length===1?"":"s"} need review</span><div className="ai-review-banner-actions"><button onClick={()=>onAcceptAllPredictions(currentTask.id)}><Check size={12}/> Accept All</button><button onClick={()=>onRejectAllPredictions(currentTask.id)}><X size={12}/> Reject All</button></div></div>}
+            {currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);const pending=a.reviewState==="pending";return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""} ${pending?"is-pending-ai":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}{a.source==="model" && <span className="ai-source-tag"> · AI{a.confidence!=null?` ${Math.round(a.confidence*100)}%`:""}{a.corrected?" · corrected":""}</span>}</small></div>{pending ? <div className="object-item-actions"><button title="Accept" className="accept-btn" onClick={e=>{e.stopPropagation();onAcceptPrediction(currentTask.id,a.id);}}><Check size={13}/></button><button title="Reject" className="danger" onClick={e=>{e.stopPropagation();onRejectPrediction(currentTask.id,a.id);}}><X size={13}/></button></div> : <div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div>}</div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
+            {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
+          </div>
+          {isReview && <QaScorecardPanel criteria={qaCriteria} categories={errorCategories} scores={qaCriteriaScores} setScores={setQaCriteriaScores} errors={qaErrors} setErrors={setQaErrors} open={qaScorecardOpen} setOpen={setQaScorecardOpen}/>}
+          {isReview && modelAnnotations.length > 0 && <AiQaInsightPanel annotations={modelAnnotations} labels={labels}/>}
+          <div className="right-footer build8-right-footer"><div><span>{isReview ? "Review decision" : "Task status"}</span><StatusBadge status={isReview ? (currentReview?.decision || "Pending Review") : (currentTask?.status || "Pending")}/></div><div><span>Regions</span><b>{currentAnnotations.length}</b></div></div>
+        </aside>
+      </div>
+      <div className="quick-label-bar"><div className="quick-label-title"><Zap size={14}/><b>QUICK LABELS</b></div><div className="quick-label-scroll">{labels.map(label=><button key={label.id} className={selectedLabel===label.id?"active":""} onClick={()=>setSelectedLabel(label.id)}><span style={{background:label.color}}></span>{label.name}</button>)}</div></div>
+      {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+      {showShortcuts && <Shortcuts onClose={()=>setShowShortcuts(false)}/>} 
+    </div>
+  );
+}
+
+const AnnotationShape = React.memo(function AnnotationShape({ a, index, selected, onEditStart, label, onInsertVertex, onDeleteVertex }) {
+  const color = a.color || label?.color || "#2563eb";
+  const style = { "--annotation-color": color };
+  if (a.hidden) return null;
+  const lockClass = a.locked ? "locked" : "";
+  if (a.type === "rectangle") {
+    const rotation = a.rotation || 0;
+    const cx = a.x + a.w / 2, cy = a.y + a.h / 2;
+    return <div className={`annotation-box build8-annotation-box ${selected?"selected":""} ${lockClass} ${a.reviewState==="pending"?"pending-ai-box":""}`} style={{...style,left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,transform:rotation?`rotate(${rotation}deg)`:undefined,transformOrigin:"center center"}} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}>
+      <span>{index+1}</span><b>{label?.name || "Object"}{a.locked && " 🔒"}{a.reviewState==="pending" && a.confidence!=null && ` · ${Math.round(a.confidence*100)}%`}</b>
+      {selected && !a.locked && <div className="resize-handles">{["nw","n","ne","e","se","s","sw","w"].map(pos=><i key={pos} className={`handle-${pos}`} onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,pos);}}/>)}<i className="handle-rotate" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"rotate");}}/></div>}
+    </div>;
+  }
+  if (a.type === "keypoint") return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""} ${lockClass}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}><circle cx={a.points[0].x} cy={a.points[0].y} r="1.25" fill="#fff" stroke={color} strokeWidth=".55"/><circle cx={a.points[0].x} cy={a.points[0].y} r=".38" fill={color}/><text x={a.points[0].x+1.5} y={a.points[0].y-1.5} fill={color} fontSize="2.2">{index+1}</text></svg>;
+  if (a.points?.length) {
+    const points = a.points.map(p=>`${p.x},${p.y}`).join(" ");
+    const editable = selected && !a.locked && (a.type === "polygon" || a.type === "polyline" || a.type === "line");
+    const midpoints = editable ? a.points.map((p,i)=>{
+      const nextPoint = a.points[(i+1) % a.points.length];
+      if (a.type !== "polygon" && i === a.points.length-1) return null;
+      return { x:(p.x+nextPoint.x)/2, y:(p.y+nextPoint.y)/2, afterIndex:i };
+    }).filter(Boolean) : [];
+    return <svg className={`annotation-svg build8-annotation-svg ${selected?"selected":""} ${lockClass}`} viewBox="0 0 100 100" preserveAspectRatio="none" onPointerDown={e=>{e.stopPropagation();onEditStart(a.id,e,"move");}}>
+      {a.type === "polygon" ? <polygon points={points} fill={`${color}22`} stroke={color} strokeWidth=".55"/> : <polyline points={points} fill={a.type === "brush" ? `${color}12` : "none"} stroke={color} strokeWidth={a.type === "brush" ? "2.2" : ".65"} strokeLinecap="round" strokeLinejoin="round"/>}
+      {midpoints.map(m=><circle key={`mid-${m.afterIndex}`} className="vertex-midpoint" cx={m.x} cy={m.y} r=".55" fill={color} fillOpacity=".45" stroke="#fff" strokeWidth=".18" onPointerDown={e=>{e.stopPropagation();onInsertVertex?.(a.id,m.afterIndex);}}><title>Click to add a point here</title></circle>)}
+      {selected && a.points.map((p,i)=><circle key={i} className={editable?"vertex-handle":""} cx={p.x} cy={p.y} r=".8" fill="#fff" stroke={color} strokeWidth=".35"
+        onPointerDown={editable ? e=>{e.stopPropagation(); if(e.altKey||e.metaKey){onDeleteVertex?.(a.id,i);} else {onEditStart(a.id,e,`vertex:${i}`);}} : undefined}
+        onDoubleClick={editable ? e=>{e.stopPropagation();onDeleteVertex?.(a.id,i);} : undefined}>
+        {editable && <title>Drag to move · double-click or Alt-click to delete</title>}
+      </circle>)}
+      <text x={(a.points[0]?.x||2)+1.2} y={(a.points[0]?.y||3)-1.2} fill={color} fontSize="2.3">{index+1}</text>
+    </svg>;
+  }
+  return null;
+});
+
+function DrawingPreview({drawing,color}) {
+  if (drawing.type === "rectangle") { const s=drawing.start,c=drawing.current; return <div className="drawing-box" style={{left:`${Math.min(s.x,c.x)}%`,top:`${Math.min(s.y,c.y)}%`,width:`${Math.abs(c.x-s.x)}%`,height:`${Math.abs(c.y-s.y)}%`,borderColor:color}}/>; }
+  if (drawing.type === "line") return <svg className="annotation-svg drawing"><polyline points={[drawing.start,drawing.current].map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth=".7"/></svg>;
+  if (drawing.type === "brush") return <svg className="annotation-svg drawing"><polyline points={drawing.points.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+  if (drawing.points?.length) return <svg className="annotation-svg drawing"><polyline points={drawing.points.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={color} strokeWidth=".65" strokeDasharray="1.2 1"/><circle cx={drawing.points[0].x} cy={drawing.points[0].y} r="1" fill="#fff" stroke={color} strokeWidth=".45"/></svg>;
+  return null;
+}
+
+
+function TaskPlannerPage({
+  projects, tasks, teamMembers, annotations, qaReviews, selectedProjectId, setSelectedProjectId,
+  priority, setPriority, queue, setQueue, date, setDate, targets, setTarget,
+  reworkFilter, setReworkFilter, selection, setSelection, onRework, onRefresh, onBack,
+  onOpenWorkspace, onAssign, assignmentOpen, assignmentTaskIds, assignmentAssignee, setAssignmentAssignee,
+  assignmentReviewer, setAssignmentReviewer, assignmentPriority, setAssignmentPriority, assignmentQueue, setAssignmentQueue,
+  onCloseAssignment, onSaveAssignment, message
+}) {
+  const [search, setSearch] = useState("");
+  const [showAllProjects, setShowAllProjects] = useState(!selectedProjectId);
+  const project = projects.find(p => p.id === selectedProjectId);
+  const projectTasks = tasks.filter(t => !selectedProjectId || t.projectId === selectedProjectId);
+  const projectMembers = teamMembers.filter(m => m.status === "Active" && (!selectedProjectId || (m.projects || []).includes(selectedProjectId)));
+  const annotators = projectMembers.filter(m => m.role === "Annotator");
+  const reviewers = projectMembers.filter(m => m.role === "Reviewer");
+  const assigned = projectTasks.filter(t => t.assigneeId).length;
+  const unassigned = Math.max(0, projectTasks.length - assigned);
+  const submitted = projectTasks.filter(t => ["Submitted", "QA Review", "Approved", "Rejected", "Changes Requested"].includes(t.status)).length;
+  const awaiting = projectTasks.filter(t => ["Submitted", "QA Review"].includes(t.status)).length;
+  const inReview = projectTasks.filter(t => t.status === "QA Review").length;
+  const reviewed = projectTasks.filter(t => ["Approved", "Rejected"].includes(t.status)).length;
+  const issues = projectTasks.filter(t => ["Rejected", "Changes Requested"].includes(t.status) || qaReviews[t.id]?.decision === "Rejected" || qaReviews[t.id]?.decision === "Changes Requested").length;
+  const total = project ? Number(project.totalImages || projectTasks.length) : projects.reduce((n,p)=>n+Number(p.totalImages||0),0);
+  const completed = project ? Math.min(total, Number(project.completedImages || 0)) : projects.reduce((n,p)=>n+Number(p.completedImages||0),0);
+  const progress = total ? Math.round(completed / total * 100) : 0;
+  const visibleProjects = projects.filter(p => {
+    const q = search.trim().toLowerCase();
+    return !q || `${p.name} ${p.client} ${p.team}`.toLowerCase().includes(q);
+  });
+  const taskCandidates = projectTasks.filter(t => {
+    if (reworkFilter === "Issues") return ["Rejected", "Changes Requested"].includes(t.status) || ["Rejected", "Changes Requested"].includes(qaReviews[t.id]?.decision);
+    if (reworkFilter === "Submitted") return ["Submitted", "QA Review"].includes(t.status);
+    return true;
+  });
+
+  useEffect(() => { setShowAllProjects(!selectedProjectId); }, [selectedProjectId]);
+
+  const toggleSelection = id => setSelection(selection.includes(id) ? selection.filter(x=>x!==id) : [...selection, id]);
+  const selectAllVisible = () => {
+    const ids = taskCandidates.map(t=>t.id);
+    setSelection(selection.length === ids.length && ids.length ? [] : ids);
+  };
+
+  if (showAllProjects) return <div className="page task-planner-page">
+    <div className="page-head planner-landing-head">
+      <div><span className="eyebrow">MANAGE</span><h1>Task Planner</h1><p>Select a project to plan assignments, track annotators and manage rework.</p></div>
+      <div className="planner-landing-actions"><button className="secondary-btn" onClick={onRefresh}><RefreshCw size={15}/> Refresh</button></div>
+    </div>
+    <section className="planner-global-summary">
+      <MiniStat label="Total Projects" value={projects.length}/>
+      <MiniStat label="Total Tasks" value={projects.reduce((n,p)=>n+Number(p.totalImages||0),0).toLocaleString()}/>
+      <MiniStat label="In Progress" value={projects.filter(p=>p.status === "In Progress").length}/>
+      <MiniStat label="Completed" value={projects.filter(p=>p.status === "Completed").length}/>
+    </section>
+    <section className="panel planner-project-picker-panel">
+      <div className="panel-head"><div><h2>Projects</h2><p>All annotation projects available for planning</p></div><div className="planner-project-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search projects..."/></div></div>
+      <div className="planner-project-grid">
+        {visibleProjects.map(p => <button key={p.id} className="planner-project-card" onClick={()=>setSelectedProjectId(p.id)}>
+          <div className="planner-card-top"><span className="planner-folder"><FolderKanban size={17}/></span><StatusBadge status={p.status}/></div>
+          <h3>{p.name}</h3><p>{p.client}</p>
+          <div className="planner-card-meta"><span>{p.annotationType}</span><span>{p.team}</span></div>
+          <div className="planner-card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages||0).toLocaleString()} / {Number(p.totalImages||0).toLocaleString()}</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div>
+          <div className="planner-open-label">Open Task Planner <span>→</span></div>
+        </button>)}
+      </div>
+      {!visibleProjects.length && <div className="empty-state"><FolderKanban size={38}/><h3>No projects found</h3><p>Try another project search.</p></div>}
+    </section>
+  </div>;
+
+  return <div className="page task-planner-page planner-project-view">
+    <div className="planner-reference-head">
+      <div className="planner-title-wrap"><button className="planner-back-btn" onClick={onBack}>←</button><div><h1>Task Planner</h1><span>{project?.name || "Project"}</span></div></div>
+      <div className="planner-head-controls">
+        <button className="planner-project-btn" onClick={onBack}><FolderKanban size={14}/> Project</button>
+        <div className="planner-control-group"><span>Priority:</span>{["TOP","HIGH","MEDIUM","LOW"].map(v=><button key={v} className={`priority-chip ${v.toLowerCase()} ${priority===v?"active":""}`} onClick={()=>setPriority(v)}>{v}</button>)}</div>
+        <div className="planner-control-group"><span>Queue:</span>{["Now","Next","Later","Hold"].map(v=><button key={v} className={`queue-chip ${queue===v?"active":""} ${v === "Hold" ? "hold" : ""}`} onClick={()=>setQueue(v)}>{v}</button>)}</div>
+        <button className="secondary-btn planner-refresh" onClick={onRefresh}><RefreshCw size={14}/> Refresh</button>
+      </div>
+    </div>
+
+    <section className="planner-overall panel"><div><b>Overall Progress</b><div className="planner-progress-track"><i style={{width:`${progress}%`}}/></div></div><strong>{completed.toLocaleString()} / {total.toLocaleString()} completed ({progress}%)</strong></section>
+
+    <section className="planner-stat-grid">
+      <MiniStat label="Total Tasks" value={total.toLocaleString()}/><MiniStat label="Assigned" value={assigned.toLocaleString()}/><MiniStat label="Unassigned" value={unassigned.toLocaleString()}/><MiniStat label="Submitted" value={submitted.toLocaleString()}/><MiniStat label="Issues" value={issues.toLocaleString()}/><MiniStat label="Annotators" value={annotators.length}/><MiniStat label="Awaiting Review" value={awaiting.toLocaleString()}/><MiniStat label="In Review" value={inReview.toLocaleString()}/><MiniStat label="Reviewed" value={reviewed.toLocaleString()}/>
+    </section>
+
+    <section className="panel planner-section assignment-section">
+      <div className="planner-section-head"><div><h2><UserPlus size={18}/> Task Assignment</h2><p>Assign tasks to annotators and reviewers, then control priority and queue placement.</p></div><button className="primary-btn" onClick={()=>onAssign(projectTasks.slice(0,1).map(t=>t.id))}><UserPlus size={15}/> Assign Tasks</button></div>
+      <div className="assignment-toolbar"><div className="assignment-summary"><span><b>{assigned}</b> assigned</span><span><b>{unassigned}</b> unassigned</span><span><b>{projectTasks.filter(t=>t.priority === "TOP").length}</b> top priority</span><span><b>{projectTasks.filter(t=>t.queue === "Hold").length}</b> on hold</span></div><button className="secondary-btn" onClick={()=>onAssign(projectTasks.filter(t=>!t.assigneeId).slice(0,20).map(t=>t.id))} disabled={!unassigned}><Plus size={14}/> Assign unassigned</button></div>
+      <div className="assignment-task-list">
+        {projectTasks.slice(0,25).map(t => { const a=teamMembers.find(m=>m.id===t.assigneeId); const r=teamMembers.find(m=>m.id===t.reviewerId); return <div className="assignment-task-row" key={t.id}>
+          <div className="assignment-task-main"><span className="task-id-chip">{t.id}</span><b>{t.name}</b><StatusBadge status={t.status}/></div>
+          <div className="assignment-task-meta"><span>{a ? `A: ${a.name}` : "Unassigned"}</span><span>{r ? `R: ${r.name}` : "No reviewer"}</span><span className={`priority-mini ${String(t.priority||"MEDIUM").toLowerCase()}`}>{t.priority||"MEDIUM"}</span><span>{t.queue||"Now"}</span></div>
+          <button className="tiny-outline" onClick={()=>onAssign([t.id])}>Manage</button>
+        </div> })}
+        {!projectTasks.length && <div className="planner-empty-row">No tasks are available for this project.</div>}
+      </div>
+      {projectTasks.length>25 && <div className="rework-more">Showing first 25 tasks. Use Import Data or the project workspace for the full dataset.</div>}
+    </section>
+
+    <section className="panel planner-section">
+      <div className="planner-section-head"><div><h2>Annotator Tracking</h2><p>Assignment, submission and approval progress for this project.</p></div><span className="planner-section-tag">{annotators.length} annotators</span></div>
+      <div className="planner-table-wrap"><table className="planner-table"><thead><tr><th>ANNOTATOR</th><th>TOTAL</th><th>PENDING</th><th>SUBMITTED</th><th>HAS ANNOTATIONS</th><th>CLEAN/IRRELEVANT</th><th>APPROVED</th><th>PROGRESS</th><th>ACTIONS</th></tr></thead><tbody>
+        {annotators.map(member => { const mine=projectTasks.filter(t=>t.assigneeId===member.id); const pending=mine.filter(t=>["Pending","In Progress"].includes(t.status)).length; const sub=mine.filter(t=>["Submitted","QA Review","Approved","Rejected","Changes Requested"].includes(t.status)).length; const ann=mine.reduce((n,t)=>n+(annotations[t.id]||[]).length,0); const approved=mine.filter(t=>qaReviews[t.id]?.decision === "Approved" || t.status === "Approved").length; const bad=mine.filter(t=>["Rejected","Changes Requested"].includes(t.status) || ["Rejected","Changes Requested"].includes(qaReviews[t.id]?.decision)).length; const pct=mine.length?Math.round((sub/mine.length)*100):0; return <tr key={member.id}><td><b>{member.name}</b><small>{member.email}</small></td><td>{mine.length}</td><td className="planner-purple">{pending}</td><td className="planner-green">{sub}</td><td className="planner-purple">{ann}</td><td className="planner-red">{bad}</td><td className="planner-blue">{approved}</td><td><div className="planner-row-progress"><span><i style={{width:`${pct}%`}}/></span><b>{pct}%</b></div></td><td><button className="tiny-outline" onClick={()=>onAssign(mine.map(t=>t.id), member.id)}>Re-assign</button><button className="tiny-danger" onClick={()=>onAssign(mine.map(t=>t.id), "")}>Unassign</button></td></tr> })}
+        {!annotators.length && <tr><td colSpan="9"><div className="planner-empty-row">No active annotators have access to this project.</div></td></tr>}
+      </tbody></table></div>
+    </section>
+
+    <section className="panel planner-section rework-section">
+      <div className="planner-section-head"><div><h2>↻ Trigger Rework</h2><p>Filter tasks, select which ones need rework, then choose an action.</p></div><span className="planner-section-tag">{selection.length} selected</span></div>
+      <div className="rework-controls"><label><span>FILTER</span><select value={reworkFilter} onChange={e=>{setReworkFilter(e.target.value);setSelection([])}}><option>Issues</option><option>Submitted</option><option>All</option></select></label><button className="secondary-btn" onClick={selectAllVisible}><CheckSquare size={14}/> {selection.length===taskCandidates.length && taskCandidates.length ? "Clear Selection" : "Select All"}</button><button className="secondary-btn" onClick={()=>setSelection([])}>Clear</button></div>
+      <div className="rework-task-list">{taskCandidates.slice(0,30).map(t=><label key={t.id} className={`rework-task-row ${selection.includes(t.id)?"selected":""}`}><input type="checkbox" checked={selection.includes(t.id)} onChange={()=>toggleSelection(t.id)}/><span className="rework-task-name"><b>{t.name}</b><small>{t.id}</small></span><StatusBadge status={t.status}/><span className="rework-project-name">{project?.name}</span></label>)}{!taskCandidates.length && <div className="planner-empty-row">No tasks match this rework filter.</div>}</div>
+      {taskCandidates.length>30 && <div className="rework-more">Showing first 30 matching tasks.</div>}
+      <div className="rework-actions"><button className="danger-outline" onClick={()=>onRework("rework")} disabled={!selection.length}><RefreshCw size={14}/> Request Rework</button><button className="primary-btn" onClick={()=>onRework("original")} disabled={!selection.length}><RotateCcw size={14}/> Return to Original Queue</button></div>
+    </section>
+
+    <section className="panel planner-section target-section">
+      <div className="planner-section-head"><div><h2>◎ Annotator Targets</h2><p>Set daily and weekly production targets for this project.</p></div><button className="primary-btn" onClick={()=>setTarget("annotators", "__save__", "savedAt", Date.now())}><Save size={14}/> Save Targets</button></div>
+      <div className="target-toolbar"><label>Apply to all: <span>Daily</span><input type="number" min="0" defaultValue="0" onKeyDown={e=>{if(e.key==="Enter"){const v=Number(e.currentTarget.value)||0; annotators.forEach(m=>setTarget("annotators",m.id,"daily",v));}}}/></label><small>Press Enter to apply. Weekly target = total assigned (at least daily × 5, capped at total).</small><div className="target-queue"><span>Queue — all:</span><button className="active">Original</button><button>Rework</button></div><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+      <TargetTable role="annotators" people={annotators} tasks={projectTasks} annotations={annotations} qaReviews={qaReviews} targets={targets} setTarget={setTarget} date={date} />
+    </section>
+
+    <section className="panel planner-section target-section">
+      <div className="planner-section-head"><div><h2>◎ Reviewer Targets</h2><p>Track review throughput and set reviewer targets.</p></div><button className="primary-btn" onClick={()=>setTarget("reviewers", "__save__", "savedAt", Date.now())}><Save size={14}/> Save Targets</button></div>
+      <div className="target-toolbar"><label>Apply to all: <span>Daily</span><input type="number" min="0" defaultValue="0" onKeyDown={e=>{if(e.key==="Enter"){const v=Number(e.currentTarget.value)||0; reviewers.forEach(m=>setTarget("reviewers",m.id,"daily",v));}}}/></label><small>Weekly target = assigned work with a minimum of daily × 5.</small><div className="target-queue"><span>Queue — all:</span><button className="active">Original</button><button>Rework</button></div><input type="date" value={date} onChange={e=>setDate(e.target.value)}/></div>
+      <TargetTable role="reviewers" people={reviewers} tasks={projectTasks} annotations={annotations} qaReviews={qaReviews} targets={targets} setTarget={setTarget} date={date} reviewer />
+    </section>
+    {message && <div className="workspace-toast planner-toast"><CheckCircle2 size={17}/>{message}</div>}
+    {assignmentOpen && <PlannerAssignmentModal
+      tasks={projectTasks.filter(t=>assignmentTaskIds.includes(t.id))} teamMembers={teamMembers}
+      assignee={assignmentAssignee} setAssignee={setAssignmentAssignee} reviewer={assignmentReviewer} setReviewer={setAssignmentReviewer}
+      priority={assignmentPriority} setPriority={setAssignmentPriority} queue={assignmentQueue} setQueue={setAssignmentQueue}
+      onClose={onCloseAssignment} onSave={onSaveAssignment}
+    />}
+  </div>;
+}
+
+function PlannerAssignmentModal({tasks, teamMembers, assignee, setAssignee, reviewer, setReviewer, priority, setPriority, queue, setQueue, onClose, onSave}) {
+  const annotators = teamMembers.filter(m=>m.status === "Active" && m.role === "Annotator");
+  const reviewers = teamMembers.filter(m=>m.status === "Active" && m.role === "Reviewer");
+  return <div className="modal-backdrop"><form className="modal planner-assignment-modal" onSubmit={e=>{e.preventDefault();onSave();}}>
+    <div className="modal-head"><div><span className="eyebrow">TASK OPERATIONS</span><h2>Manage Assignment</h2><p>{tasks.length} task{tasks.length===1?"":"s"} selected for this operation.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
+    <div className="planner-assignment-task-preview">{tasks.slice(0,8).map(t=><div key={t.id}><span>{t.id}</span><b>{t.name}</b></div>)}{tasks.length>8&&<small>+ {tasks.length-8} more tasks</small>}</div>
+    <div className="assignment-form-grid">
+      <label><span>ANNOTATOR</span><select value={assignee} onChange={e=>setAssignee(e.target.value)}><option value="">Unassigned</option>{annotators.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+      <label><span>REVIEWER</span><select value={reviewer} onChange={e=>setReviewer(e.target.value)}><option value="">No reviewer</option>{reviewers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
+      <label><span>PRIORITY</span><select value={priority} onChange={e=>setPriority(e.target.value)}>{["TOP","HIGH","MEDIUM","LOW"].map(v=><option key={v}>{v}</option>)}</select></label>
+      <label><span>QUEUE</span><select value={queue} onChange={e=>setQueue(e.target.value)}>{["Now","Next","Later","Hold"].map(v=><option key={v}>{v}</option>)}</select></label>
+    </div>
+    <div className="assignment-capacity-note"><Zap size={16}/><span>Assignments update the Task Planner immediately and are saved locally.</span></div>
+    <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/> Save Assignment</button></div>
+  </form></div>;
+}
+
+
+function TargetTable({role, people, tasks, annotations, qaReviews, targets, setTarget}) {
+  return <div className="planner-table-wrap"><table className="planner-table target-table"><thead><tr><th>{role === "reviewers" ? "REVIEWER" : "ANNOTATOR"}</th><th>ASSIGNED</th><th>{role === "reviewers" ? "REVIEWED" : "COMPLETED"}</th><th>REMAINING</th><th>DAILY TARGET</th><th>WEEKLY TARGET</th><th>DAYS NEEDED</th><th>TODAY'S PROGRESS</th><th>THIS WEEK</th><th>QUEUE MODE</th></tr></thead><tbody>
+    {people.map(person => { const mine=tasks.filter(t=>t.assigneeId===person.id); const done=role === "reviewers" ? mine.filter(t=>["Approved","Rejected"].includes(t.status) || qaReviews[t.id]?.decision).length : mine.filter(t=>["Completed","Submitted","QA Review","Approved","Rejected","Changes Requested"].includes(t.status)).length; const remaining=Math.max(0,mine.length-done); const cfg=targets[role]?.[person.id]||{}; const daily=Number(cfg.daily)||0; const weekly=Math.min(mine.length, Math.max(Number(cfg.weekly)||0, daily*5)); const days=daily?Math.ceil(remaining/daily):null; const today=done; return <tr key={person.id}><td><b>{person.name}</b></td><td>{mine.length}</td><td className="planner-green">{done}</td><td className="planner-purple">{remaining}</td><td><input className="target-input" type="number" min="0" value={daily} onChange={e=>setTarget(role,person.id,"daily",e.target.value)}/></td><td><input className="target-input" type="number" min="0" value={Number(cfg.weekly)||weekly} onChange={e=>setTarget(role,person.id,"weekly",e.target.value)}/></td><td>{days===null?"—":days}</td><td>{today?today:"—"}</td><td>{done?done:"—"}</td><td><span className="queue-toggle"><b>Orig</b><span>Rework</span></span></td></tr>})}
+    {!people.length && <tr><td colSpan="10"><div className="planner-empty-row">No active {role === "reviewers" ? "reviewers" : "annotators"} have access to this project.</div></td></tr>}
+  </tbody></table></div>;
+}
+
+function ProjectConfigurationPage({groups,flatProjects,tasks,configProject,setConfigProject,config,tab,setTab,onAddLabel,onEditLabel,onDeleteLabel,onUpdateConfig,onUpdateProject,onBack,message,labelEditorOpen,setLabelEditorOpen,editingLabelId,labelForm,setLabelForm,onSaveLabel,labelSchemaError,setLabelSchemaError,onCreateLabelGroup,onRenameLabelGroup,onDeleteLabelGroup,onSaveSchemaVersion,onRestoreSchemaVersion,onExportSchema,onImportSchema,labelUsageStats,teamMembers,onCreateRule,onUpdateRule,onDeleteRule,onAddSuggestedRule,onCreateCriterion,onUpdateCriterion,onDeleteCriterion,onCreateErrorCategory,onUpdateErrorCategory,onDeleteErrorCategory,onAddCalibration,onDeleteCalibration,qaReviews}) {
+  const project = groups.find(g => g.id === configProject) || groups[0];
+  const reviewers = ["", "Priya Sharma", "Kavya Nair"];
+  const workspaceOptions = ["", "Production", "QA Sandbox", "Client Review"];
+  const groupTaskIds = flatProjects.filter(p => p.groupId === project?.id).map(p => p.id);
+  const previewTask = tasks?.find(t => groupTaskIds.includes(t.projectId));
+  const GroupIcon = GROUP_ICONS[project?.icon] || Layers;
+  const samplingOptions = [
+    { id: "Sequential", title: "Sequential sampling", text: "Tasks are ordered by Task ID." },
+    { id: "Random", title: "Random sampling", text: "Tasks are chosen with uniform random." },
+    { id: "Uncertainty", title: "Uncertainty sampling", text: "Tasks are chosen according to model uncertainty score (active learning mode).", pro: true }
+  ];
+  return <div className="page project-config-page">
+    <div className="page-head"><div><button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {project?.name || "Projects"}</button><span className="eyebrow">PROJECT ADMINISTRATION</span><h1>Project Configuration</h1><p>Configure labels, workflow and project-level rules before production work begins.</p></div></div>
+    <div className="config-overview"><div className="config-project-icon" style={{background:project?.color?`${project.color}22`:undefined,color:project?.color||undefined}}><GroupIcon size={24}/></div><div><h2>{project?.name || "Project"}</h2><p>{groupTaskIds.length} task{groupTaskIds.length===1?"":"s"}</p></div><div className="config-overview-stats"><MiniStat label="Labels" value={config.labels.length}/><MiniStat label="QA" value={config.requireQa ? "Required" : "Optional"}/><MiniStat label="Auto-save" value={config.autoSave ? "On" : "Off"}/></div></div>
+    <div className="config-tabs"><button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button><button className={tab==="Labeling Interface"?"active":""} onClick={()=>setTab("Labeling Interface")}><Palette size={16}/> Labeling Interface</button><button className={tab==="Annotation"?"active":""} onClick={()=>setTab("Annotation")}><FileText size={16}/> Annotation</button><button className={tab==="Workflow"?"active":""} onClick={()=>setTab("Workflow")}><Workflow size={16}/> Workflow</button><button className={tab==="Automation"?"active":""} onClick={()=>setTab("Automation")}><Zap size={16}/> Automation</button><button className={tab==="SLA"?"active":""} onClick={()=>setTab("SLA")}><Calendar size={16}/> SLA & Deadlines</button><button className={tab==="QA Scorecard"?"active":""} onClick={()=>setTab("QA Scorecard")}><ShieldCheck size={16}/> QA Scorecard</button></div>
+
+    {tab === "General" && <section className="panel config-panel general-settings-panel">
+      <div className="config-panel-head"><div><h2>General Settings</h2><p>Basic identity and task-ordering rules for this project.</p></div><SlidersHorizontal size={20}/></div>
+      <div className="general-settings-grid">
+        <label><span>PROJECT NAME</span><input value={project?.name||""} onChange={e=>onUpdateProject(project.id,{name:e.target.value})} placeholder="Project name"/></label>
+        <label className="full"><span>DESCRIPTION</span><textarea rows="3" value={project?.description||""} onChange={e=>onUpdateProject(project.id,{description:e.target.value})} placeholder="What is this project about?"/></label>
+        <label><span>WORKSPACE</span><select value={config.workspace||""} onChange={e=>onUpdateConfig({workspace:e.target.value})}>{workspaceOptions.map(w=><option key={w} value={w}>{w||"Select an option"}</option>)}</select></label>
+      </div>
+      <div className="general-settings-section">
+        <span className="section-label">COLOR</span>
+        <div className="color-picker-row general-color-row"><button type="button" className={!config.color?"selected":""} style={{background:"#e5e9ee"}} onClick={()=>onUpdateConfig({color:""})}/>{labelPalette.map(c=><button type="button" key={c} className={config.color===c?"selected":""} style={{background:c}} onClick={()=>onUpdateConfig({color:c})}/>)}</div>
+      </div>
+      <div className="general-settings-section">
+        <span className="section-label">TASK SAMPLING</span>
+        <div className="sampling-options">{samplingOptions.map(opt=><label key={opt.id} className={`sampling-option ${config.taskSampling===opt.id?"active":""}`}><input type="radio" name="taskSampling" checked={config.taskSampling===opt.id} onChange={()=>onUpdateConfig({taskSampling:opt.id})}/><div><b>{opt.title}{opt.pro && <em className="pro-badge">Enterprise</em>}</b><span>{opt.text}</span></div></label>)}</div>
+      </div>
+    </section>}
+
+    {tab === "Labeling Interface" && <TaxonomyManager config={config} onAddLabel={onAddLabel} onEditLabel={onEditLabel} onDeleteLabel={onDeleteLabel}
+      onCreateLabelGroup={onCreateLabelGroup} onRenameLabelGroup={onRenameLabelGroup} onDeleteLabelGroup={onDeleteLabelGroup}
+      onSaveSchemaVersion={onSaveSchemaVersion} onRestoreSchemaVersion={onRestoreSchemaVersion}
+      onExportSchema={onExportSchema} onImportSchema={onImportSchema} labelUsageStats={labelUsageStats} previewTask={previewTask} />}
+
+    {tab === "Annotation" && <section className="panel config-panel annotation-settings-panel">
+      <div className="config-panel-head"><div><h2>Annotation Settings</h2><p>Instructions annotators see, plus optional prelabeling from predictions.</p></div><FileText size={20}/></div>
+      <div className="annotation-settings-block">
+        <h3>Labeling instructions</h3>
+        <p className="settings-subtext">Write instructions to help annotators complete labeling tasks.</p>
+        <SettingToggle title="Show before labeling" text="Display these instructions to annotators before they start a task." checked={!!config.showInstructionsBeforeLabeling} onChange={v=>onUpdateConfig({showInstructionsBeforeLabeling:v})}/>
+        <textarea className="guideline-editor-textarea" value={config.instructions||""} onChange={e=>onUpdateConfig({instructions:e.target.value})} placeholder="Describe what should and should not be annotated..." rows="8"/>
+      </div>
+      <div className="annotation-settings-block">
+        <h3>Prelabeling</h3>
+        <SettingToggle title="Use predictions to prelabel tasks" text="Enable and select which set of predictions to use for prelabeling." checked={!!config.usePredictions} onChange={v=>onUpdateConfig({usePredictions:v})}/>
+        {config.usePredictions && <label className="prelabel-select"><span>SELECT WHICH PREDICTIONS OR MODEL YOU WANT TO USE</span><select value={config.predictionSource||""} onChange={e=>onUpdateConfig({predictionSource:e.target.value})}><option value="">No predictions available yet</option><option value="latest-export">{project?.name} — latest export</option></select></label>}
+      </div>
+      <div className="guideline-tip"><ShieldCheck size={18}/><div><b>Recommended</b><p>Document edge cases, label definitions, occlusion rules, minimum object size and difficult scenes.</p></div></div>
+    </section>}
+
+    {tab === "Workflow" && <section className="panel config-panel"><div className="config-panel-head"><div><h2>Annotation workflow</h2><p>Control how tasks move from annotation to quality review.</p></div><CheckSquare size={20}/></div><div className="workflow-settings"><SettingToggle title="Require QA review" text="Every submitted task enters the QA Review queue before approval." checked={config.requireQa} onChange={v=>onUpdateConfig({requireQa:v})}/><SettingToggle title="Allow annotators to submit" text="Annotators can submit completed tasks directly for review." checked={config.allowAnnotatorSubmit} onChange={v=>onUpdateConfig({allowAnnotatorSubmit:v})}/><SettingToggle title="Auto-save annotations" text="Persist annotation changes locally while the task is being edited." checked={config.autoSave} onChange={v=>onUpdateConfig({autoSave:v})}/></div><div className="workflow-grid"><label><span>DEFAULT REVIEWER</span><select value={config.defaultReviewer||""} onChange={e=>onUpdateConfig({defaultReviewer:e.target.value})}>{reviewers.map(r=><option key={r} value={r}>{r || "No default reviewer"}</option>)}</select></label><label><span>MAX TASKS / ANNOTATOR</span><input type="number" min="1" max="1000" value={config.maxTasksPerAnnotator||10} onChange={e=>onUpdateConfig({maxTasksPerAnnotator:Number(e.target.value)||1})}/></label></div><div className="workflow-stages"><span>WORKFLOW</span><div><b>Pending</b><i>→</i><b>In Progress</b><i>→</i><b>Submitted</b><i>→</i><b>QA Review</b><i>→</i><b>Approved</b></div></div></section>}
+    {tab === "Automation" && <WorkflowAutomationPanel groupId={configProject} config={config} groupTasks={(flatProjects.filter(p=>p.groupId===configProject).map(p=>p.id))} allTasks={tasks} teamMembers={teamMembers} onCreateRule={onCreateRule} onUpdateRule={onUpdateRule} onDeleteRule={onDeleteRule} onAddSuggestedRule={onAddSuggestedRule}/>}
+    {tab === "SLA" && <section className="panel config-panel">
+      <div className="config-panel-head"><div><h2>SLA & Deadlines</h2><p>Set turnaround targets for annotators and reviewers, and how long a breach waits before escalating.</p></div><Calendar size={20}/></div>
+      <div className="workflow-grid">
+        <label><span>ANNOTATOR SLA (HOURS)</span><input type="number" min="1" value={config.annotatorSlaHours ?? 24} onChange={e=>onUpdateConfig({annotatorSlaHours:Math.max(1,Number(e.target.value)||1)})}/><small className="field-hint">Target turnaround for a task from assignment to submission.</small></label>
+        <label><span>REVIEWER SLA (HOURS)</span><input type="number" min="1" value={config.reviewerSlaHours ?? 12} onChange={e=>onUpdateConfig({reviewerSlaHours:Math.max(1,Number(e.target.value)||1)})}/><small className="field-hint">Target turnaround for QA review after submission.</small></label>
+        <label><span>ESCALATE AFTER (HOURS PAST SLA)</span><input type="number" min="1" value={config.escalateAfterHours ?? 24} onChange={e=>onUpdateConfig({escalateAfterHours:Math.max(1,Number(e.target.value)||1)})}/><small className="field-hint">How long a task can stay overdue before it's automatically escalated to the project owner.</small></label>
+      </div>
+      <div className="config-empty small"><Calendar size={22}/><p>Individual task due dates can be set from the Deadlines dashboard. Project-level due dates are set when editing a project.</p></div>
+    </section>}
+    {tab === "QA Scorecard" && <QaScorecardConfigTab groupId={configProject} config={config} qaReviews={qaReviews} onUpdateConfig={onUpdateConfig} onCreateCriterion={onCreateCriterion} onUpdateCriterion={onUpdateCriterion} onDeleteCriterion={onDeleteCriterion} onCreateErrorCategory={onCreateErrorCategory} onUpdateErrorCategory={onUpdateErrorCategory} onDeleteErrorCategory={onDeleteErrorCategory} onAddCalibration={onAddCalibration} onDeleteCalibration={onDeleteCalibration} groupTasks={flatProjects.filter(p=>p.groupId===configProject).map(p=>p.id)} allTasks={tasks}/>}
+    {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+    {labelEditorOpen && <LabelEditorModal editing={!!editingLabelId} form={labelForm} setForm={setLabelForm} onClose={()=>{setLabelEditorOpen(false); setLabelSchemaError("");}} onSave={onSaveLabel} error={labelSchemaError} allLabels={config.labels} editingLabelId={editingLabelId} labelGroups={config.labelGroups||[]}/>} 
+  </div>;
+}
+function SettingToggle({title,text,checked,onChange}) { return <button type="button" className={`setting-toggle ${checked?"active":""}`} onClick={()=>onChange(!checked)}><span className="toggle-copy"><b>{title}</b><small>{text}</small></span><span className="switch"><i/></span></button>; }
+function buildLabelTree(labels) {
+  const byParent = {};
+  labels.forEach(l => { const key = l.parentId || "__root__"; (byParent[key] = byParent[key] || []).push(l); });
+  return byParent;
+}
+
+function LabelTreeNode({ label, depth, byParent, usage, onEdit, onDelete, onAddChild }) {
+  const children = byParent[label.id] || [];
+  return <>
+    <div className="schema-row taxonomy-row" style={{ paddingLeft: `${14 + depth * 22}px` }}>
+      {depth > 0 && <span className="taxonomy-tree-connector">↳</span>}
+      <span className="schema-color" style={{ background: label.color }}></span>
+      <div className="schema-main">
+        <b>{label.name}</b>
+        <span>{label.type}{label.attributes?.length ? ` · ${label.attributes.length} attribute${label.attributes.length===1?"":"s"}` : ""}</span>
+      </div>
+      {label.shortcut && <span className="schema-shortcut taxonomy-shortcut">{label.shortcut.toUpperCase()}</span>}
+      <span className="taxonomy-usage" title="Annotations using this label">{usage[label.id] || 0} used</span>
+      <div className="schema-actions">
+        <button onClick={() => onAddChild(label.id)} title="Add child label"><Plus size={14}/></button>
+        <button onClick={() => onEdit(label)} title="Edit"><Edit3 size={15}/></button>
+        <button className="danger-icon" onClick={() => onDelete(label.id)} title="Delete"><Trash2 size={15}/></button>
+      </div>
+    </div>
+    {children.map(child => <LabelTreeNode key={child.id} label={child} depth={depth + 1} byParent={byParent} usage={usage} onEdit={onEdit} onDelete={onDelete} onAddChild={onAddChild}/>)}
+  </>;
+}
+
+function TaxonomyManager({ config, onAddLabel, onEditLabel, onDeleteLabel, onCreateLabelGroup, onRenameLabelGroup, onDeleteLabelGroup, onSaveSchemaVersion, onRestoreSchemaVersion, onExportSchema, onImportSchema, labelUsageStats, previewTask }) {
+  const [newGroupName, setNewGroupName] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [groupFilter, setGroupFilter] = useState("All");
+  const fileInputRef = useRef(null);
+  const labels = config.labels || [];
+  const labelGroups = config.labelGroups || [];
+  const filtered = groupFilter === "All" ? labels : labels.filter(l => (l.groupId || "Ungrouped") === groupFilter);
+  const byParent = buildLabelTree(filtered);
+  const roots = byParent["__root__"] || [];
+  return <section className="panel config-panel labeling-interface-panel">
+    <div className="config-panel-head">
+      <div><h2>Label & Taxonomy Manager</h2><p>Build a hierarchy of labels, group them, attach attributes, and track how each one is used.</p></div>
+      <div className="taxonomy-head-actions">
+        <button className="secondary-btn" onClick={onExportSchema} title="Export label schema as JSON"><Download size={15}/> Export</button>
+        <button className="secondary-btn" onClick={() => fileInputRef.current?.click()} title="Import label schema JSON"><Upload size={15}/> Import</button>
+        <input ref={fileInputRef} type="file" accept="application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) onImportSchema(f); e.target.value = ""; }}/>
+        <button className="primary-btn" onClick={() => onAddLabel(null)}><Plus size={16}/> Add Label</button>
+      </div>
+    </div>
+
+    <div className="taxonomy-toolbar">
+      <div className="schema-version-badge"><Layers size={14}/> Schema v{config.schemaVersion || 1}</div>
+      <button className="ghost-btn" onClick={() => onSaveSchemaVersion()}><Save size={14}/> Save New Version</button>
+      <button className="ghost-btn" onClick={() => setHistoryOpen(v => !v)}><Clock3 size={14}/> Version History ({(config.schemaHistory||[]).length})</button>
+    </div>
+    {historyOpen && <div className="schema-history-list">
+      {(config.schemaHistory || []).length ? (config.schemaHistory || []).map((h,i) => <div className="schema-history-row" key={i}>
+        <div><b>v{h.version}</b><span>{h.labelCount} label{h.labelCount===1?"":"s"} · {new Date(h.savedAt).toLocaleString()}{h.note ? ` · ${h.note}` : ""}</span></div>
+        <button className="ghost-btn" onClick={() => onRestoreSchemaVersion(h)}><RotateCcw size={13}/> Restore</button>
+      </div>) : <div className="config-empty small"><Clock3 size={22}/><p>No saved versions yet. Save one before making big schema changes.</p></div>}
+    </div>}
+
+    <div className="label-group-strip">
+      <button className={groupFilter==="All"?"active":""} onClick={()=>setGroupFilter("All")}>All labels ({labels.length})</button>
+      <button className={groupFilter==="Ungrouped"?"active":""} onClick={()=>setGroupFilter("Ungrouped")}>Ungrouped ({labels.filter(l=>!l.groupId).length})</button>
+      {labelGroups.map(g => <span key={g.id} className={`label-group-chip ${groupFilter===g.id?"active":""}`}>
+        <button onClick={()=>setGroupFilter(g.id)} style={{"--chip-color":g.color}}>{g.name} ({labels.filter(l=>l.groupId===g.id).length})</button>
+        <button className="chip-x" title="Delete group" onClick={()=>onDeleteLabelGroup(g.id)}><X size={11}/></button>
+      </span>)}
+      <form className="new-group-form" onSubmit={e=>{e.preventDefault(); if(newGroupName.trim()){onCreateLabelGroup(newGroupName); setNewGroupName("");}}}>
+        <input value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} placeholder="New label group..."/>
+        <button type="submit" title="Create group"><Plus size={14}/></button>
+      </form>
+    </div>
+
+    <div className="labeling-interface-grid">
+      <div className="label-schema-list taxonomy-list">
+        {roots.length ? roots.map(label => <LabelTreeNode key={label.id} label={label} depth={0} byParent={byParent} usage={labelUsageStats||{}} onEdit={onEditLabel} onDelete={onDeleteLabel} onAddChild={onAddLabel}/>)
+          : <div className="config-empty"><Palette size={34}/><h3>No labels configured</h3><p>Add labels to make this project annotatable.</p></div>}
+      </div>
+      <div className="ui-preview-panel">
+        <span className="section-label">UI PREVIEW</span>
+        <div className="ui-preview-image">{previewTask ? <img src={previewTask.image} alt="" loading="lazy" decoding="async"/> : <div className="ui-preview-empty"><ImageIcon size={26}/><span>No sample image yet</span></div>}</div>
+        <div className="ui-preview-labels"><span className="section-label">labels</span><div className="ui-preview-label-chips">{labels.length ? labels.map(l=><span key={l.id} className="preview-chip" style={{background:`${l.color}22`,color:l.color,borderColor:`${l.color}55`}}>{l.name}{l.shortcut ? ` (${l.shortcut.toUpperCase()})` : ""}</span>) : <span className="preview-chip-empty">No labels yet</span>}</div></div>
+        <div className="ui-preview-regions"><span className="section-label">usage</span><div className="taxonomy-usage-list">{labels.length ? [...labels].sort((a,b)=>(labelUsageStats?.[b.id]||0)-(labelUsageStats?.[a.id]||0)).slice(0,6).map(l=><div key={l.id} className="taxonomy-usage-row"><span className="schema-color" style={{background:l.color}}/><span>{l.name}</span><b>{labelUsageStats?.[l.id]||0}</b></div>) : <div className="ui-preview-regions-empty"><MousePointer2 size={16}/><span>Usage stats appear once annotators start working.</span></div>}</div></div>
+      </div>
+    </div>
+  </section>;
+}
+
+const PIPELINE_STAGES = ["Created", "Assigned", "Annotating", "Submitted", "QA", "Rework", "Approved", "Completed"];
+const WHEN_STATUS_OPTIONS = [
+  { id: "Pending", label: "Created / Pending" },
+  { id: "Submitted", label: "Submitted" },
+  { id: "QA Review", label: "QA Review" },
+  { id: "Rejected", label: "Rejected" },
+  { id: "Changes Requested", label: "Changes Requested" },
+  { id: "Approved", label: "Approved" }
+];
+const AUTOMATION_ACTIONS = [
+  { id: "auto_assign", label: "Auto-assign to annotator", icon: Users },
+  { id: "auto_route_qa", label: "Route to QA reviewer", icon: ShieldCheck },
+  { id: "auto_route_rework", label: "Route back for rework", icon: RotateCcw },
+  { id: "escalate", label: "Escalate", icon: AlertCircle },
+  { id: "auto_complete", label: "Auto-complete task", icon: CheckCircle2 },
+  { id: "notify", label: "Send notification only", icon: Bell }
+];
+const SUGGESTED_RULE_TEMPLATES = [
+  { name: "Auto-assign new tasks", whenStatus: "Pending", afterHours: 0, action: "auto_assign", note: "", enabled: true, blurb: "Assign unassigned tasks to the least-loaded annotator the moment they're created." },
+  { name: "Route submissions to QA", whenStatus: "Submitted", afterHours: 0, action: "auto_route_qa", note: "", enabled: true, blurb: "Send every submitted task to the least-loaded reviewer automatically." },
+  { name: "Auto rework routing", whenStatus: "Rejected", afterHours: 0, action: "auto_route_rework", note: "", enabled: true, blurb: "Send rejected tasks straight back to their annotator and reopen them." },
+  { name: "Escalate stalled QA", whenStatus: "Submitted", afterHours: 24, action: "escalate", note: "", enabled: true, blurb: "Flag the project owner if a task sits in QA for over 24 hours." },
+  { name: "Auto-complete approved work", whenStatus: "Approved", afterHours: 48, action: "auto_complete", note: "", enabled: true, blurb: "Move approved tasks to Completed after 48 hours with no further action." }
+];
+
+function pipelineStageCounts(groupTasks) {
+  return {
+    Created: groupTasks.filter(t => t.status === "Pending" && !t.assigneeId).length,
+    Assigned: groupTasks.filter(t => t.status === "Pending" && t.assigneeId).length,
+    Annotating: groupTasks.filter(t => t.status === "In Progress").length,
+    Submitted: groupTasks.filter(t => t.status === "Submitted").length,
+    QA: groupTasks.filter(t => t.status === "QA Review").length,
+    Rework: groupTasks.filter(t => ["Rejected", "Changes Requested"].includes(t.status)).length,
+    Approved: groupTasks.filter(t => t.status === "Approved").length,
+    Completed: groupTasks.filter(t => t.status === "Completed").length
+  };
+}
+
+function WorkflowAutomationPanel({ groupId, config, groupTasks, allTasks, teamMembers, onCreateRule, onUpdateRule, onDeleteRule, onAddSuggestedRule }) {
+  const rules = config.automationRules || [];
+  const groupTaskSet = new Set(groupTasks);
+  const scopedTasks = allTasks.filter(t => groupTaskSet.has(t.projectId));
+  const counts = pipelineStageCounts(scopedTasks);
+  const unusedTemplates = SUGGESTED_RULE_TEMPLATES.filter(t => !rules.some(r => r.name === t.name));
+
+  return <section className="panel config-panel automation-panel">
+    <div className="config-panel-head"><div><h2>Workflow Automation</h2><p>Automate assignment, QA routing, rework, escalation and notifications as tasks move through the pipeline.</p></div><Zap size={20}/></div>
+
+    <div className="pipeline-diagram">
+      {PIPELINE_STAGES.map((stage, i) => <React.Fragment key={stage}>
+        <div className="pipeline-stage"><b>{counts[stage] || 0}</b><span>{stage}</span></div>
+        {i < PIPELINE_STAGES.length - 1 && <i className="pipeline-arrow">→</i>}
+      </React.Fragment>)}
+    </div>
+
+    <div className="automation-rules-head"><h3>Automation Rules ({rules.length})</h3><button className="primary-btn" onClick={() => onCreateRule(groupId)}><Plus size={15}/> New Rule</button></div>
+
+    {rules.length ? <div className="automation-rules-list">
+      {rules.map(rule => <AutomationRuleRow key={rule.id} rule={rule} teamMembers={teamMembers} onUpdate={(patch) => onUpdateRule(groupId, rule.id, patch)} onDelete={() => onDeleteRule(groupId, rule.id)}/>)}
+    </div> : <div className="config-empty"><Workflow size={34}/><h3>No automation rules yet</h3><p>Add a rule manually, or start from a suggested template below.</p></div>}
+
+    {!!unusedTemplates.length && <div className="automation-templates">
+      <span className="section-label">SUGGESTED RULES</span>
+      <div className="automation-template-grid">
+        {unusedTemplates.map(t => <div className="automation-template-card" key={t.name}>
+          <b>{t.name}</b><p>{t.blurb}</p>
+          <button className="ghost-btn" onClick={() => onAddSuggestedRule(groupId, { name: t.name, enabled: t.enabled, whenStatus: t.whenStatus, afterHours: t.afterHours, action: t.action, note: t.note })}><Plus size={13}/> Add</button>
+        </div>)}
+      </div>
+    </div>}
+  </section>;
+}
+
+function AutomationRuleRow({ rule, teamMembers, onUpdate, onDelete }) {
+  const ActionIcon = AUTOMATION_ACTIONS.find(a => a.id === rule.action)?.icon || Zap;
+  return <div className={`automation-rule-row ${rule.enabled ? "" : "disabled"}`}>
+    <button type="button" className={`switch-btn ${rule.enabled ? "on" : ""}`} onClick={() => onUpdate({ enabled: !rule.enabled })} title={rule.enabled ? "Disable rule" : "Enable rule"}><i/></button>
+    <input className="rule-name-input" value={rule.name} onChange={e => onUpdate({ name: e.target.value })} placeholder="Rule name"/>
+    <div className="rule-condition">
+      <span>When status is</span>
+      <select value={rule.whenStatus} onChange={e => onUpdate({ whenStatus: e.target.value })}>{WHEN_STATUS_OPTIONS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+      <input type="number" min="0" className="rule-hours-input" value={rule.afterHours || 0} onChange={e => onUpdate({ afterHours: Math.max(0, Number(e.target.value) || 0) })} title="Hours to wait before firing (0 = immediately)"/>
+      <span>hr{rule.afterHours === 1 ? "" : "s"} later</span>
+    </div>
+    <div className="rule-action"><ActionIcon size={14}/><select value={rule.action} onChange={e => onUpdate({ action: e.target.value })}>{AUTOMATION_ACTIONS.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}</select></div>
+    {rule.action === "notify" && <input className="rule-note-input" value={rule.note || ""} onChange={e => onUpdate({ note: e.target.value })} placeholder="Notification message"/>}
+    <button className="danger-icon" onClick={onDelete} title="Delete rule"><Trash2 size={15}/></button>
+  </div>;
+}
+
+const SEVERITY_OPTIONS = ["Minor", "Major", "Critical"];
+
+function QaScorecardConfigTab({ groupId, config, qaReviews, onUpdateConfig, onCreateCriterion, onUpdateCriterion, onDeleteCriterion, onCreateErrorCategory, onUpdateErrorCategory, onDeleteErrorCategory, onAddCalibration, onDeleteCalibration, groupTasks, allTasks }) {
+  const criteria = config.qaCriteria || [];
+  const categories = config.errorCategories || [];
+  const calibration = config.calibrationSet || [];
+  const totalWeight = criteria.reduce((s, c) => s + (Number(c.weight) || 0), 0);
+  const groupTaskSet = new Set(groupTasks);
+  const reviewableTasks = allTasks.filter(t => groupTaskSet.has(t.projectId) && qaReviews[t.id]);
+  const [calTaskId, setCalTaskId] = useState("");
+  const [calGold, setCalGold] = useState(90);
+  const [calNotes, setCalNotes] = useState("");
+
+  return <section className="panel config-panel qa-scorecard-config">
+    <div className="config-panel-head"><div><h2>QA Scorecard</h2><p>Define weighted scoring criteria, error taxonomy, sampling rate and calibration references for this project's reviewers.</p></div><ShieldCheck size={20}/></div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>Scoring Criteria <span className={`weight-total ${totalWeight===100?"ok":"warn"}`}>{totalWeight}% total</span></h3><button className="ghost-btn" onClick={() => onCreateCriterion(groupId)}><Plus size={13}/> Add Criterion</button></div>
+      {criteria.length ? <div className="qa-criteria-config-list">{criteria.map(c => <div className="qa-criterion-config-row" key={c.id}>
+        <input value={c.name} onChange={e => onUpdateCriterion(groupId, c.id, { name: e.target.value })}/>
+        <div className="weight-input"><input type="number" min="0" max="100" value={c.weight} onChange={e => onUpdateCriterion(groupId, c.id, { weight: Math.max(0, Number(e.target.value) || 0) })}/><span>%</span></div>
+        <button className="danger-icon" onClick={() => onDeleteCriterion(groupId, c.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><ShieldCheck size={22}/><p>No criteria yet — reviewers will use a single overall score instead.</p></div>}
+      {totalWeight !== 100 && !!criteria.length && <p className="field-hint weight-warning">Weights should add up to 100% — they're currently normalized automatically, but exact weights are clearer.</p>}
+    </div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>Error Categories</h3><button className="ghost-btn" onClick={() => onCreateErrorCategory(groupId)}><Plus size={13}/> Add Category</button></div>
+      {categories.length ? <div className="qa-criteria-config-list">{categories.map(c => <div className="qa-error-config-row" key={c.id}>
+        <input value={c.name} onChange={e => onUpdateErrorCategory(groupId, c.id, { name: e.target.value })}/>
+        <select value={c.severity} onChange={e => onUpdateErrorCategory(groupId, c.id, { severity: e.target.value })}>{SEVERITY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select>
+        <button className="danger-icon" onClick={() => onDeleteErrorCategory(groupId, c.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><AlertCircle size={22}/><p>No error categories defined yet.</p></div>}
+    </div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>QA Sampling</h3></div>
+      <label className="sampling-slider-label"><span>Review {config.samplingRate ?? 100}% of submitted tasks</span><input type="range" min="1" max="100" value={config.samplingRate ?? 100} onChange={e => onUpdateConfig({ samplingRate: Number(e.target.value) })}/></label>
+      <p className="field-hint">Tasks outside the sample are auto-approved on submission and logged as a sampling skip. Set to 100% to review everything.</p>
+    </div>
+
+    <div className="qa-config-block">
+      <div className="qa-config-block-head"><h3>Calibration Set</h3></div>
+      <form className="calibration-add-form" onSubmit={e => { e.preventDefault(); if (!calTaskId.trim()) return; onAddCalibration(groupId, calTaskId.trim(), calGold, calNotes); setCalTaskId(""); setCalNotes(""); }}>
+        <input value={calTaskId} onChange={e => setCalTaskId(e.target.value)} placeholder="Task ID"/>
+        <input type="number" min="0" max="100" value={calGold} onChange={e => setCalGold(e.target.value)} placeholder="Gold score"/>
+        <input value={calNotes} onChange={e => setCalNotes(e.target.value)} placeholder="Notes (optional)" className="calibration-notes-input"/>
+        <button type="submit" className="ghost-btn"><Plus size={13}/> Add</button>
+      </form>
+      {calibration.length ? <div className="calibration-list">{calibration.map(entry => {
+        const review = qaReviews[entry.taskId];
+        const drift = review && review.score !== null && review.score !== undefined ? review.score - entry.goldScore : null;
+        return <div className="calibration-row" key={entry.id}>
+          <div><b>{entry.taskId}</b><span>Gold: {entry.goldScore}{entry.notes ? ` · ${entry.notes}` : ""}</span></div>
+          {drift !== null ? <span className={`drift-badge ${Math.abs(drift) <= 5 ? "good" : Math.abs(drift) <= 15 ? "warn" : "bad"}`}>{review.reviewer}: {review.score} ({drift > 0 ? "+" : ""}{drift})</span> : <span className="drift-badge pending">Not reviewed yet</span>}
+          <button className="danger-icon" onClick={() => onDeleteCalibration(groupId, entry.id)}><Trash2 size={13}/></button>
+        </div>;
+      })}</div> : <div className="config-empty small"><Target size={22}/><p>Add a reference task with an expert "gold" score to track reviewer calibration drift.</p></div>}
+      {!!reviewableTasks.length && <p className="field-hint">{reviewableTasks.length} reviewed task{reviewableTasks.length===1?"":"s"} in this project can be used as calibration references.</p>}
+    </div>
+  </section>;
+}
+
+function LabelEditorModal({editing,form,setForm,onClose,onSave,error,allLabels,editingLabelId,labelGroups}) {
+  const parentOptions = (allLabels||[]).filter(l => l.id !== editingLabelId);
+  const addAttribute = () => setForm({ ...form, attributes: [...(form.attributes||[]), { id: `attr-${Date.now()}`, name: "", type: "Text", options: "", required: false }] });
+  const updateAttribute = (id, patch) => setForm({ ...form, attributes: (form.attributes||[]).map(a => a.id === id ? { ...a, ...patch } : a) });
+  const removeAttribute = (id) => setForm({ ...form, attributes: (form.attributes||[]).filter(a => a.id !== id) });
+  return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}>
+    <div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
+    <div className="label-editor-form">
+      <label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label>
+      <label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label>
+      <label><span>PARENT LABEL</span><select value={form.parentId||""} onChange={e=>setForm({...form,parentId:e.target.value})}><option value="">No parent (top-level)</option>{parentOptions.map(l=><option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
+      <label><span>LABEL GROUP</span><select value={form.groupId||""} onChange={e=>setForm({...form,groupId:e.target.value})}><option value="">Ungrouped</option>{(labelGroups||[]).map(g=><option key={g.id} value={g.id}>{g.name}</option>)}</select></label>
+      <label><span>KEYBOARD SHORTCUT</span><input maxLength={1} value={form.shortcut||""} onChange={e=>setForm({...form,shortcut:e.target.value.slice(0,1)})} placeholder="e.g. 1"/><small className="field-hint">Single key to select this label while annotating. V, B, P, L, K, G, R, E and Space are reserved for tools.</small></label>
+      <label><span>LABEL COLOR</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>setForm({...form,color:c})}/>)}</div></label>
+      <div className="attribute-editor">
+        <div className="attribute-editor-head"><span>ATTRIBUTES</span><button type="button" className="ghost-btn" onClick={addAttribute}><Plus size={13}/> Add Attribute</button></div>
+        {(form.attributes||[]).length ? (form.attributes||[]).map(attr => <div className="attribute-row" key={attr.id}>
+          <input value={attr.name} onChange={e=>updateAttribute(attr.id,{name:e.target.value})} placeholder="Attribute name"/>
+          <select value={attr.type} onChange={e=>updateAttribute(attr.id,{type:e.target.value})}>{ATTRIBUTE_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
+          {attr.type === "Select" && <input value={attr.options||""} onChange={e=>updateAttribute(attr.id,{options:e.target.value})} placeholder="option1, option2, ..."/>}
+          <label className="attribute-required"><input type="checkbox" checked={!!attr.required} onChange={e=>updateAttribute(attr.id,{required:e.target.checked})}/> Required</label>
+          <button type="button" className="danger-icon" onClick={()=>removeAttribute(attr.id)}><Trash2 size={14}/></button>
+        </div>) : <p className="attribute-empty">No attributes yet — add one for extra metadata annotators must fill in (e.g. color, occlusion, condition).</p>}
+      </div>
+      {error && <div className="form-error"><AlertCircle size={14}/> {error}</div>}
+    </div>
+    <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={15}/>{editing?"Save Changes":"Add Label"}</button></div>
+  </form></div>;
+}
+
+function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,search,setSearch,filter,setFilter,onCreate,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onTaskSettings,onCreateGroup,onEditGroup,onDeleteGroup,onDuplicateGroup,onArchiveGroup,onRestoreGroup,onOpenConfig,groupMessage,canManage,canEditProject}) {
+  const [activeCategory, setActiveCategory] = useState(null);
+  const [groupSearch, setGroupSearch] = useState("");
+  const [groupStatusFilter, setGroupStatusFilter] = useState("Active");
+  const [groupSort, setGroupSort] = useState("Name");
+  const groupOf = p => p.groupId;
+  const activeGroup = groups.find(g => g.id === activeCategory);
+  const memberById = id => teamMembers.find(m => m.id === id);
+
+  if (activeGroup) {
+    const categoryProjects = projects.filter(p => groupOf(p) === activeGroup.id);
+    const groupTaskIds = categoryProjects.map(p => p.id);
+    const GroupIcon = GROUP_ICONS[activeGroup.icon] || Layers;
+    const config = projectConfigs[activeGroup.id];
+    const owner = memberById(activeGroup.ownerId);
+    const team = (activeGroup.teamIds || []).map(memberById).filter(Boolean);
+    const recentActivity = auditEvents.filter(e => groupTaskIds.includes(e.projectId)).slice(0, 5);
+    const health = projectHealth(categoryProjects, recentActivity);
+    return <div className="page">
+      <div className="page-head category-drill-head">
+        <div>
+          <button className="category-back-btn" onClick={()=>setActiveCategory(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Projects</button>
+          <div className="category-drill-title"><span className="category-dot" style={{background:activeGroup.color}}/><h1>{activeGroup.name}</h1><span className="category-count-pill">{categoryProjects.length} task{categoryProjects.length===1?"":"s"}</span><span className="category-count-pill stage-pill">{activeGroup.stage || "Planning"}</span><span className={`category-count-pill health-pill health-${health.level.replace(" ","-").toLowerCase()}`}>{health.level}</span>{activeGroup.status==="Archived" && <span className="category-count-pill archived-pill">Archived</span>}</div>
+          {activeGroup.description && <p className="category-drill-desc">{activeGroup.description}</p>}
+        </div>
+        {canEditProject(activeGroup) && <div className="category-drill-actions">
+          <button className="secondary-btn" onClick={()=>onOpenConfig(activeGroup.id)}><Settings size={16}/> Configuration</button>
+          <button className="primary-btn" onClick={()=>onCreate(activeGroup.id)}><Plus size={17}/> Create Task</button>
+        </div>}
+      </div>
+      <div className="project-summary"><MiniStat label="Total Tasks" value={categoryProjects.length}/><MiniStat label="In Progress" value={categoryProjects.filter(p=>p.status==="In Progress").length}/><MiniStat label="Completed" value={categoryProjects.filter(p=>p.status==="Completed").length}/><MiniStat label="Overdue" value={health.overdue}/></div>
+
+      <div className="project-overview-grid">
+        <section className="panel overview-card">
+          <div className="panel-head"><div><h2>Team</h2><p>Owner and members assigned to this project</p></div><Users size={17}/></div>
+          <div className="overview-team-body">
+            <div className="overview-owner-row"><span className="overview-label">OWNER</span>{owner ? <div className="overview-person"><div className="member-avatar small">{initials(owner.name)}</div><span>{owner.name}</span></div> : <span className="no-access">No owner assigned</span>}</div>
+            <div className="overview-owner-row"><span className="overview-label">TEAM ({team.length})</span>{team.length ? <div className="overview-avatar-stack">{team.map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div> : <span className="no-access">No team members assigned</span>}</div>
+          </div>
+        </section>
+        <section className="panel overview-card">
+          <div className="panel-head"><div><h2>Configuration Summary</h2><p>Workflow and labeling setup</p></div><SlidersHorizontal size={17}/></div>
+          <div className="overview-summary-list">
+            <div><span>Labels configured</span><b>{config?.labels?.length || 0}</b></div>
+            <div><span>QA review</span><b>{config?.requireQa ? "Required" : "Optional"}</b></div>
+            <div><span>Auto-save</span><b>{config?.autoSave ? "On" : "Off"}</b></div>
+            <div><span>Task sampling</span><b>{config?.taskSampling || "Sequential"}</b></div>
+          </div>
+        </section>
+        <section className="panel overview-card">
+          <div className="panel-head"><div><h2>Recent Activity</h2><p>Latest events across this project's tasks</p></div><Activity size={17}/></div>
+          <div className="overview-activity-list">
+            {recentActivity.length ? recentActivity.map(e=><div key={e.id} className="overview-activity-row"><b>{e.action}</b><span>{e.actor} · {new Date(e.timestamp).toLocaleDateString()}</span></div>) : <span className="no-access">No activity yet</span>}
+          </div>
+        </section>
+      </div>
+
+      <section className="panel">
+        <div className="project-filters"><div className="filter-search"><Search size={17}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div></div>
+        <div className="project-grid">{categoryProjects.map(p=><ProjectCard key={p.id} p={p} onEdit={()=>onEdit(p)} onDelete={()=>onDelete(p.id)} onDetails={()=>onDetails(p)} onWorkspace={()=>onWorkspace(p.id)} onReview={()=>onReview(p.id)} onPlanner={()=>onPlanner(p.id)} onSettings={()=>onTaskSettings(p.id)} canManage={canEditProject(activeGroup)}/>)}</div>
+        {!categoryProjects.length && <div className="empty-state"><FolderKanban size={40}/><h3>No tasks in {activeGroup.name} yet</h3><p>Create one to get started.</p></div>}
+      </section>
+    </div>;
+  }
+
+  const visibleGroups = groups
+    .filter(g => groupStatusFilter === "All" || (g.status || "Active") === groupStatusFilter)
+    .filter(g => g.name.toLowerCase().includes(groupSearch.toLowerCase()))
+    .sort((a,b) => {
+      if (groupSort === "Most tasks") return projects.filter(p=>groupOf(p)===b.id).length - projects.filter(p=>groupOf(p)===a.id).length;
+      if (groupSort === "Newest") return (b.id > a.id ? 1 : -1);
+      return a.name.localeCompare(b.name);
+    });
+
+  return <div className="page"><div className="page-head"><div><span className="eyebrow">WORKSPACE</span><h1>Projects</h1><p>Create, organize and monitor your annotation projects.</p></div>{canManage && <button className="primary-btn" onClick={onCreateGroup}><Plus size={17}/> Create Project</button>}</div>
+    {groupMessage && <div className="workspace-toast"><AlertCircle size={17}/>{groupMessage}</div>}
+    <div className="project-filters standalone">
+      <div className="filter-search"><Search size={17}/><input value={groupSearch} onChange={e=>setGroupSearch(e.target.value)} placeholder="Search projects..."/></div>
+      <div className="select-wrap"><ListFilter size={16}/><select value={groupStatusFilter} onChange={e=>setGroupStatusFilter(e.target.value)}><option>All</option><option>Active</option><option>Archived</option></select></div>
+      <div className="select-wrap"><ArrowUpDown size={16}/><select value={groupSort} onChange={e=>setGroupSort(e.target.value)}><option>Name</option><option>Most tasks</option><option>Newest</option></select></div>
+    </div>
+    <div className="category-tile-grid">
+      {visibleGroups.map(group => {
+        const groupProjects = projects.filter(p => groupOf(p) === group.id);
+        const count = groupProjects.length;
+        const Icon = GROUP_ICONS[group.icon] || Layers;
+        const owner = memberById(group.ownerId);
+        const team = (group.teamIds || []).map(memberById).filter(Boolean);
+        const archived = group.status === "Archived";
+        const groupTaskIds = groupProjects.map(p => p.id);
+        const health = projectHealth(groupProjects, auditEvents.filter(e => groupTaskIds.includes(e.projectId)));
+        return <div key={group.id} className={`category-tile-wrap ${archived?"archived":""}`}>
+          {archived && <span className="archived-badge">Archived</span>}
+          <button className="category-tile" onClick={()=>setActiveCategory(group.id)}>
+            <span className="category-tile-icon" style={{background:`${group.color}22`,color:group.color}}><Icon size={20}/></span>
+            <div className="category-tile-title-row"><b>{group.name}</b>{count > 0 && <span className={`health-dot health-${health.level.replace(" ","-").toLowerCase()}`} title={`${health.level}${health.overdue?` · ${health.overdue} overdue`:""}`}/>}</div>
+            <span className="category-tile-count">{count} task{count===1?"":"s"}{owner?` · Owner: ${owner.name}`:""}</span>
+            {team.length > 0 && <div className="overview-avatar-stack tile-avatars">{team.slice(0,4).map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div>}
+          </button>
+          {canManage && <div className="category-tile-actions">
+            <button title="Duplicate project" onClick={()=>onDuplicateGroup(group.id)}><Copy size={14}/></button>
+            <button title="Edit project" onClick={()=>onEditGroup(group)}><Edit3 size={14}/></button>
+            {archived
+              ? <button title="Restore project" onClick={()=>onRestoreGroup(group.id)}><RotateCcw size={14}/></button>
+              : <button title="Archive project" onClick={()=>onArchiveGroup(group.id)}><Archive size={14}/></button>}
+            <button title="Delete project" className="danger-icon" onClick={()=>onDeleteGroup(group.id)}><Trash2 size={14}/></button>
+          </div>}
+        </div>;
+      })}
+    </div>
+    {!visibleGroups.length && <div className="empty-state"><FolderKanban size={40}/><h3>No projects found</h3><p>Try another search or create a new project.</p></div>}
+  </div>;
+}
+
+function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onSettings,canManage}) {
+  return <article className="project-card task-open-card">
+    <div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div>
+    <div className="task-open-zone" role="button" tabIndex={0} onClick={onWorkspace} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onWorkspace(); } }} title="Open annotation workstation">
+      <div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div>
+      <div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div>
+      <div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div>
+    </div>
+    <div className="task-workflow-row"><button className="workflow-btn annotate" onClick={onWorkspace}><Play size={13}/> Annotation</button><button className="workflow-btn review" onClick={onReview}><ClipboardCheck size={13}/> Review</button></div>
+    <div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div>
+  </article>;
+}
+
+const SEARCH_CATEGORY_META = [
+  ["project", "Projects"], ["task", "Tasks"], ["user", "Users"], ["dataset", "Datasets"],
+  ["annotation", "Annotations"], ["review", "Reviews"], ["audit", "Audit Events"], ["notification", "Notifications"]
+];
+
+function CommandPalette({ onClose, getResults, quickActions, recentItems, favoriteItems, isFavorite, onToggleFavorite, onSelect }) {
+  const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [activeIndex, setActiveIndex] = useState(0);
+  const inputRef = useRef(null);
+  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => { const id = setTimeout(() => setDebouncedQuery(query), 150); return () => clearTimeout(id); }, [query]);
+
+  const results = getResults(debouncedQuery);
+  const sections = [];
+  if (!results) {
+    if (favoriteItems.length) sections.push(["Favorites", favoriteItems]);
+    if (recentItems.length) sections.push(["Recent", recentItems]);
+    sections.push(["Quick Actions", quickActions]);
+  } else {
+    SEARCH_CATEGORY_META.forEach(([key, label]) => { if (results[key]?.length) sections.push([label, results[key]]); });
+    const matchedActions = quickActions.filter(a => a.title.toLowerCase().includes(query.trim().toLowerCase()));
+    if (matchedActions.length) sections.push(["Quick Actions", matchedActions]);
+    if (!sections.length) sections.push(["No results", []]);
+  }
+  const flat = sections.flatMap(([, items]) => items);
+
+  useEffect(() => { setActiveIndex(0); }, [query]);
+
+  function handleKeyDown(e) {
+    if (e.key === "ArrowDown") { e.preventDefault(); setActiveIndex(i => Math.min(flat.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActiveIndex(i => Math.max(0, i - 1)); }
+    else if (e.key === "Enter") { e.preventDefault(); if (flat[activeIndex]) onSelect(flat[activeIndex]); }
+  }
+
+  let runningIndex = -1;
+  return <div className="command-backdrop" onClick={onClose}>
+    <div className="command-palette" onClick={e => e.stopPropagation()}>
+      <div className="command-input-row">
+        <Search size={18}/>
+        <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKeyDown} placeholder="Search projects, tasks, users, datasets, reviews…"/>
+        <button className="command-close" onClick={onClose}><X size={16}/></button>
+      </div>
+      <div className="command-results">
+        {sections.map(([label, items]) => <div className="command-section" key={label}>
+          <span className="command-section-label">{label.toUpperCase()}</span>
+          {items.length ? items.map(item => {
+            runningIndex++;
+            const idx = runningIndex;
+            const Icon = item.icon || Star;
+            return <div key={`${item.type}-${item.id}`} className={`command-row ${idx === activeIndex ? "active" : ""}`} onMouseEnter={() => setActiveIndex(idx)} onClick={() => onSelect(item)}>
+              <Icon size={15}/>
+              <div className="command-row-main"><b>{item.title}</b>{item.subtitle && <span>{item.subtitle}</span>}</div>
+              {item.type !== "action" && <button className={`command-star ${isFavorite(item) ? "starred" : ""}`} onClick={e => { e.stopPropagation(); onToggleFavorite(item); }} title="Toggle favorite"><Star size={13}/></button>}
+            </div>;
+          }) : <div className="command-empty">Nothing matched "{query}"</div>}
+        </div>)}
+      </div>
+      <div className="command-footer"><span><ChevronDown size={11} style={{transform:"rotate(180deg)"}}/><ChevronDown size={11}/> Navigate</span><span>↵ Select</span><span>Esc Close</span></div>
+    </div>
+  </div>;
+}
+
+function ProjectModal({form,setForm,editing,onClose,onSave}) {
+  const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
+  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{editing?"Edit Task":"Create Task"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label>Task name<input required value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. momah_seg_jul_2"/></label><label>Client / organization<input required value={form.client} onChange={e=>set("client",e.target.value)} placeholder="Client name"/></label><label>Annotation type<select value={form.annotationType} onChange={e=>set("annotationType",e.target.value)}><option>Bounding Box</option><option>Polygon</option><option>Segmentation</option><option>Classification</option><option>Keypoints</option><option>Polyline</option></select></label><label>Team<select value={form.team} onChange={e=>set("team",e.target.value)}><option>Annotation Team</option><option>Road Vision Team</option><option>Segmentation Team</option><option>Infrastructure Team</option><option>Classification Team</option></select></label><label>Total images<input type="number" min="1" value={form.totalImages} onChange={e=>set("totalImages",e.target.value)}/></label><label>Completed images<input type="number" min="0" value={form.completedImages} onChange={e=>set("completedImages",e.target.value)}/></label><label>Start date<input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}/></label><label>Due date<input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)}/></label><label>Status<select value={form.status} onChange={e=>set("status",e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Task description..."/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Task"}</button></div></form></div>;
+}
+
+function GroupModal({form,setForm,editing,onClose,onSave,teamMembers}) {
+  const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
+  const iconChoices = Object.keys(GROUP_ICONS);
+  const toggleTeam = (id) => setForm(prev => ({ ...prev, teamIds: prev.teamIds.includes(id) ? prev.teamIds.filter(x=>x!==id) : [...prev.teamIds, id] }));
+  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label>Owner<select value={form.ownerId} onChange={e=>set("ownerId",e.target.value)}><option value="">No owner</option>{teamMembers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Lifecycle stage<select value={form.stage||"Planning"} onChange={e=>set("stage",e.target.value)}>{PROJECT_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div>
+  <div className="team-project-form"><span>ASSIGNED TEAM</span><div>{teamMembers.map(m=>{const active=form.teamIds.includes(m.id);return <button type="button" key={m.id} className={`project-check ${active?"active":""}`} onClick={()=>toggleTeam(m.id)}><span>{active?<CheckCircle2 size={13}/>:<Users size={13}/>}</span><div><b>{m.name}</b><small>{m.role}</small></div></button>;})}</div></div>
+  <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
+}
+
+function ProjectDetails({project,onClose,onEdit}) {
+  return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Task</button></div></div></div>;
+}
+
+function TaskSettingsPage({task, tab, setTab, subTab, setSubTab, onBack, onEditTask, importProps, exportProps}) {
+  return <div className="page task-settings-page">
+    <div className="page-head category-drill-head">
+      <div>
+        <button className="category-back-btn" onClick={onBack}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Projects</button>
+        <div className="category-drill-title"><h1>{task.name}</h1><StatusBadge status={task.status}/></div>
+        <p className="category-drill-desc">{task.client} · {task.annotationType}</p>
+      </div>
+    </div>
+    <div className="config-tabs">
+      <button className={tab==="General"?"active":""} onClick={()=>setTab("General")}><SlidersHorizontal size={16}/> General</button>
+      <button className={tab==="Import"?"active":""} onClick={()=>setTab("Import")}><Upload size={16}/> Import &amp; Export</button>
+    </div>
+
+    {tab === "General" && <section className="panel config-panel general-settings-panel">
+      <div className="config-panel-head"><div><h2>Task Details</h2><p>Basic information for this task.</p></div><button className="secondary-btn" onClick={onEditTask}><Edit3 size={15}/> Edit</button></div>
+      <div className="detail-grid" style={{padding:"0 20px 20px"}}>
+        <Detail label="Client" value={task.client||"—"}/>
+        <Detail label="Annotation type" value={task.annotationType}/>
+        <Detail label="Team" value={task.team||"—"}/>
+        <Detail label="Start date" value={task.startDate||"—"}/>
+        <Detail label="Due date" value={task.dueDate||"—"}/>
+        <Detail label="Total images" value={Number(task.totalImages).toLocaleString()}/>
+      </div>
+      {task.description && <div className="description-box" style={{margin:"0 20px 20px"}}><b>Description</b><p>{task.description}</p></div>}
+    </section>}
+
+    {tab === "Import" && <section>
+      <div className="import-export-subtabs">
+        <button className={subTab==="Import"?"active":""} onClick={()=>setSubTab("Import")}><Upload size={14}/> Import</button>
+        <button className={subTab==="Export"?"active":""} onClick={()=>setSubTab("Export")}><Download size={14}/> Export</button>
+      </div>
+      {subTab === "Import" && <ImportPage {...importProps}/>}
+      {subTab === "Export" && <ExportPage {...exportProps}/>}
+    </section>}
+  </div>;
+}
+
+function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClearHistory,importTaskId,setImportTaskId,activeDatasetId,setActiveDatasetId,listSearch,setListSearch,listStatus,setListStatus,filteredTasks,search,setSearch,status,setStatus,view,setView,onImport,onCsv,onAdvImport,onRemove,onClear,onStatus,onExport,onCreateDataset,onEditDataset,onArchiveDataset,onRestoreDataset,onDeleteDataset,onSnapshotVersion,compareVersion,setCompareVersion}) {
+  const taskProjects = projects.length ? projects : [];
+  const currentTask = taskProjects.find(p => p.id === importTaskId) || taskProjects[0];
+  const taskDatasets = datasets.filter(d => d.projectId === currentTask?.id);
+  const activeDataset = datasets.find(d => d.id === activeDatasetId && d.projectId === currentTask?.id);
+  const taskIndexById = useMemo(() => Object.fromEntries(tasks.map((t,i) => [t.id, i])), [tasks]);
+  const IMAGE_PAGE_SIZE = 60;
+  const [imagePage, setImagePage] = useState(1);
+  useEffect(() => { setImagePage(1); }, [search, status, activeDatasetId, view]);
+  const imageTotalPages = Math.max(1, Math.ceil(filteredTasks.length / IMAGE_PAGE_SIZE));
+  const clampedImagePage = Math.min(imagePage, imageTotalPages);
+  const pagedTasks = filteredTasks.slice((clampedImagePage-1)*IMAGE_PAGE_SIZE, clampedImagePage*IMAGE_PAGE_SIZE);
+
+  if (activeDataset) {
+    const dsTasks = tasks.filter(t => t.datasetId === activeDataset.id);
+    const annotated = dsTasks.filter(t => t.status === "Completed").length;
+    const invalid = dsTasks.filter(t => !t.image).length;
+    const pending=dsTasks.filter(t=>t.status==="Pending").length;
+    const progress=dsTasks.filter(t=>t.status==="In Progress").length;
+    const validation = validateDataset(dsTasks, projectConfigs?.[currentTask?.groupId]);
+    const history = activeDataset.versionHistory || [];
+    const compareSnapshot = history.find(h => h.version === compareVersion);
+    const currentNames = new Set(dsTasks.map(t => t.name));
+    const compareNames = new Set(compareSnapshot?.imageIds || []);
+    const added = compareSnapshot ? [...currentNames].filter(n => !compareNames.has(n)) : [];
+    const removed = compareSnapshot ? [...compareNames].filter(n => !currentNames.has(n)) : [];
+    return <div className="page dataset-page">
+      <div className="page-head category-drill-head"><div><button className="category-back-btn" onClick={()=>setActiveDatasetId(null)}><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> {currentTask?.name} Datasets</button><span className="eyebrow">DATASET</span><h1>{activeDataset.name}</h1><p>Version {activeDataset.version || 1} · {dsTasks.length} images{invalid?` · ${invalid} invalid`:""}</p><div className="category-drill-title" style={{marginTop:"8px"}}><span className="category-count-pill stage-pill">{activeDataset.stage || "Draft"}</span><span className={`category-count-pill health-pill ${validation.valid ? "health-healthy" : "health-at-risk"}`}>{validation.valid ? "Validated" : "Needs Attention"}</span></div></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={()=>onSnapshotVersion(activeDataset.id)}><Copy size={15}/> Save as New Version</button><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> CSV / JSON Guide</button><button className="secondary-btn" onClick={()=>onAdvImport(activeDataset.id)}><FileArchive size={15}/> ZIP / COCO / YOLO</button><button className="secondary-btn" onClick={onExport}><Download size={15}/> Export CSV</button><button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={16}/> Add Images</button></div></div>
+      <div className="dataset-cards"><MiniStat label="Total Images" value={dsTasks.length}/><MiniStat label="Annotated" value={annotated}/><MiniStat label="Unannotated" value={dsTasks.length-annotated}/><MiniStat label="Invalid Files" value={invalid}/></div>
+      {!validation.valid && <div className="validation-panel"><AlertCircle size={16}/><div><b>This dataset needs attention before it's production-ready</b><ul>{validation.issues.map((issue,i)=><li key={i}>{issue}</li>)}</ul></div></div>}
+      <section className="dataset-info panel"><div className="dataset-info-main"><div className="dataset-logo"><Database size={22}/></div><div><b className="dataset-name-input" style={{display:"block"}}>{activeDataset.name}</b><span className="dataset-description-input" style={{display:"block",color:"var(--muted)"}}>{activeDataset.description||"No description"}</span><div className="dataset-meta-line"><span>Created {new Date(activeDataset.createdAt).toLocaleDateString()}</span><span>•</span><span>{currentTask?.name}</span><span>•</span><span>Autosaved</span></div></div></div><div className="dataset-info-actions"><button className="secondary-btn" onClick={()=>onEditDataset(activeDataset)}><Edit3 size={15}/> Edit</button>{activeDataset.status==="Archived" ? <button className="secondary-btn" onClick={()=>onRestoreDataset(activeDataset.id)}><RotateCcw size={15}/> Restore</button> : <button className="secondary-btn" onClick={()=>onArchiveDataset(activeDataset.id)}><Archive size={15}/> Archive</button>}<button className="danger-outline" onClick={()=>onClear(activeDataset.id)}><Trash2 size={15}/> Clear Images</button></div></section>
+      {history.length > 0 && <section className="panel version-history-panel"><div className="panel-head"><div><h2>Version History</h2><p>Compare the current image set against a saved version</p></div><Clock3 size={17}/></div>
+        <div className="version-history-list">{history.slice().reverse().map(h=><div key={h.version} className={`version-row ${compareVersion===h.version?"active":""}`} onClick={()=>setCompareVersion(compareVersion===h.version?null:h.version)}><b>v{h.version}</b><span>{h.imageIds.length} images · saved {new Date(h.savedAt).toLocaleDateString()}</span>{compareVersion===h.version && <span className="version-compare-tag">Comparing</span>}</div>)}</div>
+        {compareSnapshot && <div className="version-diff"><div><b>+{added.length}</b><span>added since v{compareVersion}</span>{added.length>0 && <ul>{added.slice(0,8).map(n=><li key={n}>{n}</li>)}</ul>}</div><div><b>-{removed.length}</b><span>removed since v{compareVersion}</span>{removed.length>0 && <ul>{removed.slice(0,8).map(n=><li key={n}>{n}</li>)}</ul>}</div></div>}
+      </section>}
+      <section className="panel task-library"><div className="task-library-head"><div><h2>Dataset Images</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
+        <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search image name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {dsTasks.length}</span></div>
+        {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{pagedTasks.map((t)=>{const originalIndex=taskIndexById[t.id] ?? -1;return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt="" loading="lazy" decoding="async"/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{pagedTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name} loading="lazy" decoding="async"/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+        {filteredTasks.length > IMAGE_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedImagePage<=1} onClick={()=>setImagePage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedImagePage} of {imageTotalPages} · {filteredTasks.length} images</span><button disabled={clampedImagePage>=imageTotalPages} onClick={()=>setImagePage(p=>Math.min(imageTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
+      </section>
+      <div className="dataset-help"><div><ShieldCheck size={18}/><div><b>Local-first dataset storage</b><p>Uploaded images are stored in your browser as data URLs, so your imported tasks remain available after refreshing the page on the same device.</p></div></div><span>Build 17</span></div>
+    </div>;
+  }
+
+  const visibleDatasets = taskDatasets
+    .filter(d => listStatus === "All" || (d.status || "Active") === listStatus)
+    .filter(d => d.name.toLowerCase().includes(listSearch.toLowerCase()));
+
+  return <div className="page dataset-page">
+    <div className="page-head"><div><span className="eyebrow">DATASET MANAGEMENT</span><h1>Datasets</h1><p>Every project can hold multiple datasets — organize imports by batch, version or source.</p></div><div className="dataset-head-actions"><button className="primary-btn" onClick={()=>onCreateDataset(currentTask?.id)}><Plus size={16}/> Create Dataset</button></div></div>
+    <div className="dataset-cards"><MiniStat label="Datasets" value={taskDatasets.length}/><MiniStat label="Total Images" value={tasks.filter(t=>taskDatasets.some(d=>d.id===t.datasetId)).length}/><MiniStat label="Active" value={taskDatasets.filter(d=>(d.status||"Active")==="Active").length}/><MiniStat label="Archived" value={taskDatasets.filter(d=>d.status==="Archived").length}/></div>
+    <div className="project-filters standalone"><div className="filter-search"><Search size={17}/><input value={listSearch} onChange={e=>setListSearch(e.target.value)} placeholder="Search datasets..."/></div><div className="select-wrap"><ListFilter size={16}/><select value={listStatus} onChange={e=>setListStatus(e.target.value)}><option>All</option><option>Active</option><option>Archived</option></select></div></div>
+    <div className="dataset-grid">
+      {visibleDatasets.map(ds => {
+        const dsTasks = tasks.filter(t => t.datasetId === ds.id);
+        const annotated = dsTasks.filter(t => t.status === "Completed").length;
+        const preview = dsTasks.slice(0,4);
+        const archived = ds.status === "Archived";
+        const dsValidation = validateDataset(dsTasks, projectConfigs?.[currentTask?.groupId]);
+        return <article key={ds.id} className={`dataset-card ${archived?"archived":""}`}>
+          {archived && <span className="archived-badge">Archived</span>}
+          <button className="dataset-card-main" onClick={()=>setActiveDatasetId(ds.id)}>
+            <div className="dataset-card-thumbs">{preview.length ? preview.map(t=><img key={t.id} src={t.image} alt="" loading="lazy" decoding="async"/>) : <div className="dataset-card-thumb-empty"><ImageIcon size={18}/></div>}</div>
+            <div className="category-tile-title-row"><b>{ds.name}</b><span className={`health-dot ${dsValidation.valid?"health-healthy":"health-at-risk"}`} title={dsValidation.valid?"Validated":dsValidation.issues.join(", ")}/></div>
+            <span className="dataset-card-meta">v{ds.version || 1} · {ds.stage || "Draft"} · {dsTasks.length} images · {annotated} annotated</span>
+          </button>
+          <div className="category-tile-actions">
+            <button title="Edit dataset" onClick={()=>onEditDataset(ds)}><Edit3 size={14}/></button>
+            {archived ? <button title="Restore dataset" onClick={()=>onRestoreDataset(ds.id)}><RotateCcw size={14}/></button> : <button title="Archive dataset" onClick={()=>onArchiveDataset(ds.id)}><Archive size={14}/></button>}
+            <button title="Delete dataset" className="danger-icon" onClick={()=>onDeleteDataset(ds.id)}><Trash2 size={14}/></button>
+          </div>
+        </article>;
+      })}
+    </div>
+    {!visibleDatasets.length && <div className="empty-state"><Database size={40}/><h3>No datasets found</h3><p>Create a dataset to start importing images into {currentTask?.name}.</p></div>}
+    <section className="panel import-history-panel">
+      <div className="panel-head"><div><h2>Import History</h2><p>Recent structured imports across all datasets</p></div><div className="dataset-head-actions"><button className="secondary-btn" onClick={onCsv}><FileText size={15}/> Import CSV / JSON</button>{importHistory.length>0 && <button className="secondary-btn" onClick={onClearHistory}><Trash2 size={15}/> Clear</button>}</div></div>
+      {importHistory.length ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>FILE</th><th>DATASET</th><th>IMPORTED</th><th>SKIPPED</th><th>WHEN</th></tr></thead><tbody>{importHistory.map(h=><tr key={h.id}><td><b>{h.fileName}</b></td><td>{h.datasetName}</td><td><span className="source-pill valid-pill">{h.imported}</span></td><td>{h.skipped ? <span className="source-pill invalid-pill">{h.skipped}</span> : <span className="source-pill">0</span>}</td><td>{new Date(h.at).toLocaleString()}</td></tr>)}</tbody></table></div> : <div className="dataset-empty"><FileSpreadsheet size={32}/><h3>No imports yet</h3><p>Import a CSV or JSON file to see its history here.</p></div>}
+    </section>
+  </div>;
+}
+
+function DatasetModal({form,setForm,editing,onClose,onSave}) {
+  const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
+  return <div className="modal-backdrop"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label><label>Lifecycle stage<select value={form.stage||"Draft"} onChange={e=>set("stage",e.target.value)}>{DATASET_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
+}
+
+function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message, scopedToTask}) {
+  const totalAnnotations = tasks.reduce((n,t) => n + (annotations[t.id] || []).length, 0);
+  const approved = tasks.filter(t => qaReviews[t.id]?.decision === "Approved").length;
+  const formats = [
+    ["AnnotatePro JSON", FileJson, "Complete portable project export with tasks, annotations and QA records."],
+    ["Task CSV", FileSpreadsheet, "Task-level operational report for spreadsheets and data workflows."],
+    ["Annotation CSV", FileSpreadsheet, "One row per annotation with geometry and label information."],
+    ["COCO JSON", FileArchive, "COCO-style dataset export for rectangle/object-detection workflows."],
+    ["YOLO Manifest", FileText, "Normalized bounding-box manifest ready for YOLO conversion pipelines."]
+  ];
+  return <div className="page export-page">
+    {!scopedToTask && <div className="page-head"><div><span className="eyebrow">DATA DELIVERY</span><h1>Export</h1><p>Package annotation data for downstream QA, reporting and machine-learning workflows.</p></div><div className="export-head-status"><span><i></i> Local export engine</span></div></div>}
+    <div className="export-summary-grid">
+      <MiniStat label="Tasks selected" value={tasks.length}/><MiniStat label="Annotations" value={totalAnnotations}/><MiniStat label="QA approved" value={approved}/><MiniStat label="Available tasks" value={allTasks.length}/>
+    </div>
+    <div className="export-layout">
+      <section className="panel export-builder">
+        <div className="panel-head"><div><h2>Export Builder</h2><p>Select the format and scope for this delivery.</p></div><Download size={18}/></div>
+        <div className="export-body">
+          <label className="export-label">FORMAT</label>
+          <div className="format-grid">{formats.map(([name,Icon,desc]) => <button key={name} className={`format-card ${format===name?"active":""}`} onClick={()=>setFormat(name)}><span><Icon size={19}/></span><div><b>{name}</b><small>{desc}</small></div>{format===name && <Check size={17}/>}</button>)}</div>
+          <div className="export-filter-grid">
+            <div><label className="export-label">TASK SCOPE</label><div className="export-select"><Filter size={15}/><select value={scope} onChange={e=>setScope(e.target.value)}><option>All Tasks</option><option>Annotated Only</option><option>Completed Only</option><option>QA Approved</option></select></div></div>
+            {!scopedToTask && <div><label className="export-label">PROJECT</label><div className="export-select"><FolderKanban size={15}/><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div></div>}
+          </div>
+          <label className="export-label">TASK SEARCH</label><div className="export-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter by task name or ID..."/></div>
+          <div className="export-ready"><div><b>{tasks.length} tasks ready</b><span>{totalAnnotations} annotations will be included in this export.</span></div><button className="primary-btn" onClick={onExport}><Download size={16}/> Export {format}</button></div>
+          {message && <div className="export-message"><Check size={15}/>{message}</div>}
+        </div>
+      </section>
+      <section className="panel export-history"><div className="panel-head"><div><h2>Export History</h2><p>Recent deliveries stored in this browser.</p></div><button className="icon-btn" onClick={onClearHistory} title="Clear history"><RefreshCw size={15}/></button></div>
+        <div className="history-list">{history.length ? history.map(item=><div className="export-history-row" key={item.id}><div className="history-format"><span><Download size={14}/></span><div><b>{item.format}</b><small>{item.tasks} tasks · {item.annotations} annotations</small></div></div><div className="history-time">{new Date(item.at).toLocaleString()}</div></div>) : <div className="export-history-empty"><Download size={30}/><h3>No exports yet</h3><p>Your recent export activity will appear here.</p></div>}</div>
+      </section>
+    </div>
+    <section className="export-info"><div className="export-info-icon"><ShieldCheck size={18}/></div><div><b>Production-ready delivery foundation</b><p>Exports are generated directly in the browser from the current task, annotation and QA state. For large production datasets, the next storage layer can move this same export engine to object storage and server-side packaging.</p></div><span>BUILD 5</span></section>
+  </div>;
+}
+
+function ImportModal({onClose,onImport,step,setStep,fileName,columns,rows,mapping,setMapping,validation,error,duplicateMode,setDuplicateMode,datasets,projects,targetDatasetId,setTargetDataset,onFile,fileRef,onRun}) {
+  const mapFields = [["name","Task name","Required — becomes the task's display name"],["image","Image URL","Required — http(s) link or data: URI"],["status","Status","Optional — Pending / In Progress / Completed"]];
+  const preview = validation.valid.slice(0,5);
+  const problems = [...validation.invalid, ...validation.duplicates].slice(0,6);
+  return <div className="modal-backdrop"><div className="modal import-wizard-modal">
+    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import Tasks</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div>
+    <div className="import-steps">
+      {["upload","mapping","preview"].map((s,i)=><div key={s} className={`import-step ${step===s?"active":""} ${["upload","mapping","preview"].indexOf(step)>i?"done":""}`}><span>{i+1}</span>{s==="upload"?"Upload":s==="mapping"?"Map Columns":"Preview"}</div>)}
+    </div>
+
+    {step==="upload" && <div className="import-body">
+      <input ref={fileRef} type="file" accept=".csv,.json" hidden onChange={e=>{onFile(e.target.files?.[0]); e.target.value="";}}/>
+      <button className="import-dropzone" onClick={()=>fileRef.current?.click()}>
+        <Upload size={30}/>
+        <b>Choose a CSV or JSON file</b>
+        <span>Columns are detected automatically — you'll map them in the next step.</span>
+      </button>
+      <div className="import-format-help">
+        <div><FileSpreadsheet size={16}/><div><b>CSV</b><code>name,image,status</code></div></div>
+        <div><FileJson size={16}/><div><b>JSON</b><code>{`[{ "name": "...", "image": "https://..." }]`}</code></div></div>
+      </div>
+      <div className="guide-note"><AlertCircle size={14}/><span>Images referenced by URL are linked, not downloaded. To store image files locally, use the Add Images button on a dataset instead.</span></div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="mapping" && <div className="import-body">
+      <div className="import-file-row"><FileText size={16}/><b>{fileName}</b><span>{rows.length} rows · {columns.length} columns</span></div>
+      <label className="export-label">IMPORT INTO DATASET</label>
+      <div className="export-select"><Database size={15}/><select value={targetDatasetId||""} onChange={e=>setTargetDataset(e.target.value)}>{datasets.map(d=>{const proj=projects.find(p=>p.id===d.projectId);return <option key={d.id} value={d.id}>{proj?`${proj.name} — `:""}{d.name}</option>;})}</select></div>
+      <label className="export-label" style={{marginTop:"16px"}}>COLUMN MAPPING</label>
+      <div className="import-mapping-list">{mapFields.map(([key,title,hint])=><div className="import-mapping-row" key={key}><div><b>{title}</b><small>{hint}</small></div><select value={mapping[key]||""} onChange={e=>setMapping(m=>({...m,[key]:e.target.value}))}><option value="">— not mapped —</option>{columns.map(c=><option key={c} value={c}>{c}</option>)}</select></div>)}</div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="preview" && <div className="import-body">
+      <div className="import-validation-cards">
+        <div className="import-valid-card"><b>{validation.valid.length}</b><span>Ready to import</span></div>
+        <div className="import-dupe-card"><b>{validation.duplicates.length}</b><span>Duplicates</span></div>
+        <div className="import-invalid-card"><b>{validation.invalid.length}</b><span>Invalid rows</span></div>
+      </div>
+      {validation.duplicates.length>0 && <div className="import-dupe-choice"><span>Duplicate handling</span><div>{["Skip","Import anyway"].map(m=><button key={m} className={duplicateMode===m?"active":""} onClick={()=>setDuplicateMode(m)}>{m}</button>)}</div></div>}
+      {preview.length>0 && <><label className="export-label">PREVIEW</label><div className="import-preview-table"><table className="task-table"><thead><tr><th>ROW</th><th>NAME</th><th>IMAGE</th><th>STATUS</th></tr></thead><tbody>{preview.map(p=><tr key={p.row}><td>{p.row}</td><td><b>{p.name}</b></td><td className="import-url-cell">{p.image}</td><td>{p.status}</td></tr>)}</tbody></table>{validation.valid.length>5 && <div className="rework-more">+ {validation.valid.length-5} more rows</div>}</div></>}
+      {problems.length>0 && <><label className="export-label" style={{marginTop:"14px"}}>ISSUES</label><div className="import-problem-list">{problems.map((p,i)=><div key={i}><span className="source-pill invalid-pill">Row {p.row}</span><b>{p.name||"(no name)"}</b><small>{p.reason}</small></div>)}</div></>}
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    <div className="modal-foot">
+      {step!=="upload" && <button className="secondary-btn" onClick={()=>setStep(step==="preview"?"mapping":"upload")}>Back</button>}
+      <button className="secondary-btn" onClick={onImport}><Upload size={15}/> Image Upload Instead</button>
+      {step==="mapping" && <button className="primary-btn" disabled={!mapping.name||!mapping.image} onClick={()=>setStep("preview")}>Continue</button>}
+      {step==="preview" && <button className="primary-btn" onClick={onRun}><Check size={16}/> Import {duplicateMode==="Import anyway"?validation.valid.length+validation.duplicates.length:validation.valid.length} tasks</button>}
+    </div>
+  </div></div>;
+}
+
+function AdvancedImportModal({onClose,step,setStep,kind,fileName,parsed,mapping,setMapping,error,progress,running,datasets,projects,projectConfigs,targetDatasetId,setTargetDataset,onFile,fileRef,onRun}) {
+  const kindLabel = kind === "coco" ? "COCO" : kind === "yolo" ? "YOLO" : "Image ZIP";
+  const targetDataset = datasets.find(d => d.id === targetDatasetId);
+  const groupId = projects.find(p => p.id === targetDataset?.projectId)?.groupId;
+  const existingLabels = projectConfigs?.[groupId]?.labels || [];
+  const annotationCount = parsed ? Object.values(parsed.annotationsByImageName || {}).reduce((n,a)=>n+a.length,0) : 0;
+
+  return <div className="modal-backdrop"><div className="modal import-wizard-modal">
+    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import ZIP / COCO / YOLO</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div>
+    <div className="import-steps">
+      {["upload","mapping","preview"].map((s,i)=><div key={s} className={`import-step ${step===s?"active":""} ${["upload","mapping","preview"].indexOf(step)>i?"done":""}`}><span>{i+1}</span>{s==="upload"?"Upload":s==="mapping"?"Map Labels":"Preview"}</div>)}
+    </div>
+
+    {step==="upload" && <div className="import-body">
+      <input ref={fileRef} type="file" accept=".zip,.json" hidden onChange={e=>{onFile(e.target.files?.[0]); e.target.value="";}}/>
+      <button className="import-dropzone" onClick={()=>fileRef.current?.click()}>
+        <Upload size={30}/>
+        <b>Choose a .zip or COCO .json file</b>
+        <span>Plain image zips, YOLO exports (images/ + labels/ + classes.txt), and COCO exports (images + annotations.json) are all detected automatically.</span>
+      </button>
+      <div className="import-format-help">
+        <div><FileArchive size={16}/><div><b>ZIP of images</b><code>photo1.jpg, photo2.jpg, ...</code></div></div>
+        <div><FileArchive size={16}/><div><b>YOLO</b><code>images/*.jpg + labels/*.txt + classes.txt</code></div></div>
+        <div><FileJson size={16}/><div><b>COCO</b><code>images[] + annotations[] + categories[]</code></div></div>
+      </div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="mapping" && parsed && <div className="import-body">
+      <div className="import-file-row"><FileArchive size={16}/><b>{fileName}</b><span>{kindLabel} · {parsed.images.length} images · {annotationCount} annotations</span></div>
+      <label className="export-label">IMPORT INTO DATASET</label>
+      <div className="export-select"><Database size={15}/><select value={targetDatasetId||""} onChange={e=>setTargetDataset(e.target.value)}>{datasets.map(d=>{const proj=projects.find(p=>p.id===d.projectId);return <option key={d.id} value={d.id}>{proj?`${proj.name} — `:""}{d.name}</option>;})}</select></div>
+      <label className="export-label" style={{marginTop:"16px"}}>LABEL MAPPING — {parsed.classes.length} classes found</label>
+      <div className="import-mapping-list">{parsed.classes.map(c=><div className="import-mapping-row" key={c.id}><div><b>{c.name}</b><small>Detected class</small></div><select value={mapping[c.id]||"__new__"} onChange={e=>setMapping(m=>({...m,[c.id]:e.target.value}))}><option value="__new__">+ Create new label "{c.name}"</option>{existingLabels.map(l=><option key={l.id} value={l.id}>Map to "{l.name}"</option>)}</select></div>)}</div>
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    {step==="preview" && parsed && <div className="import-body">
+      <label className="export-label">IMPORT INTO DATASET</label>
+      <div className="export-select"><Database size={15}/><select value={targetDatasetId||""} onChange={e=>setTargetDataset(e.target.value)}>{datasets.map(d=>{const proj=projects.find(p=>p.id===d.projectId);return <option key={d.id} value={d.id}>{proj?`${proj.name} — `:""}{d.name}</option>;})}</select></div>
+      <div className="import-validation-cards" style={{marginTop:"14px"}}>
+        <div className="import-valid-card"><b>{parsed.images.length}</b><span>Images found</span></div>
+        <div className="import-valid-card"><b>{annotationCount}</b><span>Annotations</span></div>
+        <div className="import-valid-card"><b>{parsed.classes.length}</b><span>Classes</span></div>
+      </div>
+      {running && <div className="import-progress"><div className="import-progress-bar"><i style={{width:`${progress.total?Math.round(progress.done/progress.total*100):0}%`}}/></div><span>Uploading {progress.done} / {progress.total}...</span></div>}
+      {error && <div className="import-error"><AlertCircle size={14}/>{error}</div>}
+    </div>}
+
+    <div className="modal-foot">
+      {step!=="upload" && !running && <button className="secondary-btn" onClick={()=>setStep(step==="preview" && (kind==="coco"||kind==="yolo") ?"mapping":"upload")}>Back</button>}
+      {step==="mapping" && <button className="primary-btn" onClick={()=>setStep("preview")}>Continue</button>}
+      {step==="preview" && <button className="primary-btn" disabled={running} onClick={onRun}><Check size={16}/> {running?"Importing...":`Import ${parsed?.images.length||0} images`}</button>}
+    </div>
+  </div></div>;
+}
+
+function AuthScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setLoading(true); setError("");
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    setLoading(false);
+    if (error) setError(error.message);
+  }
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-brand"><div className="brand-mark"><Grid3X3 size={22}/></div><div><strong>AnnotatePro</strong><span>Annotation Platform</span></div></div>
+        <form onSubmit={handleLogin} className="auth-form">
+          <h1>Welcome back</h1><p>Sign in to your workspace.</p>
+          <label>Email<input type="email" required autoFocus value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@company.com"/></label>
+          <label>Password<div className="auth-password-field"><input type={showPassword?"text":"password"} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/><button type="button" onClick={()=>setShowPassword(v=>!v)}>{showPassword ? <EyeOff size={15}/> : <Eye size={15}/>}</button></div></label>
+          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
+          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Signing in..." : "Sign in"}</button>
+          <p className="auth-footnote">Don't have an account? Ask your admin to invite you — accounts are created from inside the app, not from this screen.</p>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function UpdatePasswordScreen({ onDone }) {
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleUpdate(e) {
+    e.preventDefault();
+    setLoading(true); setError("");
+    const { error } = await supabase.auth.updateUser({ password });
+    setLoading(false);
+    if (error) { setError(error.message); return; }
+    onDone();
+  }
+
+  return (
+    <div className="auth-screen">
+      <div className="auth-card">
+        <div className="auth-brand"><div className="brand-mark"><Grid3X3 size={22}/></div><div><strong>AnnotatePro</strong><span>Annotation Platform</span></div></div>
+        <form onSubmit={handleUpdate} className="auth-form">
+          <h1>Set a new password</h1><p>Choose a new password for your account.</p>
+          <label>New password<input type="password" required minLength={6} autoFocus value={password} onChange={e=>setPassword(e.target.value)} placeholder="At least 6 characters"/></label>
+          {error && <div className="auth-error"><AlertCircle size={14}/>{error}</div>}
+          <button className="primary-btn auth-submit" disabled={loading} type="submit">{loading ? "Updating..." : "Update password"}</button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function Shortcuts({onClose}) {
+  const rows=[["V","Select"],["B","Bounding Box"],["P","Polygon"],["L","Line"],["R","Brush"],["E","Eraser"],["Space","Pan"],["Delete","Delete selected"],["Ctrl + Z","Undo"],["Ctrl + Shift + Z","Redo"],["Ctrl + C","Copy selected"],["Ctrl + V","Paste"],["Ctrl + D","Duplicate selected"],["Ctrl + A","Select all"],["Shift + Click","Add / remove from selection"],["Drag on empty canvas","Marquee select"],["Alt + Click vertex","Delete vertex"],["+ / -","Zoom"],["← / →","Previous / next task"]];
+  return <div className="modal-backdrop"><div className="modal shortcuts-modal"><div className="modal-head"><div><span className="eyebrow">WORKSPACE</span><h2>Keyboard shortcuts</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="shortcut-list">{rows.map(r=><div key={r[0]}><kbd>{r[0]}</kbd><span>{r[1]}</span></div>)}</div></div></div>;
+}
+
+
+function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, selectedReview, search, setSearch, filter, setFilter, score, setScore, reason, setReason, comment, setComment, onSelect, onReview, message, reviews, canReview }) {
+  const [activeTab, setActiveTab] = useState("queue");
+  const reasons = ["Incorrect label", "Missing annotation", "Wrong geometry", "Low quality / unclear", "Duplicate annotation", "Other"];
+  return (
+    <div className="page qa-page">
+      <div className="page-head">
+        <div><span className="eyebrow">QUALITY CONTROL</span><h1>QA & Reviews</h1><p>Inspect submitted annotations, score quality, and send precise feedback to annotators.</p></div>
+        <div className="qa-head-actions"><span className="qa-live"><i></i> Review queue live</span></div>
+      </div>
+      <div className="stats-grid qa-stats">
+        <StatCard icon={Clock3} label="Pending Reviews" value={stats.pending} meta={`${stats.reviewed} reviewed`} />
+        <StatCard icon={CheckCircle2} label="Approved" value={stats.approved} meta="Accepted tasks" />
+        <StatCard icon={AlertCircle} label="Rejected" value={stats.rejected} meta={`${stats.changes} changes requested`} />
+        <StatCard icon={ShieldCheck} label="Average QA Score" value={stats.reviewed ? `${stats.average}%` : "—"} meta="Across reviewed tasks" />
+      </div>
+      <div className="qa-tabs">
+        <button className={activeTab==="queue"?"active":""} onClick={()=>setActiveTab("queue")}><ClipboardCheck size={16}/> Review Queue</button>
+        <button className={activeTab==="history"?"active":""} onClick={()=>setActiveTab("history")}><Clock3 size={16}/> Review History</button>
+      </div>
+      {activeTab === "queue" ? <div className="qa-layout">
+        <section className="panel qa-queue-panel">
+          <div className="panel-header">
+            <div><h2>Review Queue</h2><p>{queue.length} task{queue.length===1?"":"s"} matching your filters</p></div>
+            <div className="qa-filter-row">
+              <div className="table-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search tasks..." /></div>
+              <select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Pending Review</option><option>Approved</option><option>Rejected</option><option>Changes Requested</option></select>
+            </div>
+          </div>
+          <div className="qa-queue">
+            {queue.length ? queue.map(task => {
+              const review = reviews[task.id];
+              return <button key={task.id} className={`qa-task-row ${selectedTask?.id===task.id?"selected":""}`} onClick={()=>onSelect(task.id)}>
+                <div className="qa-thumb"><img src={task.image} alt="" loading="lazy" decoding="async" /></div>
+                <div className="qa-task-main"><b>{task.name}</b><span>{task.id} · {review?.reviewer || "Awaiting QA"}</span></div>
+                <div className="qa-task-count"><strong>{review?.annotationCount ?? "—"}</strong><span>objects</span></div>
+                <StatusBadge status={review?.decision || "Pending Review"} />
+                <ChevronDown size={16} className="qa-row-arrow"/>
+              </button>
+            }) : <div className="qa-empty"><ClipboardCheck size={34}/><h3>No review tasks</h3><p>Submit a completed task from the Annotation Workspace to send it into QA.</p></div>}
+          </div>
+        </section>
+        <section className="panel qa-review-panel">
+          {selectedTask ? <>
+            <div className="qa-review-head"><div><span className="eyebrow">ANNOTATION INSPECTION</span><h2>{selectedTask.name}</h2><p>{selectedTask.id} · {selectedAnnotations.length} annotation{selectedAnnotations.length===1?"":"s"}</p></div><StatusBadge status={selectedReview?.decision || "Pending Review"} /></div>
+            <div className="qa-image-stage">
+              <img src={selectedTask.image} alt={selectedTask.name} loading="lazy" decoding="async" />
+              {selectedAnnotations.slice(0,30).map((a,i) => a.type==="rectangle"
+                ? <div key={a.id} className="qa-box" style={{left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,borderColor:a.color}}><span>{i+1}</span></div>
+                : a.points?.length ? <div key={a.id} className="qa-point-mark" style={{left:`${a.points[0].x}%`,top:`${a.points[0].y}%`,borderColor:a.color}}><span>{i+1}</span></div> : null)}
+              {!selectedAnnotations.length && <div className="qa-no-annotations"><AlertCircle size={18}/> No annotations saved on this task</div>}
+            </div>
+            <div className="qa-review-meta"><div><span>ANNOTATIONS</span><b>{selectedAnnotations.length}</b></div><div><span>STATUS</span><b>{selectedReview?.decision || "Pending Review"}</b></div><div><span>REVIEWER</span><b>{selectedReview?.reviewer || "Unassigned"}</b></div></div>
+            <div className="qa-section"><div className="qa-section-head"><div><h3>Quality score</h3><p>Rate the overall annotation quality.</p></div><strong>{score}%</strong></div><input className="qa-score-range" type="range" min="0" max="100" value={score} onChange={e=>setScore(Number(e.target.value))}/><div className="score-scale"><span>0 Poor</span><span>50 Average</span><span>100 Excellent</span></div></div>
+            <div className="qa-section"><h3>Review decision</h3>{canReview ? <div className="decision-grid"><button className="decision approve" onClick={()=>onReview("Approved")}><CheckCircle2 size={17}/><span><b>Approve</b><small>Annotation is ready</small></span></button><button className="decision changes" onClick={()=>onReview("Changes Requested")}><Edit3 size={17}/><span><b>Request Changes</b><small>Send back to annotator</small></span></button><button className="decision reject" onClick={()=>onReview("Rejected")}><AlertCircle size={17}/><span><b>Reject</b><small>Fails quality criteria</small></span></button></div> : <p className="no-access">Only Reviewers, Team Leads and Admins can submit QA decisions.</p>}</div>
+            <div className="qa-section"><h3>Feedback</h3><select className="qa-select" value={reason} onChange={e=>setReason(e.target.value)}>{reasons.map(r=><option key={r}>{r}</option>)}</select><textarea className="qa-comment" value={comment} onChange={e=>setComment(e.target.value)} placeholder="Add reviewer comments or correction instructions..." /></div>
+            {selectedReview?.history?.length ? <div className="qa-history-mini"><h3>Latest review activity</h3><div><span>{new Date(selectedReview.reviewedAt).toLocaleString()}</span><b>{selectedReview.reviewer}</b><strong>{selectedReview.decision}</strong></div></div> : null}
+          </> : <div className="qa-empty full"><ClipboardCheck size={40}/><h3>Select a task to review</h3><p>Choose a task from the review queue.</p></div>}
+        </section>
+      </div> : <section className="panel qa-history-panel">
+        <div className="panel-header"><div><h2>Review History</h2><p>Decisions and reviewer activity stored in this browser.</p></div></div>
+        <div className="history-table">
+          {tasks.filter(task => reviews[task.id]).map(task => {
+            const r = reviews[task.id];
+            return <div className="history-row" key={task.id}>
+              <div className="history-task"><b>{task.name}</b><span>{task.id}</span></div>
+              <strong>{r.score}%</strong><StatusBadge status={r.decision}/><span>{r.reviewer}</span>
+              <span>{new Date(r.reviewedAt).toLocaleString()}</span>
+              <button className="text-btn" onClick={()=>{onSelect(task.id);setActiveTab("queue")}}>Review</button>
+            </div>;
+          })}
+          {!tasks.some(task => reviews[task.id]) && <div className="qa-empty"><Clock3 size={34}/><h3>No review history yet</h3><p>Approve, reject, or request changes on a task to create the first QA record.</p></div>}
+        </div>
+      </section>}
+      {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+    </div>
+  );
+}
+function AnalyticsPage({ projects, tasks, annotations, qaReviews, auditEvents, range, setRange, project, setProject, onExport }) {
+  const visibleTasks = useMemo(() => {
+    if (project === "All Projects") return tasks;
+    const projectName = projects.find(p => p.id === project)?.name;
+    return tasks.filter(t => !projectName || t.projectName === projectName || t.projectId === project);
+  }, [tasks, projects, project]);
+
+  const visibleTaskIds = useMemo(() => new Set(visibleTasks.map(t => t.id)), [visibleTasks]);
+  const totalAnnotations = visibleTasks.reduce((sum, t) => sum + (annotations[t.id]?.length || 0), 0);
+  const reviewed = visibleTasks.map(t => qaReviews[t.id]).filter(Boolean);
+  const approved = reviewed.filter(r => r.decision === "Approved").length;
+  const rejected = reviewed.filter(r => r.decision === "Rejected").length;
+  const changes = reviewed.filter(r => r.decision === "Changes Requested").length;
+  const scoredReviews = reviewed.filter(r => r.score !== null && r.score !== undefined);
+  const averageQA = scoredReviews.length ? Math.round(scoredReviews.reduce((sum, r) => sum + Number(r.score || 0), 0) / scoredReviews.length) : null;
+  const completedTasks = visibleTasks.filter(t => ["Completed", "Submitted", "QA Review", "Approved", "Rejected"].includes(t.status)).length;
+  const completionRate = visibleTasks.length ? Math.round((completedTasks / visibleTasks.length) * 100) : 0;
+  const annotatedTasks = visibleTasks.filter(t => (annotations[t.id] || []).length > 0).length;
+  const annotationCoverage = visibleTasks.length ? Math.round((annotatedTasks / visibleTasks.length) * 100) : 0;
+
+  // Real activity trend, bucketed from the audit log rather than simulated —
+  // scoped to whichever project is selected, across the chosen time window.
+  const relevantEvents = useMemo(() => {
+    const actionable = ["Annotation Saved", "Task Submitted", "QA Approved", "QA Rejected"];
+    return (auditEvents || []).filter(e => actionable.includes(e.action) && (project === "All Projects" || visibleTaskIds.has(e.taskId)));
+  }, [auditEvents, project, visibleTaskIds]);
+
+  const trend = useMemo(() => {
+    const now = Date.now();
+    const bucketMs = range === "24 hours" ? 3 * 3600000 : range === "30 days" ? 7 * 86400000 : 86400000;
+    return Array.from({ length: 8 }, (_, i) => 7 - i).map(stepsAgo => {
+      const end = now - stepsAgo * bucketMs;
+      const start = end - bucketMs;
+      return relevantEvents.filter(e => { const t = new Date(e.timestamp).getTime(); return t >= start && t < end; }).length;
+    });
+  }, [relevantEvents, range]);
+  const maxTrend = Math.max(1, ...trend);
+  const trendTotal = trend.reduce((a, b) => a + b, 0);
+  const trendFirstHalf = trend.slice(0, 4).reduce((a, b) => a + b, 0);
+  const trendSecondHalf = trend.slice(4).reduce((a, b) => a + b, 0);
+  const trendChangePct = trendFirstHalf ? Math.round(((trendSecondHalf - trendFirstHalf) / trendFirstHalf) * 100) : null;
+
+  const projectQuality = (p) => {
+    const scored = tasks.filter(t => t.projectId === p.id).map(t => qaReviews[t.id]).filter(r => r && r.score !== null && r.score !== undefined);
+    return scored.length ? Math.round(scored.reduce((s, r) => s + r.score, 0) / scored.length) : null;
+  };
+  const teamRows = projects.slice(0, 5).map((p) => {
+    const projectTasks = tasks.filter(t => t.projectId === p.id);
+    return { name: p.team || "Annotation Team", project: p.name, tasks: projectTasks.length, quality: projectQuality(p), progress: progressOf(p) };
+  });
+
+  return <div className="page analytics-page">
+    <div className="page-head">
+      <div><span className="eyebrow">PERFORMANCE INTELLIGENCE</span><h1>Analytics</h1><p>Monitor annotation productivity, quality, workload and project performance.</p></div>
+      <div className="analytics-controls"><select value={range} onChange={e=>setRange(e.target.value)}><option>24 hours</option><option>7 days</option><option>30 days</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+    </div>
+
+    <div className="stats-grid analytics-stats">
+      <StatCard icon={TrendingUp} label="Recent Activity" value={trendTotal} meta={trendChangePct===null?`${totalAnnotations} annotations recorded`:`${trendChangePct>=0?"+":""}${trendChangePct}% vs earlier in period`} />
+      <StatCard icon={CheckCircle2} label="Task Completion" value={`${completionRate}%`} meta={`${completedTasks} completed workflow tasks`} />
+      <StatCard icon={ShieldCheck} label="QA Quality" value={averageQA===null ? "—" : `${averageQA}%`} meta={`${approved} approved · ${rejected} rejected`} />
+      <StatCard icon={Target} label="Annotation Coverage" value={`${annotationCoverage}%`} meta={`${annotatedTasks} tasks annotated`} />
+    </div>
+
+    <div className="analytics-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Annotation Activity</h2><p>Real annotation, submission and review events for the selected period</p></div><span className="chart-value">{totalAnnotations} <small>objects</small></span></div>
+        <div className="trend-chart"><div className="chart-y"><span>{maxTrend}</span><span>{Math.round(maxTrend*0.75)}</span><span>{Math.round(maxTrend*0.5)}</span><span>{Math.round(maxTrend*0.25)}</span><span>0</span></div><div className="chart-bars">{trend.map((v,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${v?Math.max(8,(v/maxTrend)*100):3}%`}}></div><span>{range === "24 hours" ? `${(i+1)*3}h` : range === "30 days" ? `W${i+1}` : `D${i+1}`}</span></div>)}</div></div>
+      </section>
+      <section className="panel quality-panel">
+        <div className="panel-head"><div><h2>QA Distribution</h2><p>Current review decisions</p></div><ClipboardCheck size={17}/></div>
+        <div className="quality-ring"><div><strong>{averageQA===null ? "—" : `${averageQA}%`}</strong><span>avg score</span></div></div>
+        <div className="quality-legend"><div><i className="approved-dot"></i><span>Approved</span><b>{approved}</b></div><div><i className="changes-dot"></i><span>Changes requested</span><b>{changes}</b></div><div><i className="rejected-dot"></i><span>Rejected</span><b>{rejected}</b></div></div>
+      </section>
+    </div>
+
+    <div className="analytics-grid-bottom">
+      <section className="panel analytics-table-panel"><div className="panel-head"><div><h2>Project Performance</h2><p>Progress and delivery health across projects</p></div><button className="text-btn" onClick={()=>onExport({production:true,team:true,qa:true,sla:true,forecast:true}, project==="All Projects"?"All":project, range==="24 hours"?1:range==="30 days"?30:7)}>Export report →</button></div><div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>TEAM</th><th>PROGRESS</th><th>QUALITY</th><th>HEALTH</th></tr></thead><tbody>{projects.map(p=>{const q=projectQuality(p); return <tr key={p.id}><td><b>{p.name}</b><small>{Number(p.totalImages||0).toLocaleString()} images</small></td><td>{p.team}</td><td><div className="table-progress"><span><i style={{width:`${progressOf(p)}%`}}></i></span><b>{progressOf(p)}%</b></div></td><td><strong className="quality-number">{q===null?"—":`${q}%`}</strong></td><td><span className={`health-pill ${progressOf(p) >= 70 ? "healthy" : progressOf(p) >= 40 ? "watch" : "risk"}`}><i></i>{progressOf(p) >= 70 ? "On track" : progressOf(p) >= 40 ? "Watch" : "At risk"}</span></td></tr>;})}</tbody></table></div></section>
+      <section className="panel team-performance"><div className="panel-head"><div><h2>Team Performance</h2><p>Workload and quality snapshot</p></div><Users size={17}/></div><div className="team-list">{teamRows.length ? teamRows.map(row=><div className="team-row" key={row.project}><div className="team-avatar">{row.name.charAt(0)}</div><div className="team-main"><b>{row.name}</b><span>{row.project}</span><div className="team-meter"><i style={{width:`${Math.min(100, row.progress)}%`}}></i></div></div><div className="team-metrics"><strong>{row.quality===null?"—":`${row.quality}%`}</strong><span>{row.tasks} tasks</span></div></div>) : <div className="analytics-empty">No team data available.</div>}</div></section>
+    </div>
+
+    <div className="analytics-insight"><div className="insight-icon"><Zap size={17}/></div><div><b>Performance insight</b><p>{scoredReviews.length ? `The workspace is averaging ${averageQA}% QA quality. ${changes} task${changes === 1 ? " has" : "s have"} requested changes and should be prioritized for correction.` : "Complete a few QA reviews to unlock quality trends, rejection analysis and actionable performance insights."}</p></div><span>LIVE</span></div>
+  </div>;
+}
+
+function TeamPage({members, allMembers, projects, tasks, stats, search, setSearch, roleFilter, setRoleFilter, statusFilter, setStatusFilter, onCreate, onEdit, onToggleStatus, onDelete, onAssign, message, modalOpen, setModalOpen, editing, form, setForm, onSave, onInvite, onSendReset, accountActionStatus, isAdmin}) {
+  const [selectedMemberId, setSelectedMemberId] = useState(members[0]?.id || null);
+  const selectedMember = allMembers.find(m => m.id === selectedMemberId) || members[0] || allMembers[0];
+  const assignedTasks = selectedMember ? tasks.filter(t => t.assigneeId === selectedMember.id) : [];
+  const workload = selectedMember ? Math.min(100, Math.round((assignedTasks.length / Math.max(1, selectedMember.capacity || 1)) * 100)) : 0;
+  const avgQuality = allMembers.length ? Math.round(allMembers.reduce((s,m) => s + Number(m.qaScore || 0), 0) / allMembers.length) : 0;
+  const initials = (name = "?") => name.split(" ").map(x => x[0]).join("").slice(0,2).toUpperCase();
+  const projectName = id => projects.find(p => p.id === id)?.name || "Unassigned";
+  const availableTasks = selectedMember ? tasks.filter(t => (selectedMember.projects || []).includes(t.projectId) && !t.assigneeId).slice(0, 12) : [];
+
+  return <div className="page team-page">
+    <div className="page-head">
+      <div><span className="eyebrow">WORKFORCE MANAGEMENT</span><h1>Team</h1><p>Manage annotators, reviewers, assignments, workload and permissions.</p></div>
+      <button className="primary-btn" onClick={onCreate}><UserPlus size={16}/> Add Member</button>
+    </div>
+
+    <div className="stats-grid team-stats">
+      <StatCard icon={Users} label="Active Members" value={stats.active} meta={`${allMembers.length} total in workspace`} />
+      <StatCard icon={Target} label="Active Annotators" value={stats.annotators} meta="Annotation production" />
+      <StatCard icon={ClipboardCheck} label="Reviewers" value={stats.reviewers} meta="QA review capacity" />
+      <StatCard icon={BriefcaseBusiness} label="Assigned Tasks" value={stats.assigned} meta={`${avgQuality}% average team quality`} />
+    </div>
+
+    <div className="team-layout">
+      <section className="panel team-members-panel">
+        <div className="panel-head"><div><h2>Team Members</h2><p>Roles, projects and current availability</p></div><span className="team-count">{members.length} shown</span></div>
+        <div className="team-toolbar">
+          <div className="team-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search members..." /></div>
+          <select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)}><option>All Roles</option><option>Team Lead</option><option>Reviewer</option><option>Annotator</option></select>
+          <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All Status</option><option>Active</option><option>Inactive</option></select>
+        </div>
+        <div className="member-list">
+          {members.length ? members.map(member => {
+            const memberTasks = tasks.filter(t => t.assigneeId === member.id).length;
+            const load = Math.min(100, Math.round((memberTasks / Math.max(1, member.capacity || 1)) * 100));
+            return <button className={`member-row ${selectedMember?.id === member.id ? "selected" : ""}`} key={member.id} onClick={() => setSelectedMemberId(member.id)}>
+              <div className="member-avatar">{initials(member.name)}</div>
+              <div className="member-info"><b>{member.name}</b><span>{member.email}</span><div className="member-tags"><em className={`role-pill ${member.role.toLowerCase().replaceAll(" ", "-")}`}>{member.role}</em><em className={`member-status ${member.status.toLowerCase()}`}><i></i>{member.status}</em></div></div>
+              <div className="member-load"><b>{memberTasks}</b><span>tasks</span><div className="load-track"><i style={{width:`${load}%`}}></i></div></div>
+              <ChevronDown size={15} className="member-chevron" />
+            </button>;
+          }) : <div className="team-empty"><Users size={30}/><h3>No members found</h3><p>Try another search or filter.</p></div>}
+        </div>
+      </section>
+
+      <section className="panel team-detail-panel">
+        {selectedMember ? <>
+          <div className="team-detail-head"><div className="detail-profile"><div className="detail-avatar">{initials(selectedMember.name)}</div><div><h2>{selectedMember.name}</h2><p>{selectedMember.email}</p><div className="member-tags"><em className="role-pill">{selectedMember.role}</em><em className={`member-status ${selectedMember.status.toLowerCase()}`}><i></i>{selectedMember.status}</em></div></div></div><div className="detail-actions"><button className="secondary-btn" onClick={()=>onEdit(selectedMember)}><Edit3 size={14}/> Edit</button><button className="icon-btn" title={selectedMember.status === "Active" ? "Deactivate" : "Activate"} onClick={()=>onToggleStatus(selectedMember)}>{selectedMember.status === "Active" ? <Pause size={15}/> : <Play size={15}/>}</button><button className="icon-btn danger" title="Remove member" onClick={()=>onDelete(selectedMember)}><Trash2 size={15}/></button></div></div>
+          <div className="detail-metrics"><div><span>Assigned</span><b>{assignedTasks.length}</b></div><div><span>Capacity</span><b>{selectedMember.capacity || 0}</b></div><div><span>Workload</span><b>{workload}%</b></div><div><span>QA Score</span><b>{selectedMember.qaScore ? `${selectedMember.qaScore}%` : "—"}</b></div></div>
+          <div className="team-detail-section"><div className="section-title"><div><h3>Project Access</h3><p>Projects this member can work on</p></div><ShieldCheck size={16}/></div><div className="project-access-list">{(selectedMember.projects || []).length ? selectedMember.projects.map(id=><div key={id}><FolderKanban size={14}/><span>{projectName(id)}</span><Check size={14}/></div>) : <div className="no-access">No projects assigned.</div>}</div></div>
+          <div className="team-detail-section"><div className="section-title"><div><h3>Current Assignments</h3><p>Tasks currently allocated to this member</p></div><span>{assignedTasks.length}</span></div>{assignedTasks.length ? <div className="assignment-list">{assignedTasks.map(task=><div className="assignment-row" key={task.id}><div className="assignment-thumb">{task.image ? <img src={task.image} alt="" loading="lazy" decoding="async"/> : <ImageIcon size={15}/>}</div><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><StatusBadge status={task.status}/><button className="icon-btn" onClick={()=>onAssign(task.id, "")} title="Unassign"><X size={14}/></button></div>)}</div> : <div className="team-empty compact"><ClipboardCheck size={25}/><p>No tasks assigned yet.</p></div>}</div>
+          {isAdmin ? <div className="team-detail-section"><div className="section-title"><div><h3>Account Access</h3><p>Login account for this member (separate from their roster entry above)</p></div><LogOut size={16} style={{transform:"scaleX(-1)"}}/></div>
+            <div className="account-access-row">
+              <span>{selectedMember.email || "No email on file"}</span>
+              <div className="account-access-actions">
+                <button className="secondary-btn" disabled={!selectedMember.email || accountActionStatus.loading} onClick={()=>onInvite(selectedMember.email, selectedMember.name)}><UserPlus size={14}/> Invite to sign in</button>
+                <button className="secondary-btn" disabled={!selectedMember.email || accountActionStatus.loading} onClick={()=>onSendReset(selectedMember.email)}><RotateCcw size={14}/> Send password reset</button>
+              </div>
+            </div>
+            {accountActionStatus.forEmail === selectedMember.email && accountActionStatus.message && <div className={`account-access-note ${accountActionStatus.error ? "error" : "ok"}`}>{accountActionStatus.error ? <AlertCircle size={13}/> : <CheckCircle2 size={13}/>}{accountActionStatus.message}</div>}
+            <p className="account-access-hint">Admin-only action. Manage roles from Settings → Roles & Access.</p>
+          </div> : null}
+          <div className="team-detail-section"><div className="section-title"><div><h3>Assign Unallocated Work</h3><p>Open tasks from the member's project access</p></div><Target size={16}/></div>{availableTasks.length ? <div className="assignable-list">{availableTasks.map(task=><div className="assignable-row" key={task.id}><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><button className="secondary-btn" onClick={()=>onAssign(task.id, selectedMember.id)}><Plus size={13}/> Assign</button></div>)}</div> : <div className="no-access">No unallocated tasks available for this member.</div>}</div>
+        </> : <div className="team-empty"><Users size={40}/><h3>Select a team member</h3><p>Choose a member to view workload and assignments.</p></div>}
+      </section>
+    </div>
+    {message && <div className="workspace-toast"><CheckCircle2 size={17}/>{message}</div>}
+    {modalOpen && <TeamMemberModal editing={editing} form={form} setForm={setForm} projects={projects} onClose={()=>setModalOpen(false)} onSave={onSave} />}
+  </div>;
+}
+
+function TeamMemberModal({editing, form, setForm, projects, onClose, onSave}) {
+  const toggleProject = id => setForm(prev => ({...prev, projects: prev.projects.includes(id) ? prev.projects.filter(x=>x!==id) : [...prev.projects, id]}));
+  return <div className="modal-backdrop"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
+}
+
+function WorkloadPage({projects,rows,summary,tasks,project,setProject,projectOptions,role,setRole,capacityMode,setCapacityMode,settings,setSettings,onBalance,onCapacity,message,onOpenPlanner}) {
+  const projectName = id => projects.find(p => p.id === id)?.name || "All Projects";
+  const statusForLoad = load => load > 100 ? "Overloaded" : load >= 80 ? "High load" : load >= 50 ? "Healthy" : "Available";
+  const statusClass = load => load > 100 ? "overloaded" : load >= 80 ? "high" : load >= 50 ? "healthy" : "available";
+  return <div className="page workload-page">
+    <div className="page-head workload-head"><div><span className="eyebrow">WORKFORCE OPERATIONS</span><h1>Workload & Capacity</h1><p>Monitor team capacity, balance queues and prevent annotation bottlenecks.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={onOpenPlanner}><Target size={15}/> Task Planner</button><button className="primary-btn" onClick={onBalance}><Zap size={15}/> Auto Balance</button></div></div>
+    <div className="workload-controls panel"><div className="workload-control"><span>PROJECT</span><select value={project} onChange={e=>setProject(e.target.value)}>{projectOptions.map(id=><option key={id} value={id}>{projectName(id)}</option>)}</select></div><div className="workload-control"><span>ROLE</span><select value={role} onChange={e=>setRole(e.target.value)}><option>Annotator</option><option>Reviewer</option><option>All Roles</option></select></div><div className="workload-control"><span>CAPACITY VIEW</span><div className="segmented-control"><button className={capacityMode==="Daily"?"active":""} onClick={()=>setCapacityMode("Daily")}>Daily</button><button className={capacityMode==="Weekly"?"active":""} onClick={()=>setCapacityMode("Weekly")}>Weekly</button></div></div><div className="workload-settings"><label><span>Default {capacityMode.toLowerCase()} capacity</span><input type="number" min="1" value={capacityMode==="Daily"?settings.defaultDailyCapacity:settings.defaultWeeklyCapacity} onChange={e=>setSettings(prev=>({...prev,[capacityMode==="Daily"?"defaultDailyCapacity":"defaultWeeklyCapacity"]:Math.max(1,Number(e.target.value)||1)}))}/><b>tasks</b></label></div></div>
+    <div className="stats-grid workload-stats"><StatCard icon={Users} label="Active Members" value={summary.active} meta="Available workforce"/><StatCard icon={ClipboardCheck} label="Assigned Tasks" value={summary.assigned} meta="Current allocation"/><StatCard icon={AlertCircle} label="Unassigned" value={summary.unassigned} meta="Needs allocation"/><StatCard icon={Activity} label="Utilization" value={`${summary.utilization}%`} meta="Across visible capacity"/><StatCard icon={AlertCircle} label="Overloaded" value={summary.overloaded} meta="Above capacity"/></div>
+    <section className="panel workload-panel"><div className="section-header"><div><h2>Team Capacity</h2><p>Live workload based on assigned tasks and each member's capacity.</p></div><span className="workload-project-chip">{projectName(project)}</span></div><div className="workload-table-wrap"><table className="workload-table"><thead><tr><th>MEMBER</th><th>ROLE</th><th>PROJECT ACCESS</th><th>ASSIGNED</th><th>CAPACITY</th><th>LOAD</th><th>PROGRESS</th><th>CAPACITY</th></tr></thead><tbody>{rows.length ? rows.map(r=><tr key={r.member.id}><td><div className="workload-member"><div className="user-avatar small">{r.member.name?.charAt(0)||"?"}</div><div><b>{r.member.name}</b><span>{r.member.email}</span></div></div></td><td><span className="role-pill">{r.member.role}</span></td><td><span className="project-access">{r.member.projects?.length || 0} project{r.member.projects?.length===1?"":"s"}</span></td><td><strong>{r.assigned}</strong><small>{r.inProgress} active · {r.submitted} review · {r.completed} done</small></td><td><strong>{r.capacity}</strong><small>{capacityMode.toLowerCase()} target</small></td><td><span className={`load-pill ${statusClass((r.assigned/r.capacity)*100)}`}>{Math.round((r.assigned/r.capacity)*100)}%</span><small>{statusForLoad((r.assigned/r.capacity)*100)}</small></td><td><div className="workload-progress"><span><i style={{width:`${Math.min(100,Math.round((r.assigned/r.capacity)*100))}%`}}/></span><b>{Math.min(100,Math.round((r.assigned/r.capacity)*100))}%</b></div></td><td><input className="capacity-input" type="number" min="1" value={r.capacity} onChange={e=>onCapacity(r.member.id,e.target.value)}/></td></tr>) : <tr><td colSpan="8" className="workload-empty">No active members match this view.</td></tr>}</tbody></table></div></section>
+    <section className="workload-bottom-grid"><div className="panel workload-panel compact"><div className="section-header"><div><h2>Queue Health</h2><p>Tasks that need attention.</p></div></div><div className="queue-health-grid"><MiniStat label="Unassigned" value={summary.unassigned}/><MiniStat label="Pending" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&t.status==="Pending").length}/><MiniStat label="In Progress" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&t.status==="In Progress").length}/><MiniStat label="QA Review" value={tasks.filter(t=>(project==="All Projects"||t.projectId===project)&&["Submitted","QA Review"].includes(t.status)).length}/></div><div className="queue-health-note"><ShieldCheck size={16}/><span>Keep individual load below <b>100%</b> to reduce queue risk.</span></div></div><div className="panel workload-panel compact"><div className="section-header"><div><h2>Capacity Guide</h2><p>Recommended operating bands.</p></div></div><div className="capacity-guide"><div><span className="guide-dot available"></span><b>0–49%</b><small>Available</small></div><div><span className="guide-dot healthy"></span><b>50–79%</b><small>Healthy</small></div><div><span className="guide-dot high"></span><b>80–100%</b><small>High load</small></div><div><span className="guide-dot overloaded"></span><b>&gt;100%</b><small>Overloaded</small></div></div><p className="workload-tip"><Zap size={14}/> Auto Balance distributes pending unassigned tasks to the least-loaded eligible annotators.</p></div></section>
+    {message && <div className="workload-toast"><CheckCircle2 size={16}/>{message}</div>}
+  </div>;
+}
+
+function OperationsPage({projects,tasks,teamMembers,qaReviews,exportHistory,search,setSearch,filter,setFilter,project,setProject,showUnread,setShowUnread,readMap,setReadMap}) {
+  const projectName = id => projects.find(p=>p.id===id)?.name || "Unknown Project";
+  const rows = useMemo(() => {
+    const events = [];
+    tasks.forEach(t => {
+      const p = t.projectId || "";
+      const assigned = t.assignee || t.annotator || t.assignedTo;
+      if (assigned) events.push({id:`task-assign-${t.id}`,type:"Assignment",icon:Users,title:"Task assigned",text:`${t.fileName || t.name || t.id} is assigned to ${assigned}.`,project:p,task:t.id,status:t.status || "Pending",time:t.updatedAt || t.createdAt || new Date().toISOString()});
+      if (["Submitted","QA Review"].includes(t.status)) events.push({id:`task-review-${t.id}`,type:"QA",icon:ClipboardCheck,title:"Task awaiting review",text:`${t.fileName || t.name || t.id} is ready for QA review.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+      if (t.status === "Changes Requested" || t.status === "Rejected") events.push({id:`task-rework-${t.id}`,type:"Rework",icon:RotateCcw,title:"Rework required",text:`${t.fileName || t.name || t.id} needs annotation changes.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+      if (t.status === "Approved" || t.status === "Completed") events.push({id:`task-done-${t.id}`,type:"Completion",icon:CheckCircle2,title:"Task completed",text:`${t.fileName || t.name || t.id} is ${t.status.toLowerCase()}.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+      if (!assigned && t.status === "Pending") events.push({id:`task-unassigned-${t.id}`,type:"Alert",icon:AlertCircle,title:"Unassigned task",text:`${t.fileName || t.name || t.id} is waiting for assignment.`,project:p,task:t.id,status:t.status,time:t.updatedAt || new Date().toISOString()});
+    });
+    Object.entries(qaReviews || {}).forEach(([taskId, review]) => {
+      const t = tasks.find(x=>x.id===taskId); events.push({id:`qa-record-${taskId}`,type:"QA",icon:ShieldCheck,title:`QA ${review.decision || "review"}`,text:`${t?.fileName || taskId} received a quality review${review.score != null ? ` with score ${review.score}%` : ""}.`,project:t?.projectId || "",task:taskId,status:review.decision || "Reviewed",time:review.updatedAt || review.timestamp || new Date().toISOString()});
+    });
+    (exportHistory || []).slice(0,30).forEach((h,i)=>events.push({id:`export-${h.id || i}`,type:"Export",icon:Download,title:"Export completed",text:`${h.format || "Dataset"} export created with ${h.taskCount ?? h.tasks ?? 0} tasks.`,project:h.projectId || "",task:"",status:"Completed",time:h.timestamp || new Date().toISOString()}));
+    teamMembers.forEach(m=>{ if(m.status==="Inactive") events.push({id:`member-${m.id}`,type:"Team",icon:Users,title:"Inactive team member",text:`${m.name} is currently inactive and cannot receive new work.`,project:"",task:"",status:"Inactive",time:new Date().toISOString()}); });
+    return events.sort((a,b)=>new Date(b.time)-new Date(a.time));
+  },[tasks,qaReviews,exportHistory,teamMembers,projects]);
+  const filtered = rows.filter(r=>{
+    const q=search.trim().toLowerCase();
+    const matchQ=!q || `${r.title} ${r.text} ${r.task} ${projectName(r.project)}`.toLowerCase().includes(q);
+    const matchF=filter==="All" || r.type===filter;
+    const matchP=project==="All Projects" || r.project===project;
+    const matchU=!showUnread || !readMap[r.id];
+    return matchQ&&matchF&&matchP&&matchU;
+  });
+  const unread=rows.filter(r=>!readMap[r.id]).length;
+  const alertCount=rows.filter(r=>["Alert","Rework"].includes(r.type)).length;
+  const markAll=()=>setReadMap(prev=>Object.fromEntries(rows.map(r=>[r.id,true]).map(([k,v])=>[k,v])));
+  const markRead=id=>setReadMap(prev=>({...prev,[id]:true}));
+  const clearRead=()=>setReadMap(prev=>Object.fromEntries(Object.entries(prev).filter(([,v])=>!v)));
+  const relative=t=>{const d=Date.now()-new Date(t).getTime();if(!Number.isFinite(d))return "Recently";const m=Math.floor(d/60000);if(m<1)return "Just now";if(m<60)return `${m}m ago`;const h=Math.floor(m/60);if(h<24)return `${h}h ago`;return `${Math.floor(h/24)}d ago`;};
+  return <div className="page operations-page">
+    <div className="page-head operations-head"><div><span className="eyebrow">OPERATIONS CONTROL CENTER</span><h1>Operations & Activity</h1><p>Monitor assignments, QA events, rework and delivery activity across every project.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={markAll}><Check size={15}/> Mark all read</button></div></div>
+    <div className="stats-grid operations-stats"><StatCard icon={Bell} label="Unread" value={unread} meta="New operational events"/><StatCard icon={AlertCircle} label="Alerts & Rework" value={alertCount} meta="Needs attention"/><StatCard icon={Activity} label="Total Events" value={rows.length} meta="Current activity stream"/><StatCard icon={Users} label="Team Members" value={teamMembers.filter(m=>m.status==="Active").length} meta="Active workforce"/></div>
+    <section className="panel operations-panel"><div className="operations-toolbar"><div className="operations-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search activity, task or project..."/></div><select value={filter} onChange={e=>setFilter(e.target.value)}><option>All</option><option>Assignment</option><option>QA</option><option>Rework</option><option>Completion</option><option>Alert</option><option>Export</option><option>Team</option></select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><label className="operations-unread"><input type="checkbox" checked={showUnread} onChange={e=>setShowUnread(e.target.checked)}/> Unread only</label></div></section>
+    <div className="operations-grid"><section className="panel operations-feed"><div className="section-header"><div><h2>Activity Feed</h2><p>Latest events generated from your shared project, task, QA and team data.</p></div><span className="operations-count">{filtered.length} events</span></div><div className="operations-list">{filtered.length ? filtered.map(r=>{const Icon=r.icon;const unreadRow=!readMap[r.id];return <button key={r.id} className={`operation-row ${unreadRow?"unread":""}`} onClick={()=>markRead(r.id)}><span className={`operation-icon ${r.type.toLowerCase()}`}><Icon size={15}/></span><span className="operation-body"><b>{r.title}</b><em>{r.text}</em><small>{r.task ? `${r.task} · ` : ""}{r.project ? projectName(r.project) : r.type}</small></span><time>{relative(r.time)}</time>{unreadRow&&<i className="unread-dot"/>}</button>}) : <div className="operations-empty"><Activity size={30}/><b>No activity matches your filters</b><span>Try another project, event type or search term.</span></div>}</div></section>
+      <aside className="operations-side"><section className="panel operations-alerts"><div className="section-header"><div><h2>Needs Attention</h2><p>Operational risks detected from current data.</p></div></div><div className="attention-list">{rows.filter(r=>["Alert","Rework"].includes(r.type)).slice(0,8).map(r=>{const Icon=r.icon;return <div className="attention-item" key={r.id}><span><Icon size={14}/></span><div><b>{r.title}</b><small>{r.text}</small></div></div>})}{!rows.some(r=>["Alert","Rework"].includes(r.type))&&<div className="attention-empty"><CheckCircle2 size={18}/> No critical operational alerts</div>}</div></section><section className="panel operations-read"><div className="section-header"><div><h2>Read State</h2><p>Control your activity inbox.</p></div></div><div className="read-actions"><button onClick={markAll}>Mark all read <Check size={13}/></button><button onClick={clearRead}>Reset read state <RefreshCw size={13}/></button></div><div className="read-note"><Eye size={14}/><span>Click any activity item to mark it as read. Read state is saved locally on this device.</span></div></section></aside>
+    </div>
+  </div>;
+}
+
+function DeadlinesPage({ overview, projects, teamMembers, onSetTaskDueDate, onEscalate, onOpenTask }) {
+  const { overdue, dueToday, dueWeek, agingBuckets, slaCompliance, measured, upcomingProjects } = overview;
+  const maxAging = Math.max(1, ...agingBuckets.map(b => b.count));
+  const projectName = id => projects.find(p => p.id === id)?.name || "—";
+  const memberName = id => teamMembers.find(m => m.id === id)?.name || "Unassigned";
+  return <div className="page deadlines-page">
+    <div className="page-head"><div><span className="eyebrow">SLA & DEADLINE MANAGEMENT</span><h1>Deadlines</h1><p>Track project and task deadlines, SLA compliance, aging and escalations across your workspace.</p></div></div>
+
+    <div className="stats-grid deadlines-stats">
+      <StatCard icon={AlertCircle} label="Overdue Tasks" value={overdue.length} meta="Past their SLA or due date"/>
+      <StatCard icon={Clock3} label="Due Today" value={dueToday.length} meta="Within the next 24 hours"/>
+      <StatCard icon={Calendar} label="Due This Week" value={dueWeek.length} meta="Within the next 7 days"/>
+      <StatCard icon={ShieldCheck} label="SLA Compliance" value={slaCompliance === null ? "—" : `${slaCompliance}%`} meta={measured ? `${measured} reviewed task${measured===1?"":"s"} measured` : "No reviewed tasks yet"}/>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Aging Report</h2><p>How long open tasks have sat in their current stage</p></div></div>
+        <div className="trend-chart"><div className="chart-y"><span>{maxAging}</span><span>{Math.round(maxAging*0.75)}</span><span>{Math.round(maxAging*0.5)}</span><span>{Math.round(maxAging*0.25)}</span><span>0</span></div><div className="chart-bars">{agingBuckets.map(b=><div className="chart-bar-wrap" key={b.label}><div className="chart-bar" style={{height:`${Math.max(6,(b.count/maxAging)*100)}%`}}></div><span>{b.label}</span></div>)}</div></div>
+      </section>
+      <section className="panel deadlines-upcoming-panel">
+        <div className="panel-head"><div><h2>Upcoming Project Deadlines</h2><p>Sorted by soonest due date</p></div></div>
+        <div className="upcoming-deadlines-list">
+          {upcomingProjects.length ? upcomingProjects.slice(0,6).map(u => <div className="upcoming-deadline-row" key={u.project.id}>
+            <div><b>{u.project.name}</b><span>{new Date(u.project.dueDate).toLocaleDateString()}</span></div>
+            <div className="upcoming-progress"><div className="progress-track"><i style={{width:`${u.progress}%`}}/></div><small>{u.progress}%</small></div>
+            <span className={`days-left-badge ${u.daysLeft<0?"overdue":u.daysLeft<=3?"soon":""}`}>{u.daysLeft<0?`${Math.abs(u.daysLeft)}d overdue`:`${u.daysLeft}d left`}</span>
+          </div>) : <div className="config-empty small"><Calendar size={22}/><p>No project deadlines set yet — add a due date from Project Configuration.</p></div>}
+        </div>
+      </section>
+    </div>
+
+    <section className="panel deadlines-overdue-panel">
+      <div className="panel-head"><div><h2>Overdue Tasks ({overdue.length})</h2><p>Ranked by how far past their SLA or due date they are</p></div></div>
+      {overdue.length ? <div className="overdue-task-list">
+        {overdue.slice(0,25).map(r => <div className="overdue-task-row" key={r.task.id}>
+          <div className="overdue-task-main"><b>{r.task.name}</b><span>{projectName(r.task.projectId)} · {memberName(r.task.assigneeId)} · {r.task.status}</span></div>
+          <span className="overdue-hours-badge">{r.overdueHours.toFixed(1)}h overdue</span>
+          <input type="date" className="due-date-input" value={r.task.dueDate ? r.task.dueDate.slice(0,10) : ""} onChange={e=>onSetTaskDueDate(r.task.id, e.target.value ? new Date(e.target.value).toISOString() : null)}/>
+          <button className="ghost-btn" onClick={()=>onOpenTask(r.task)}><Play size={13}/> Open</button>
+          <button className="ghost-btn" onClick={()=>onEscalate(r.task)}><AlertCircle size={13}/> Escalate</button>
+        </div>)}
+      </div> : <div className="config-empty"><CheckCircle2 size={34}/><h3>Nothing overdue</h3><p>All open tasks are within their SLA and due-date targets.</p></div>}
+    </section>
+  </div>;
+}
+
+
+function QaQualityPage({ analytics, projectGroups }) {
+  const { scored, weeks, annotatorStats, reviewerStats, agreementRate, multiReviewedCount, errorTally, calibrationRows } = analytics;
+  const avgScore = scored.length ? Math.round(scored.reduce((s, r) => s + r.score, 0) / scored.length) : null;
+  const totalErrors = errorTally.reduce((s, e) => s + e.count, 0);
+  const groupName = id => projectGroups.find(g => g.id === id)?.name || "";
+  return <div className="page qa-quality-page">
+    <div className="page-head"><div><span className="eyebrow">ADVANCED QA & QUALITY SCORING</span><h1>QA & Quality</h1><p>Scorecards, error trends, calibration and quality rankings across every reviewed task.</p></div></div>
+
+    <div className="stats-grid">
+      <StatCard icon={ShieldCheck} label="Reviews Scored" value={scored.length} meta="Tasks with a recorded QA score"/>
+      <StatCard icon={TrendingUp} label="Average Score" value={avgScore===null?"—":`${avgScore}%`} meta="Across all scored reviews"/>
+      <StatCard icon={Users} label="Reviewer Agreement" value={agreementRate===null?"—":`${agreementRate}%`} meta={multiReviewedCount ? `${multiReviewedCount} task${multiReviewedCount===1?"":"s"} reviewed more than once` : "No repeat reviews yet"}/>
+      <StatCard icon={AlertCircle} label="Errors Logged" value={totalErrors} meta={`${errorTally.length} categor${errorTally.length===1?"y":"ies"} in use`}/>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Quality Trend</h2><p>Average QA score by week (last 8 weeks)</p></div></div>
+        <div className="trend-chart"><div className="chart-y"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div className="chart-bars">{weeks.map((w,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${w.avg?Math.max(6,w.avg):3}%`}} title={w.avg!==null?`${w.avg}% (${w.count} review${w.count===1?"":"s"})`:"No reviews"}></div><span>{w.label}</span></div>)}</div></div>
+      </section>
+      <section className="panel deadlines-upcoming-panel">
+        <div className="panel-head"><div><h2>Error Categories</h2><p>Most frequently logged QA errors</p></div></div>
+        {errorTally.length ? <div className="error-tally-list">{errorTally.slice(0,8).map(e => <div className="error-tally-row" key={e.name}><span className={`sev-dot sev-${(e.severity||"Minor").toLowerCase()}`}/><b>{e.name}</b><span className="error-tally-count">{e.count}</span></div>)}</div> : <div className="config-empty small"><AlertCircle size={22}/><p>No errors logged yet — they're tagged from the QA Scorecard during review.</p></div>}
+      </section>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel">
+        <div className="panel-head"><div><h2>Annotator Quality Ranking</h2><p>Average QA score across each annotator's reviewed tasks</p></div></div>
+        {annotatorStats.length ? <div className="ranking-list">{annotatorStats.map((a,i) => <div className="ranking-row" key={a.member.id}><span className="rank-number">{i+1}</span><div className="ranking-main"><b>{a.member.name}</b><span>{a.reviewCount} reviewed · {a.errorCount} error{a.errorCount===1?"":"s"}</span></div><span className="ranking-score">{a.avgScore===null?"—":`${a.avgScore}%`}</span><span className="ranking-approval">{a.approvalRate===null?"—":`${a.approvalRate}% approved`}</span></div>)}</div> : <div className="config-empty small"><Users size={22}/><p>No reviewed tasks yet.</p></div>}
+      </section>
+      <section className="panel">
+        <div className="panel-head"><div><h2>Reviewer Performance</h2><p>Throughput, scoring tendency and turnaround per reviewer</p></div></div>
+        {reviewerStats.length ? <div className="ranking-list">{reviewerStats.map((r,i) => <div className="ranking-row" key={r.name}><span className="rank-number">{i+1}</span><div className="ranking-main"><b>{r.name}</b><span>{r.reviewCount} review{r.reviewCount===1?"":"s"} · {r.rejectionRate===null?"—":`${r.rejectionRate}% rejected`}</span></div><span className="ranking-score">{r.avgScoreGiven===null?"—":`${r.avgScoreGiven}%`}</span><span className="ranking-approval">{r.avgTurnaroundHours===null?"—":`${r.avgTurnaroundHours.toFixed(1)}h avg`}</span></div>)}</div> : <div className="config-empty small"><ShieldCheck size={22}/><p>No reviews recorded yet.</p></div>}
+      </section>
+    </div>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Calibration Drift</h2><p>How reviewed scores compare to gold-standard references, across every project</p></div></div>
+      {calibrationRows.length ? <div className="calibration-list">{calibrationRows.map(row => <div className="calibration-row" key={row.entry.id}>
+        <div><b>{row.entry.taskId}</b><span>{groupName(row.group.id)} · Gold: {row.entry.goldScore}</span></div>
+        {row.drift !== null ? <span className={`drift-badge ${Math.abs(row.drift)<=5?"good":Math.abs(row.drift)<=15?"warn":"bad"}`}>{row.review.reviewer}: {row.review.score} ({row.drift>0?"+":""}{row.drift})</span> : <span className="drift-badge pending">Not reviewed yet</span>}
+      </div>)}</div> : <div className="config-empty small"><Target size={22}/><p>Add calibration references from each project's Configuration → QA Scorecard tab.</p></div>}
+    </section>
+  </div>;
+}
+
+function ReportsPage({ reporting, quality, deadlines, projects, onExport }) {
+  const [sections, setSections] = useState({ production: true, team: true, qa: true, sla: true, forecast: true });
+  const [reportProject, setReportProject] = useState("All");
+  const [reportRange, setReportRange] = useState(30);
+  const recentDays = reporting.throughputDays.slice(-14);
+  const maxDay = Math.max(1, ...recentDays.map(d => d.count));
+  const toggleSection = (key) => setSections(prev => ({ ...prev, [key]: !prev[key] }));
+
+  return <div className="page reports-page">
+    <div className="page-head"><div><span className="eyebrow">ADVANCED ANALYTICS & REPORTING</span><h1>Reports</h1><p>Production, team, QA, SLA and forecasting analytics in one place, with exportable custom reports.</p></div></div>
+
+    <div className="stats-grid">
+      <StatCard icon={TrendingUp} label="Throughput (7d)" value={reporting.last7} meta={reporting.throughputTrendPct===null?"vs prior week: —":`${reporting.throughputTrendPct>=0?"+":""}${reporting.throughputTrendPct}% vs prior week`}/>
+      <StatCard icon={CheckCircle2} label="Accuracy Rate" value={reporting.accuracyRate===null?"—":`${reporting.accuracyRate}%`} meta="Approved of all reviewed decisions"/>
+      <StatCard icon={ShieldCheck} label="First-Pass Yield" value={reporting.firstPassYield===null?"—":`${reporting.firstPassYield}%`} meta="Approved with no rework cycle"/>
+      <StatCard icon={RotateCcw} label="Rework Rate" value={reporting.reworkRate===null?"—":`${reporting.reworkRate}%`} meta={`${reporting.reworkedCount} of ${reporting.reviewedCount} reviewed tasks`}/>
+    </div>
+
+    <div className="deadlines-grid-top">
+      <section className="panel analytics-chart-panel">
+        <div className="panel-head"><div><h2>Throughput</h2><p>Tasks completed per day (last 14 days)</p></div><span className="chart-value">{reporting.dailyVelocity.toFixed(1)} <small>/day avg</small></span></div>
+        <div className="trend-chart"><div className="chart-y"><span>{maxDay}</span><span>{Math.round(maxDay*0.5)}</span><span>0</span></div><div className="chart-bars">{recentDays.map((d,i)=><div className="chart-bar-wrap" key={i}><div className="chart-bar" style={{height:`${Math.max(4,(d.count/maxDay)*100)}%`}} title={`${d.count} on ${d.label}`}></div><span>{d.label}</span></div>)}</div></div>
+      </section>
+      <section className="panel">
+        <div className="panel-head"><div><h2>Production</h2><p>Overall volume across the workspace</p></div></div>
+        <div className="production-stat-list">
+          <div className="production-stat-row"><span>Total Images</span><b>{reporting.totalImages.toLocaleString()}</b></div>
+          <div className="production-stat-row"><span>Processed</span><b>{reporting.processedImages.toLocaleString()}</b></div>
+          <div className="production-stat-row"><span>Total Annotations</span><b>{reporting.totalAnnotationsCount.toLocaleString()}</b></div>
+          <div className="production-stat-row"><span>Avg Annotations / Task</span><b>{reporting.avgAnnotationsPerTask.toFixed(1)}</b></div>
+          <div className="production-stat-row"><span>SLA Compliance</span><b>{deadlines.slaCompliance===null?"—":`${deadlines.slaCompliance}%`}</b></div>
+          <div className="production-stat-row"><span>Reviewer Agreement</span><b>{quality.agreementRate===null?"—":`${quality.agreementRate}%`}</b></div>
+        </div>
+      </section>
+    </div>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Team Utilization</h2><p>Active workload against each member's capacity</p></div></div>
+      {reporting.teamUtilization.length ? <div className="utilization-list">{reporting.teamUtilization.map(u => <div className="utilization-row" key={u.member.id}>
+        <div className="utilization-main"><b>{u.member.name}</b><span>{u.member.role} · {u.assigned}/{u.capacity} tasks</span></div>
+        <div className="utilization-track"><i className={u.utilization>=100?"over":u.utilization>=75?"high":""} style={{width:`${Math.min(100,u.utilization)}%`}}/></div>
+        <span className="utilization-pct">{u.utilization}%</span>
+      </div>)}</div> : <div className="config-empty small"><Users size={22}/><p>No active team members yet.</p></div>}
+    </section>
+
+    <section className="panel">
+      <div className="panel-head"><div><h2>Forecasting</h2><p>Projected completion based on each project's last 7 days of velocity</p></div></div>
+      {reporting.forecasts.length ? <div className="table-wrap"><table className="analytics-table"><thead><tr><th>PROJECT</th><th>REMAINING</th><th>VELOCITY /DAY</th><th>DAYS LEFT</th><th>PROJECTED DATE</th></tr></thead><tbody>{reporting.forecasts.map(f => <tr key={f.project.id}><td><b>{f.project.name}</b></td><td>{f.remaining.toLocaleString()}</td><td>{f.velocity.toFixed(1)}</td><td>{f.daysLeft??"—"}</td><td>{f.projectedDate?f.projectedDate.toLocaleDateString():<span className="forecast-stalled">No recent progress</span>}</td></tr>)}</tbody></table></div> : <div className="config-empty small"><Target size={22}/><p>All projects are complete or have no images yet.</p></div>}
+    </section>
+
+    <section className="panel report-builder-panel">
+      <div className="panel-head"><div><h2>Custom Report</h2><p>Pick what to include and export a CSV snapshot</p></div><FileText size={18}/></div>
+      <div className="report-builder-controls">
+        <label><span>PROJECT</span><select value={reportProject} onChange={e=>setReportProject(e.target.value)}><option value="All">All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+        <label><span>RANGE</span><select value={reportRange} onChange={e=>setReportRange(Number(e.target.value))}><option value={7}>Last 7 days</option><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option></select></label>
+      </div>
+      <div className="report-section-toggles">
+        {[["production","Production"],["team","Team Utilization"],["qa","QA & Quality"],["sla","SLA & Deadlines"],["forecast","Forecasting"]].map(([key,label]) => <label key={key} className="report-toggle-chip"><input type="checkbox" checked={sections[key]} onChange={()=>toggleSection(key)}/> {label}</label>)}
+      </div>
+      <button className="primary-btn" onClick={()=>onExport(sections, reportProject, reportRange)}><Download size={16}/> Generate CSV Report</button>
+    </section>
+  </div>;
+}
+
+function SimplePage({title,subtitle,icon:Icon,stats}) {
+  return <div className="page"><div className="page-head"><div><span className="eyebrow">ANNOTATEPRO</span><h1>{title}</h1><p>{subtitle}</p></div></div><div className="stats-grid">{stats.map((s,i)=><StatCard key={s} icon={[Activity,Target,ShieldCheck,TrendingUp][i%4]} label={s.split(" ").slice(1).join(" ")} value={s.split(" ")[0]} meta="Workspace metric"/>)}</div><section className="panel placeholder-large"><Icon size={42}/><h2>{title} module</h2><p>This module is connected to the AnnotatePro application shell. The full operational workflow will use the same shared project and task data.</p></section></div>;
+}
+
+function StatCard({icon:Icon,label,value,meta}){return <div className="stat-card"><div className="stat-icon"><Icon size={19}/></div><div><span>{label}</span><strong>{value}</strong><small><TrendingUp size={12}/> {meta}</small></div></div>}
+function MiniStat({label,value}){return <div className="mini-stat"><span>{label}</span><b>{value}</b></div>}
+function StatusBadge({status}){const cls=status==="Completed"||status==="Approved"?"completed":status==="In Progress"||status==="QA Review"||status==="Submitted"?"progressing":status==="Rejected"?"rejected":status==="Changes Requested"?"changes":"pending";return <span className={`status-badge ${cls}`}><i></i>{status}</span>}
+function ActivityRow({icon:Icon,title,text,time}){return <div className="activity-row"><div className="activity-icon"><Icon size={16}/></div><div><b>{title}</b><span>{text}</span></div><time>{time}</time></div>}
+function Quick({icon:Icon,title,onClick}){return <button className="quick-action" onClick={onClick}><span><Icon size={17}/></span><b>{title}</b><em>→</em></button>}
+function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
+
+
+function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole,
+  apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson,
+  errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, onRunHealthCheck }) {
+  const tabs = [
+    ["Workspace", SlidersHorizontal, "Workspace"],
+    ["Annotation", Grid3X3, "Annotation"],
+    ["Notifications", Bell, "Notifications"],
+    ["Preferences", Settings, "Preferences"],
+    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Integrations", Zap, "Integrations"], ["Security", ShieldCheck, "Security"], ["Diagnostics", CheckSquare, "Diagnostics"], ["Cloud Migration", Database, "Cloud"]] : [])
+  ];
+  const Toggle = ({ label, description, value, onChange }) => (
+    <label className="settings-toggle-row">
+      <span><b>{label}</b><small>{description}</small></span>
+      <button type="button" className={`toggle-switch ${value ? "on" : ""}`} aria-pressed={value} onClick={() => onChange(!value)}><span /></button>
+    </label>
+  );
+  return (
+    <div className="settings-page">
+      <div className="page-heading settings-heading">
+        <div><span className="eyebrow">ADMINISTRATION</span><h1>Settings</h1><p>Control workspace behavior, annotation preferences, notifications and user experience.</p></div>
+        <div className="settings-status"><CheckCircle2 size={16}/>{message || "Changes save automatically"}</div>
+      </div>
+      <div className="settings-layout">
+        <aside className="settings-nav panel">
+          {tabs.map(([label, Icon, key]) => <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}><Icon size={17}/><span>{label}</span><ChevronDown size={14}/></button>)}
+          <div className="settings-nav-note"><ShieldCheck size={16}/><span><b>Team Lead access</b><small>Workspace settings are stored locally for this deployment.</small></span></div>
+        </aside>
+        <section className="settings-content">
+          {tab === "Workspace" && <div className="settings-card panel">
+            <div className="settings-card-title"><div><h2>Workspace</h2><p>Define the active workspace identity and regional defaults.</p></div><SlidersHorizontal size={20}/></div>
+            <div className="settings-grid">
+              <label><span>Workspace name</span><input value={settings.workspaceName} onChange={e => onUpdate({workspaceName:e.target.value})}/></label>
+              <label><span>Timezone</span><select value={settings.timezone} onChange={e => onUpdate({timezone:e.target.value})}><option value="Asia/Kolkata">Asia/Kolkata (IST)</option><option value="UTC">UTC</option><option value="America/New_York">America/New York</option><option value="Europe/London">Europe/London</option></select></label>
+              <label><span>Theme</span><select value={settings.theme} onChange={e => onUpdate({theme:e.target.value})}><option>System</option><option>Light</option><option>Dark</option></select></label>
+              <label><span>Default landing page</span><select value={settings.defaultPage} onChange={e => onUpdate({defaultPage:e.target.value})}><option>Dashboard</option><option>Projects</option><option>Task Planner</option><option>Annotation Workspace</option></select></label>
+            </div>
+            <div className="settings-section"><h3>Workspace behavior</h3><Toggle label="Compact mode" description="Use tighter spacing across operational tables and queues." value={settings.compactMode} onChange={v=>onUpdate({compactMode:v})}/><Toggle label="Keyboard shortcuts" description="Enable annotation workspace hotkeys and navigation shortcuts." value={settings.keyboardShortcuts} onChange={v=>onUpdate({keyboardShortcuts:v})}/></div>
+          </div>}
+          {tab === "Annotation" && <div className="settings-card panel">
+            <div className="settings-card-title"><div><h2>Annotation preferences</h2><p>Set defaults for saving, submission and object visibility.</p></div><Grid3X3 size={20}/></div>
+            <Toggle label="Auto-save annotations" description="Automatically save annotation changes while working." value={settings.autosave} onChange={v=>onUpdate({autosave:v})}/>
+            <label className="settings-range"><span><b>Auto-save interval</b><small>Save every {settings.autosaveInterval} seconds.</small></span><input type="range" min="5" max="60" step="5" value={settings.autosaveInterval} onChange={e=>onUpdate({autosaveInterval:Number(e.target.value)})}/><strong>{settings.autosaveInterval}s</strong></label>
+            <Toggle label="Confirm task submission" description="Ask for confirmation before moving a task into Submitted status." value={settings.confirmSubmit} onChange={v=>onUpdate({confirmSubmit:v})}/>
+            <Toggle label="Show object IDs" description="Display object numbers in the regions panel and canvas overlays." value={settings.showObjectIds} onChange={v=>onUpdate({showObjectIds:v})}/>
+            <div className="settings-info"><CheckSquare size={18}/><div><b>Recommended production setup</b><span>Keep auto-save and submission confirmation enabled for high-volume annotation workflows.</span></div></div>
+          </div>}
+          {tab === "Notifications" && <div className="settings-card panel">
+            <div className="settings-card-title"><div><h2>Notification preferences</h2><p>Choose which operational events should generate alerts.</p></div><Bell size={20}/></div>
+            <Toggle label="Task assignments" description="Notify when tasks are assigned or reassigned to a team member." value={settings.emailAssignments} onChange={v=>onUpdate({emailAssignments:v})}/>
+            <Toggle label="QA decisions" description="Notify when a task is approved, rejected or changes are requested." value={settings.emailQa} onChange={v=>onUpdate({emailQa:v})}/>
+            <Toggle label="Rework alerts" description="Notify when submitted work is returned for correction." value={settings.emailRework} onChange={v=>onUpdate({emailRework:v})}/>
+            <div className="settings-info"><Bell size={18}/><div><b>In-app notifications remain active</b><span>These preferences control notification categories; the notification center keeps the full activity history.</span></div></div>
+          </div>}
+          {tab === "Preferences" && <div className="settings-card panel">
+            <div className="settings-card-title"><div><h2>User preferences</h2><p>Personal interface defaults for the current operator.</p></div><Settings size={20}/></div>
+            <div className="settings-profile"><div className="settings-avatar">{userInitial}</div><div><b>{userName}</b><span>{userEmail}</span></div><button className="secondary-btn" onClick={onSignOut}><LogOut size={14}/> Sign out</button></div>
+            <div className="settings-shortcuts"><h3>Workspace shortcuts</h3><div><kbd>V</kbd><span>Select</span><kbd>B</kbd><span>Bounding Box</span><kbd>P</kbd><span>Polygon</span><kbd>Space</kbd><span>Pan canvas</span><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div></div>
+            <div className="settings-danger"><div><h3>Restore default settings</h3><p>Reset only AnnotatePro settings. Projects, tasks, annotations, team and audit data are not deleted.</p></div><button className="btn secondary" onClick={onReset}><RotateCcw size={15}/> Restore defaults</button></div>
+          </div>}
+          {tab === "Roles" && isAdmin && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
+          {tab === "Integrations" && isAdmin && <IntegrationsSettingsTab apiTokens={apiTokens} onGenerateToken={onGenerateToken} onRevokeToken={onRevokeToken} onDeleteToken={onDeleteToken} webhooks={webhooks} onCreateWebhook={onCreateWebhook} onUpdateWebhook={onUpdateWebhook} onDeleteWebhook={onDeleteWebhook} onTestWebhook={onTestWebhook} projects={projects} projectGroups={projectGroups} onImportMlPredictions={onImportMlPredictions} onExportProjectJson={onExportProjectJson} />}
+          {tab === "Security" && isAdmin && <SecurityPanel errorLogEntries={errorLogEntries} onRefreshErrorLog={onRefreshErrorLog} onClearErrorLog={onClearErrorLog} onExportBackup={onExportBackup} onRestoreBackup={onRestoreBackup} onSignOutAllDevices={onSignOutAllDevices} settings={settings} onUpdate={onUpdate} />}
+          {tab === "Diagnostics" && isAdmin && <DiagnosticsPanel onRunHealthCheck={onRunHealthCheck} />}
+          {tab === "Cloud" && isAdmin && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function RolesAccessPanel({profiles, loading, onLoad, onUpdateRole, currentUserEmail}) {
+  useEffect(() => { onLoad(); }, []);
+  const roleOptions = ["Admin", "Team Lead", "Reviewer", "Annotator"];
+  return <div className="settings-card panel roles-access-panel">
+    <div className="settings-card-title"><div><h2>Roles & Access</h2><p>Who can sign in, and what they're allowed to do. Only Admins can see this page.</p></div><Users size={20}/></div>
+    {loading ? <div className="dataset-empty"><RefreshCw size={28} className="mig-spin"/><h3>Loading accounts...</h3></div> :
+      <div className="roles-list">
+        {profiles.map(p => <div className="roles-row" key={p.id}>
+          <div className="member-avatar small">{initials(p.full_name || p.id)}</div>
+          <div className="roles-row-main"><b>{p.full_name || "Unnamed"}</b><span>{p.email || p.id}{p.email === currentUserEmail ? " (you)" : ""}</span></div>
+          <select value={p.role} onChange={e=>onUpdateRole(p.id, e.target.value)}>
+            {roleOptions.map(r => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>)}
+        {!profiles.length && <div className="no-access">No accounts yet — invite your first user from the Team page.</div>}
+      </div>
+    }
+    <div className="guide-note"><ShieldCheck size={14}/><span>Admin can do everything. Team Lead can manage projects, datasets, team and configuration. Reviewer can approve/reject QA. Annotator can work on tasks and annotations only.</span></div>
+  </div>;
+}
+
+const WEBHOOK_EVENT_TYPES = [
+  { id: "task.submitted", label: "Task Submitted" },
+  { id: "qa.approved", label: "QA Approved" },
+  { id: "qa.rejected", label: "QA Rejected" },
+  { id: "task.escalated", label: "Task Escalated" },
+  { id: "sla.breach", label: "SLA Breach" }
+];
+
+function IntegrationsSettingsTab({ apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson }) {
+  const [newTokenName, setNewTokenName] = useState("");
+  const [revealedToken, setRevealedToken] = useState(null);
+  const [newWebhookName, setNewWebhookName] = useState("");
+  const [newWebhookUrl, setNewWebhookUrl] = useState("");
+  const [newWebhookEvents, setNewWebhookEvents] = useState([]);
+  const [mlProjectId, setMlProjectId] = useState(projects[0]?.id || "");
+  const [mlResult, setMlResult] = useState(null);
+  const [mlError, setMlError] = useState("");
+  const mlFileRef = useRef(null);
+  const [exportProjectId, setExportProjectId] = useState(projects[0]?.id || "");
+
+  function toggleNewWebhookEvent(id) { setNewWebhookEvents(prev => prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]); }
+  function handleMlFile(file) {
+    if (!file) return;
+    setMlError(""); setMlResult(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!Array.isArray(parsed)) throw new Error("Expected a JSON array");
+        const project = projects.find(p => p.id === mlProjectId);
+        const groupId = project?.groupId;
+        if (!groupId) throw new Error("Select a target project first");
+        const result = onImportMlPredictions(groupId, mlProjectId, parsed);
+        setMlResult(result);
+      } catch (err) {
+        setMlError(`Import failed: ${err.message}`);
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  return <div className="settings-card panel integrations-tab">
+    <div className="settings-card-title"><div><h2>Integrations</h2><p>API access, outbound webhooks, model prediction import and data export.</p></div><Zap size={20}/></div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>API Tokens</h3></div>
+      <p className="field-hint">Tokens authenticate external tools reading your Supabase data directly. Generating a token here creates the record; enforcing it requires a one-time database function — see note below.</p>
+      <form className="token-create-form" onSubmit={e => { e.preventDefault(); if (!newTokenName.trim()) return; const t = onGenerateToken(newTokenName, ["read"]); setRevealedToken(t.token); setNewTokenName(""); }}>
+        <input value={newTokenName} onChange={e => setNewTokenName(e.target.value)} placeholder="Token name (e.g. Zapier integration)"/>
+        <button type="submit" className="ghost-btn"><Plus size={13}/> Generate Token</button>
+      </form>
+      {revealedToken && <div className="token-reveal"><code>{revealedToken}</code><button className="ghost-btn" onClick={() => { navigator.clipboard?.writeText(revealedToken); }}><Copy size={12}/> Copy</button><button className="chip-x" onClick={() => setRevealedToken(null)}><X size={12}/></button></div>}
+      {apiTokens.length ? <div className="token-list">{apiTokens.map(t => <div className={`token-row ${t.revoked?"revoked":""}`} key={t.id}>
+        <div><b>{t.name}</b><span>{t.token.slice(0,10)}••••••••• · {new Date(t.createdAt).toLocaleDateString()}</span></div>
+        <span className={`token-status ${t.revoked?"revoked":"active"}`}>{t.revoked?"Revoked":"Active"}</span>
+        {!t.revoked && <button className="ghost-btn" onClick={()=>onRevokeToken(t.id)}>Revoke</button>}
+        <button className="danger-icon" onClick={()=>onDeleteToken(t.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><Zap size={22}/><p>No API tokens yet.</p></div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Webhooks</h3></div>
+      <p className="field-hint">Fires a POST request with a JSON payload to the URL you provide when a selected event happens — works with Slack Incoming Webhooks, Zapier, Make, or any endpoint that accepts JSON.</p>
+      <form className="webhook-create-form" onSubmit={e => { e.preventDefault(); if (!newWebhookUrl.trim()) return; onCreateWebhook({ name: newWebhookName, url: newWebhookUrl.trim(), events: newWebhookEvents }); setNewWebhookName(""); setNewWebhookUrl(""); setNewWebhookEvents([]); }}>
+        <input value={newWebhookName} onChange={e => setNewWebhookName(e.target.value)} placeholder="Webhook name"/>
+        <input value={newWebhookUrl} onChange={e => setNewWebhookUrl(e.target.value)} placeholder="https://hooks.example.com/..." className="webhook-url-input"/>
+        <div className="webhook-event-toggles">{WEBHOOK_EVENT_TYPES.map(ev => <label key={ev.id} className="report-toggle-chip"><input type="checkbox" checked={newWebhookEvents.includes(ev.id)} onChange={()=>toggleNewWebhookEvent(ev.id)}/> {ev.label}</label>)}</div>
+        <button type="submit" className="ghost-btn"><Plus size={13}/> Add Webhook</button>
+      </form>
+      {webhooks.length ? <div className="webhook-list">{webhooks.map(w => <div className="webhook-row" key={w.id}>
+        <button type="button" className={`switch-btn ${w.enabled?"on":""}`} onClick={()=>onUpdateWebhook(w.id,{enabled:!w.enabled})}><i/></button>
+        <div className="webhook-main"><b>{w.name}</b><span>{w.url}</span><div className="webhook-events">{(w.events||[]).map(e=><span key={e} className="webhook-event-tag">{WEBHOOK_EVENT_TYPES.find(x=>x.id===e)?.label || e}</span>)}</div></div>
+        <span className={`token-status ${w.lastStatus==="Success"||w.lastStatus==="Success (test)"?"active":w.lastStatus?"revoked":""}`}>{w.lastStatus || "Not triggered yet"}</span>
+        <button className="ghost-btn" onClick={()=>onTestWebhook(w.id)}>Test</button>
+        <button className="danger-icon" onClick={()=>onDeleteWebhook(w.id)}><Trash2 size={14}/></button>
+      </div>)}</div> : <div className="config-empty small"><Zap size={22}/><p>No webhooks configured yet.</p></div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>ML Prediction Import</h3></div>
+      <p className="field-hint">Import model predictions as pre-annotations on existing tasks. Expected JSON: <code>{"[{fileName, predictions:[{label, confidence, bbox:[x,y,w,h]}]}]"}</code> — bbox values are percent of image width/height, matching filenames to existing task names in the selected project.</p>
+      <div className="ml-import-row">
+        <select value={mlProjectId} onChange={e=>setMlProjectId(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        <button className="ghost-btn" onClick={()=>mlFileRef.current?.click()}><Upload size={13}/> Choose JSON File</button>
+        <input ref={mlFileRef} type="file" accept="application/json" style={{display:"none"}} onChange={e=>{ const f=e.target.files?.[0]; if(f) handleMlFile(f); e.target.value=""; }}/>
+      </div>
+      {mlError && <div className="form-error"><AlertCircle size={14}/> {mlError}</div>}
+      {mlResult && <div className="ml-import-result"><CheckCircle2 size={14}/> {mlResult.importedAnnotations} prediction{mlResult.importedAnnotations===1?"":"s"} imported across {mlResult.matchedTasks} task{mlResult.matchedTasks===1?"":"s"}{mlResult.unmatched.length ? ` · ${mlResult.unmatched.length} filename${mlResult.unmatched.length===1?"":"s"} unmatched` : ""}</div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Data Export</h3></div>
+      <p className="field-hint">CSV exports are available throughout the app (Tasks, Reports, Label Schema). For a full machine-readable snapshot of one project — tasks, annotations and QA reviews — export as JSON here.</p>
+      <div className="ml-import-row">
+        <select value={exportProjectId} onChange={e=>setExportProjectId(e.target.value)}>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select>
+        <button className="ghost-btn" onClick={()=>onExportProjectJson(exportProjectId)}><Download size={13}/> Export Project JSON</button>
+      </div>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Database setup</h3></div>
+      <p className="field-hint">Tokens and webhooks sync to Supabase once these tables exist (safe to add anytime — everything above already works locally without them):</p>
+      <pre className="sql-snippet">{`create table api_tokens (id text primary key, name text, token text, scopes jsonb, created_by text, created_at timestamptz, revoked boolean default false);
+create table webhooks (id text primary key, name text, url text, events jsonb, enabled boolean default true, created_at timestamptz);`}</pre>
+    </div>
+  </div>;
+}
+
+const REGRESSION_TEST_PLAN = `# AnnotatePro — Regression Test Plan (Build 43)
+
+Manual checklist to walk through before a release. Each area lists the core paths to verify by hand — this complements the automated Health Check on the Diagnostics tab, which only checks data integrity, not UI behavior.
+
+## Projects
+- [ ] Create, edit, archive, restore, duplicate, and delete a project group
+- [ ] Create, edit, and delete a project within a group
+- [ ] Project card progress bar matches completed/total images
+- [ ] Deleting a project with tasks shows the cascade-delete warning and actually removes those tasks
+
+## Datasets
+- [ ] Create a dataset, add images, snapshot a version
+- [ ] Archive/restore a dataset
+- [ ] Deleting a dataset with images is blocked with a clear message
+- [ ] Clearing a dataset removes its tasks, annotations, and QA reviews (not just the tasks)
+
+## Import
+- [ ] Import images via drag-and-drop and file picker
+- [ ] Advanced Import: COCO JSON with images zip
+- [ ] Advanced Import: YOLO format with images zip
+- [ ] Class-to-label mapping screen shows all detected classes and lets you map or create labels
+- [ ] Import progress and final summary (imported / skipped / errors) are accurate
+
+## Tasks
+- [ ] Task Planner: filter, sort, bulk-assign, bulk priority/queue changes
+- [ ] Assigning a task moves it from Pending to In Progress
+- [ ] Task deadlines (SLA-derived and custom) display correctly
+- [ ] Removing a single task cleans up its annotations and QA review
+
+## Annotation
+- [ ] Bounding box, polygon, polyline, keypoint, brush/eraser tools all draw and save correctly
+- [ ] Undo/redo, copy/paste, multi-select, lock/hide all work
+- [ ] Label picker shows AI-suggested badges for frequently-used labels
+- [ ] Save and Submit transition task status correctly
+- [ ] AI-assisted: pending model predictions show dashed outline + confidence, Accept/Reject and Accept All/Reject All work
+- [ ] Editing an accepted model prediction flags it as "corrected"
+
+## Video
+- [ ] **Not implemented in this build.** No video upload, playback, or frame-by-frame annotation exists yet — remove this row once it's built, or flag it as a known gap if this checklist is used before then.
+
+## QA
+- [ ] Review mode shows Accept/Reject instead of Skip/Submit
+- [ ] QA Scorecard: weighted criteria sliders compute the overall score correctly
+- [ ] Error tagging: log an error, confirm it appears in the QA & Quality error breakdown
+- [ ] Sampling: with sampling rate < 100%, confirm some submissions auto-approve and log a sampling-skip audit entry
+- [ ] Calibration: add a gold-score reference, confirm drift is computed after review
+
+## Team
+- [ ] Add, edit, deactivate, and delete a team member
+- [ ] Deleting a member clears their assignee AND reviewer references on tasks (not just assignee)
+- [ ] Role changes take effect (Admin-only tabs disappear for non-admins)
+- [ ] Duplicate email addresses are flagged (Diagnostics → Health Check)
+
+## Workload
+- [ ] Workload page reflects real assigned/capacity numbers
+- [ ] Auto Balance assigns tasks to the least-loaded eligible member
+- [ ] Zero-capacity active members are flagged (Diagnostics → Health Check)
+
+## Notifications
+- [ ] Notifications generate on assignment, QA decision, rework, escalation
+- [ ] Mark-as-read, mark-all-read, delete, and clear-all all work
+- [ ] Notification filters (type) work correctly
+
+## Audit
+- [ ] Every major action (create/edit/delete/assign/review/escalate) produces an audit entry
+- [ ] Audit Trail search and filters work
+- [ ] Audit log caps at 2000 entries without crashing (Diagnostics → Health Check)
+
+## Export
+- [ ] CSV export (Tasks, Reports) downloads and opens correctly
+- [ ] Label schema JSON export/import round-trips without data loss
+- [ ] Full project JSON export includes tasks, annotations, and QA reviews
+- [ ] Full workspace backup export/restore (Settings → Security) round-trips correctly
+
+## Authentication
+- [ ] Sign in, sign out, password reset all work
+- [ ] Session survives a page refresh
+- [ ] Idle timeout signs the user out after the configured period (Settings → Security)
+- [ ] "Sign out of all devices" invalidates other active sessions
+
+## Permissions
+- [ ] Non-admin users cannot see Roles & Access, Integrations, Security, Diagnostics, or Cloud Migration tabs
+- [ ] Non-admin users cannot edit projects if role is below Team Lead
+- [ ] Verify RLS policies actually block a non-authenticated request at the database level (not just the UI) — see Settings → Security
+
+## Cloud Storage
+- [ ] New image uploads go to Supabase Storage, not inline base64
+- [ ] Image migration tool converts remaining base64 images
+- [ ] Cross-device sync: an edit on one device appears on another after hydration/realtime (see Settings → Cloud Migration)
+`;
+
+function DiagnosticsPanel({ onRunHealthCheck }) {
+  const [results, setResults] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  function handleRun() {
+    setRunning(true);
+    setTimeout(() => { setResults(onRunHealthCheck()); setRunning(false); }, 150);
+  }
+  function downloadTestPlan() {
+    const blob = new Blob([REGRESSION_TEST_PLAN], { type: "text/markdown" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "annotatepro-regression-test-plan.md"; a.click();
+  }
+
+  const failCount = results?.filter(r => r.status === "fail").length || 0;
+  const warnCount = results?.filter(r => r.status === "warn").length || 0;
+  const passCount = results?.filter(r => r.status === "pass").length || 0;
+  const grouped = results ? results.reduce((acc, r) => { (acc[r.area] = acc[r.area] || []).push(r); return acc; }, {}) : {};
+
+  return <div className="settings-card panel diagnostics-panel">
+    <div className="settings-card-title"><div><h2>Testing & Regression</h2><p>An automated data-integrity check across live app state, plus a manual test plan for everything a script can't verify (UI behavior, drawing tools, imports).</p></div><CheckSquare size={20}/></div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Health Check</h3></div>
+      <p className="field-hint">Scans current projects, tasks, annotations, QA reviews, team, and settings for broken references and inconsistent data — the kind of thing that causes confusing counts elsewhere in the app.</p>
+      <button className="primary-btn" onClick={handleRun} disabled={running}>{running ? <RefreshCw size={15} className="mig-spin"/> : <CheckSquare size={15}/>} {running ? "Running..." : "Run Health Check"}</button>
+      {results && <div className="health-check-results">
+        <div className="health-check-summary"><span className="hc-pass">{passCount} passing</span>{warnCount>0 && <span className="hc-warn">{warnCount} warning{warnCount===1?"":"s"}</span>}{failCount>0 && <span className="hc-fail">{failCount} failing</span>}</div>
+        {Object.entries(grouped).map(([area, items]) => <div className="health-check-group" key={area}>
+          <span className="section-label">{area.toUpperCase()}</span>
+          {items.map(r => <div className={`health-check-row hc-${r.status}`} key={r.id}>
+            {r.status === "pass" ? <CheckCircle2 size={14}/> : r.status === "warn" ? <AlertCircle size={14}/> : <X size={14}/>}
+            <div><b>{r.label}</b><span>{r.detail}</span></div>
+          </div>)}
+        </div>)}
+      </div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Manual Regression Test Plan</h3></div>
+      <p className="field-hint">Data integrity is only part of the picture — drawing tools, imports, and auth flows need a human to click through them. Download a checklist covering all 15 areas.</p>
+      <button className="ghost-btn" onClick={downloadTestPlan}><Download size={13}/> Download Test Plan (.md)</button>
+      <p className="field-hint" style={{marginTop:10}}><b>Known gap:</b> the checklist includes a "Video" section flagged as not implemented — there's no video upload, playback, or frame annotation in the app yet.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Performance & Scalability (Build 44)</h3></div>
+      <p className="field-hint">What shipped in code: lazy-loaded thumbnails throughout, pagination on the Import image list, Audit Trail, and Notifications (so those stay fast regardless of size), a precomputed label lookup + <code>React.memo</code> on the annotation canvas shapes (previously doing a linear search per shape on every render), a fixed O(n²) row-lookup in the dataset image table, a debounced command-palette search, and automatic image downscaling (max 1920px, quality 0.85) before new uploads reach Supabase Storage — proportional only, so percent-based annotation coordinates stay valid.</p>
+      <p className="field-hint">What needs your Supabase project directly — indexes speed up exactly the columns this app filters/joins on constantly:</p>
+      <pre className="sql-snippet">{`create index if not exists idx_tasks_project_id on tasks(project_id);
+create index if not exists idx_tasks_dataset_id on tasks(dataset_id);
+create index if not exists idx_tasks_status on tasks(status);
+create index if not exists idx_tasks_assignee_id on tasks(assignee_id);
+create index if not exists idx_tasks_reviewer_id on tasks(reviewer_id);
+create index if not exists idx_projects_group_id on projects(group_id);
+create index if not exists idx_datasets_project_id on datasets(project_id);
+create index if not exists idx_qa_reviews_task_id on qa_reviews(task_id);
+create index if not exists idx_audit_events_task_id on audit_events(task_id);
+create index if not exists idx_audit_events_project_id on audit_events(project_id);
+create index if not exists idx_notifications_task_id on notifications(task_id);`}</pre>
+      <p className="field-hint"><b>Known ceiling, not fixed here:</b> the Build 30.1 cloud hydration does <code>select("*")</code> with no row limit — fine up to a few thousand tasks, but a workspace with tens of thousands would load everything into memory on every session start. Fixing that properly means paginating the hydration query and reworking every page that currently assumes <code>tasks</code> is the complete in-memory array (Task Planner, Workload, Analytics, Reports all filter/aggregate over the full array). That's real architectural work, not a safe drop-in change — worth its own build if your task counts are heading that direction.</p>
+    </div>
+  </div>;
+}
+
+function SecurityPanel({ errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, settings, onUpdate }) {
+  const restoreRef = useRef(null);
+  const [restoreMessage, setRestoreMessage] = useState(null);
+
+  return <div className="settings-card panel security-panel">
+    <div className="settings-card-title"><div><h2>Security & Production Hardening</h2><p>Session security, error monitoring, backups, and a plain-language audit of what's protected client-side versus what needs verifying in Supabase.</p></div><ShieldCheck size={20}/></div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Session Security</h3></div>
+      <label className="sampling-slider-label"><span>Auto sign-out after {settings.sessionIdleMinutes || 0} minute{settings.sessionIdleMinutes===1?"":"s"} of inactivity (0 = disabled)</span><input type="range" min="0" max="120" step="5" value={settings.sessionIdleMinutes ?? 30} onChange={e=>onUpdate({sessionIdleMinutes:Number(e.target.value)})}/></label>
+      <p className="field-hint">Checked every 30 seconds. When it fires, the current session is signed out and the person needs to log back in.</p>
+      <button className="ghost-btn" onClick={onSignOutAllDevices}><LogOut size={13}/> Sign out of all devices</button>
+      <p className="field-hint">Invalidates every active session for this account everywhere it's logged in — use if a device may have been compromised.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Error Monitoring</h3></div>
+      <p className="field-hint">A global error boundary now catches render crashes (showing a recovery screen instead of a blank page), and uncaught errors/rejections are captured automatically — even if the app itself has crashed, since capture writes straight to local storage rather than relying on React state.</p>
+      <div className="ml-import-row"><button className="ghost-btn" onClick={onRefreshErrorLog}><RefreshCw size={13}/> Refresh</button><button className="danger-icon-btn" onClick={onClearErrorLog}><Trash2 size={13}/> Clear log</button></div>
+      {errorLogEntries.length ? <div className="error-log-list">{errorLogEntries.slice(0,15).map(e => <div className="error-log-row" key={e.id}>
+        <div><b>{e.message}</b><span>{e.context} · {new Date(e.timestamp).toLocaleString()}</span></div>
+        <span className={`token-status ${e.synced?"active":""}`}>{e.synced?"Synced":"Local only"}</span>
+      </div>)}</div> : <div className="config-empty small"><CheckCircle2 size={22}/><p>No errors captured. That's a good sign.</p></div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Backup & Recovery</h3></div>
+      <p className="field-hint">Export a full JSON snapshot of the entire workspace (projects, tasks, annotations, QA reviews, team, configs). Restoring replaces local data and prompts you to re-run Migration to push it to the cloud.</p>
+      <div className="ml-import-row">
+        <button className="ghost-btn" onClick={onExportBackup}><Download size={13}/> Export Full Backup</button>
+        <button className="ghost-btn" onClick={()=>restoreRef.current?.click()}><Upload size={13}/> Restore from Backup</button>
+        <input ref={restoreRef} type="file" accept="application/json" style={{display:"none"}} onChange={e=>{ const f=e.target.files?.[0]; if(f) onRestoreBackup(f, setRestoreMessage); e.target.value=""; }}/>
+      </div>
+      {restoreMessage && <div className={restoreMessage.ok ? "ml-import-result" : "form-error"}>{restoreMessage.ok ? <CheckCircle2 size={14}/> : <AlertCircle size={14}/>} {restoreMessage.message}</div>}
+      <p className="field-hint">This covers app-level data loss. True disaster recovery (point-in-time restore, daily snapshots) is a Supabase project setting — see below.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Permission Audit</h3></div>
+      <p className="field-hint">Roles enforced in this UI: <b>Admin</b> (Roles & Access, Integrations, Security, Cloud Migration tabs, and account-level actions on Team members) and <b>Team Lead</b> (project/config editing, alongside Admin). Both gates are checked in two places — hidden from navigation and re-checked at render — but this is still a UX convenience, not a security boundary.</p>
+      <div className="form-error" style={{background:"#fff7ed",borderColor:"#fed7aa",color:"#c2410c"}}><AlertCircle size={14}/> Client-side role checks can be bypassed by anyone calling Supabase directly (e.g. from the browser console). The only real boundary is Row Level Security on each table — verify every table below actually has RLS enabled and policies matching these roles, not just that the UI hides the button.</div>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Row Level Security — verify these exist</h3></div>
+      <p className="field-hint">Run this in the Supabase SQL Editor to see which of your tables don't have RLS enabled yet — anything returned here is currently readable/writable by any authenticated (or even anonymous, depending on your anon key policy) request:</p>
+      <pre className="sql-snippet">{`select tablename from pg_tables
+where schemaname = 'public' and rowsecurity = false;`}</pre>
+      <p className="field-hint">A reasonable starting policy per table — authenticated users can read/write, nothing else can:</p>
+      <pre className="sql-snippet">{`alter table tasks enable row level security;
+create policy "authenticated read/write" on tasks
+  for all using (auth.role() = 'authenticated')
+  with check (auth.role() = 'authenticated');
+-- repeat for: project_groups, projects, datasets, team_members,
+-- qa_reviews, notifications, audit_events, api_tokens, webhooks, error_logs`}</pre>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Secure File Access</h3></div>
+      <p className="field-hint">Task images currently use <code>getPublicUrl()</code> against the <code>task-images</code> storage bucket — meaning if that bucket is set to public, anyone with an image URL can view it without being logged in. This wasn't changed in this build because switching to signed URLs safely requires storing the storage <i>path</i> instead of a resolved URL and re-signing it on every view (signed URLs expire) — a data-model change worth doing deliberately rather than as part of a hardening pass that could break every existing image. Two options, in order of effort:</p>
+      <pre className="sql-snippet">{`-- Quick mitigation: require auth to read the bucket, keep public URLs disabled
+update storage.buckets set public = false where id = 'task-images';
+create policy "authenticated read" on storage.objects
+  for select using (bucket_id = 'task-images' and auth.role() = 'authenticated');`}</pre>
+      <p className="field-hint">Note: making the bucket private will break every image already stored with a public URL until the app is updated to resolve signed URLs on demand — plan this as its own build rather than flipping it here.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Rate Limiting</h3></div>
+      <p className="field-hint">Outbound webhooks are now throttled client-side (max ~1 delivery per webhook every 2 seconds) so a bulk action — like approving 50 tasks at once — can't flood an external endpoint. That's a UX/cost safeguard, not real protection: a client-side limit can't stop someone from calling your Supabase API directly. Real rate limiting has to sit in front of Supabase — either its built-in Auth rate limits (Dashboard → Authentication → Rate Limits) or a Postgres/Edge Function fronting writes for high-volume tables.</p>
+    </div>
+  </div>;
+}
+
+function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,verifyStatus,verifying,onVerify,lastMigratedAt,migrationDomains,migrationSingletons,imageMigration,onMigrateImages,base64ImageCount}) {
+  const domains = migrationDomains();
+  const singletons = migrationSingletons();
+  const all = [...domains, ...singletons];
+  const localCounts = Object.fromEntries(domains.map(d => [d.key, d.rows().length]));
+  const hasRun = Object.keys(migrationStatus).length > 0;
+  const stateIcon = (state) => state === "done" ? <CheckCircle2 size={15} className="mig-ok"/> : state === "error" ? <AlertCircle size={15} className="mig-err"/> : state === "running" ? <RefreshCw size={15} className="mig-spin"/> : <Clock3 size={15} className="mig-pending"/>;
+  return <div className="settings-card panel cloud-migration-panel">
+    <div className="settings-card-title"><div><h2>Cloud Migration</h2><p>Copy your browser data into Supabase. Your local data is never deleted by this — it stays as an automatic backup.</p></div><Database size={20}/></div>
+
+    <div className="cloud-detected-grid">
+      {domains.map(d => <div key={d.key} className="cloud-detected-card"><b>{localCounts[d.key]}</b><span>{d.label}</span></div>)}
+    </div>
+
+    <div className="cloud-migration-actions">
+      <button className="primary-btn" disabled={migrationRunning} onClick={onRunMigration}>
+        {migrationRunning ? <RefreshCw size={16} className="mig-spin"/> : <Upload size={16}/>}
+        {migrationRunning ? "Migrating..." : "Migrate to Cloud"}
+      </button>
+      <button className="secondary-btn" disabled={verifying || !hasRun} onClick={onVerify}><ShieldCheck size={15}/> {verifying ? "Verifying..." : "Verify migration"}</button>
+      {lastMigratedAt && <span className="cloud-last-run">Last migrated {new Date(lastMigratedAt).toLocaleString()}</span>}
+    </div>
+
+    {hasRun && <div className="cloud-status-list">
+      {all.map(d => {
+        const s = migrationStatus[d.key] || { state: "pending" };
+        return <div key={d.key} className={`cloud-status-row state-${s.state}`}>
+          {stateIcon(s.state)}
+          <span className="cloud-status-label">{d.label}</span>
+          <span className="cloud-status-detail">{s.state === "done" ? `${s.count} row${s.count===1?"":"s"} synced` : s.state === "error" ? s.error : s.state === "running" ? "Syncing..." : "Waiting"}</span>
+        </div>;
+      })}
+    </div>}
+
+    {Object.keys(verifyStatus).length > 0 && <div className="cloud-verify-list">
+      <h3>Verification</h3>
+      {domains.map(d => {
+        const v = verifyStatus[d.key];
+        if (!v) return null;
+        return <div key={d.key} className={`cloud-verify-row ${v.match ? "ok" : "mismatch"}`}>
+          <span>{d.label}</span>
+          <span>{v.error ? v.error : `Local ${v.local} · Cloud ${v.cloud}`}</span>
+          {v.match ? <CheckCircle2 size={14}/> : <AlertCircle size={14}/>}
+        </div>;
+      })}
+    </div>}
+
+    <div className="cloud-storage-section">
+      <h3>Cloud Storage — Images</h3>
+      <p>New uploads (Build 23 onward) already go straight to Supabase Storage instead of being embedded as base64. This converts any images imported before that change.</p>
+      {base64ImageCount > 0 ? <>
+        <div className="cloud-migration-actions">
+          <button className="secondary-btn" disabled={imageMigration.running} onClick={onMigrateImages}>
+            {imageMigration.running ? <RefreshCw size={15} className="mig-spin"/> : <Upload size={15}/>}
+            {imageMigration.running ? `Uploading ${imageMigration.done}/${imageMigration.total}...` : `Migrate ${base64ImageCount} local image${base64ImageCount===1?"":"s"} to Storage`}
+          </button>
+        </div>
+        {imageMigration.complete && !imageMigration.running && <div className="cloud-status-row state-done"><CheckCircle2 size={15} className="mig-ok"/><span className="cloud-status-label">Image migration</span><span className="cloud-status-detail">{imageMigration.done} uploaded{imageMigration.failed ? `, ${imageMigration.failed} failed` : ""}</span></div>}
+      </> : <div className="cloud-status-row state-done"><CheckCircle2 size={15} className="mig-ok"/><span className="cloud-status-label">All images already in Cloud Storage</span></div>}
+    </div>
+
+    <div className="guide-note"><ShieldCheck size={14}/><span>This uses upsert, so re-running the migration is always safe — existing cloud rows just get refreshed with your latest local data instead of duplicated.</span></div>
+  </div>;
+}
+
+function AppWithErrorBoundary() {
+  return <ErrorBoundary><App/></ErrorBoundary>;
+}
+
+export default AppWithErrorBoundary;
+
+
+
+function AuditTrailPage({events,projects,tasks,teamMembers,search,setSearch,filter,setFilter,project,setProject,user,setUser,task,setTask,date,setDate,selectedTask,setSelectedTask,onClear,onSeed}) {
+  const actions=["All Actions",...Array.from(new Set(events.map(e=>e.action))).sort()];
+  const users=["All Users",...Array.from(new Set(events.map(e=>e.actor).filter(Boolean))).sort()];
+  const projectName=id=>projects.find(p=>p.id===id)?.name||"General";
+  const taskName=id=>tasks.find(t=>t.id===id)?.name||id||"—";
+  const dayStart=days=>Date.now()-days*86400000;
+  const visible=events.filter(e=>{
+    const hay=`${e.action} ${e.actor} ${e.details} ${projectName(e.projectId)} ${taskName(e.taskId)}`.toLowerCase();
+    const dateOk=date==="All Time"||(date==="Today"&&new Date(e.timestamp)>=new Date(new Date().setHours(0,0,0,0)))||(date==="7 Days"&&new Date(e.timestamp).getTime()>=dayStart(7))||(date==="30 Days"&&new Date(e.timestamp).getTime()>=dayStart(30));
+    return (!search||hay.includes(search.toLowerCase()))&&(filter==="All Actions"||e.action===filter)&&(project==="All Projects"||e.projectId===project)&&(user==="All Users"||e.actor===user)&&(!task||taskName(e.taskId).toLowerCase().includes(task.toLowerCase())||(e.taskId||"").toLowerCase().includes(task.toLowerCase()))&&dateOk;
+  }).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [search, filter, project, user, date, task]);
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages);
+  const pageItems = visible.slice((clampedPage-1)*PAGE_SIZE, clampedPage*PAGE_SIZE);
+  const selected=selectedTask?visible.filter(e=>e.taskId===selectedTask):[];
+  const actionIcon=a=>a.includes("QA")||a.includes("Approved")?ClipboardCheck:a.includes("Assign")?Users:a.includes("Export")?Download:a.includes("Project")?FolderKanban:a.includes("Saved")?Save:a.includes("Submitted")?CheckCircle2:Activity;
+  const downloadAudit=()=>{ const rows=[["Timestamp","Action","Actor","Role","Project","Task","Details"],...visible.map(e=>[e.timestamp,e.action,e.actor,e.actorRole,projectName(e.projectId),taskName(e.taskId),e.details])]; const csv=rows.map(r=>r.map(v=>`"${String(v??"").replaceAll('"','""')}"`).join(",")).join("\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`annotatepro-audit-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url); };
+  const taskGroups=Array.from(new Set(visible.map(e=>e.taskId).filter(Boolean))).slice(0,12);
+  return <div className="page audit-page">
+    <div className="page-head"><div><span className="eyebrow">GOVERNANCE & TRACEABILITY</span><h1>Audit Trail</h1><p>Track who changed what, when it happened, and how each task moved through production.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={downloadAudit}><Download size={15}/> Export CSV</button><button className="danger-btn" onClick={onClear}><Trash2 size={15}/> Clear Log</button></div></div>
+    <div className="stats-grid audit-stats"><StatCard icon={Activity} label="Events" value={events.length} meta="Recorded actions"/><StatCard icon={Users} label="Contributors" value={new Set(events.map(e=>e.actor)).size} meta="Unique actors"/><StatCard icon={FileText} label="Tasks Tracked" value={new Set(events.map(e=>e.taskId).filter(Boolean)).size} meta="With history"/><StatCard icon={ShieldCheck} label="QA Events" value={events.filter(e=>e.action.includes("QA")||e.action.includes("Approved")||e.action.includes("Rejected")).length} meta="Review decisions"/></div>
+    <section className="panel audit-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search task, user, project or action..."/></div><select value={filter} onChange={e=>setFilter(e.target.value)}>{actions.map(a=><option key={a}>{a}</option>)}</select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><select value={user} onChange={e=>setUser(e.target.value)}>{users.map(u=><option key={u}>{u}</option>)}</select><select value={date} onChange={e=>setDate(e.target.value)}><option>All Time</option><option>Today</option><option>7 Days</option><option>30 Days</option></select><input value={task} onChange={e=>setTask(e.target.value)} placeholder="Task ID / name"/></section>
+    <div className="audit-grid"><section className="panel audit-list"><div className="section-header"><div><h2>Activity Timeline</h2><p>{visible.length} events match the current filters{totalPages>1?` · page ${clampedPage} of ${totalPages}`:""}.</p></div></div>{pageItems.length?pageItems.map(e=>{const Icon=actionIcon(e.action);return <button className={`audit-row ${selectedTask===e.taskId&&e.taskId?"active":""}`} key={e.id} onClick={()=>e.taskId&&setSelectedTask(e.taskId)}><span className="audit-icon"><Icon size={16}/></span><span className="audit-body"><strong>{e.action}</strong><em>{e.details}</em><small>{e.actor} · {e.actorRole} · {projectName(e.projectId)}{e.taskId?` · ${taskName(e.taskId)}`:""}</small></span><time>{new Date(e.timestamp).toLocaleString()}</time></button>}) : <div className="empty-state"><Activity size={30}/><h3>No audit events</h3><p>Try changing the filters or generate a fresh activity snapshot.</p><button className="secondary-btn" onClick={onSeed}><RefreshCw size={14}/> Rebuild baseline</button></div>}
+      {totalPages>1 && <div className="pagination-bar"><button disabled={clampedPage<=1} onClick={()=>setPage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedPage} of {totalPages}</span><button disabled={clampedPage>=totalPages} onClick={()=>setPage(p=>Math.min(totalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
+      </section>
+      <aside className="audit-side"><section className="panel"><div className="section-header"><div><h2>Task History</h2><p>{selectedTask?taskName(selectedTask):"Select a task from the timeline."}</p></div></div>{selectedTask?<div className="task-history">{selected.map(e=>{const Icon=actionIcon(e.action);return <div className="history-item" key={e.id}><span><Icon size={14}/></span><div><b>{e.action}</b><small>{e.details}</small><em>{e.actor} · {new Date(e.timestamp).toLocaleString()}</em></div></div>})}</div>:<div className="task-history-empty"><HistoryIcon/><span>Click a task event to inspect its complete history.</span></div>}</section><section className="panel"><div className="section-header"><div><h2>Tracked Tasks</h2><p>Quick task history access.</p></div></div><div className="audit-task-chips">{taskGroups.length?taskGroups.map(id=><button key={id} className={selectedTask===id?"active":""} onClick={()=>setSelectedTask(id)}>{taskName(id)}</button>):<span>No tasks in view</span>}</div></section></aside></div>
+  </div>;
+}
+function HistoryIcon(){return <Clock3 size={30}/>}
+
+function NotificationsPage({notifications,setNotifications,filter,setFilter,search,setSearch,tasks,projects,teamMembers}) {
+  const projectName = id => projects.find(p=>p.id===id)?.name || "General";
+  const memberName = id => teamMembers.find(m=>m.id===id)?.name || "System";
+  const typeOptions = ["All","Assignment","QA","Rework","Target","Project","System"];
+  const ensureSeed = () => {
+    if (notifications.length) return;
+    const now=Date.now();
+    const seed=[
+      {id:`n-${now}-1`,type:"Assignment",title:"Task assignment updated",message:"New annotation tasks are ready for the team.",projectId:tasks[0]?.projectId||projects[0]?.id,taskId:tasks[0]?.id,createdAt:new Date(now-8*60000).toISOString(),read:false},
+      {id:`n-${now}-2`,type:"QA",title:"QA review pending",message:"Submitted work is waiting for reviewer attention.",projectId:tasks[2]?.projectId||projects[0]?.id,taskId:tasks[2]?.id,createdAt:new Date(now-32*60000).toISOString(),read:false},
+      {id:`n-${now}-3`,type:"Target",title:"Daily target reminder",message:"Review team capacity and remaining targets for today.",createdAt:new Date(now-90*60000).toISOString(),read:true}
+    ]; setNotifications(seed);
+  };
+  useEffect(ensureSeed,[]);
+  const visible=notifications.filter(n=>(filter==="All"||n.type===filter)&&(`${n.title} ${n.message} ${projectName(n.projectId)}`.toLowerCase().includes(search.toLowerCase()))).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const NOTIF_PAGE_SIZE = 40;
+  const [notifPage, setNotifPage] = useState(1);
+  useEffect(() => { setNotifPage(1); }, [filter, search]);
+  const notifTotalPages = Math.max(1, Math.ceil(visible.length / NOTIF_PAGE_SIZE));
+  const clampedNotifPage = Math.min(notifPage, notifTotalPages);
+  const pagedNotifications = visible.slice((clampedNotifPage-1)*NOTIF_PAGE_SIZE, clampedNotifPage*NOTIF_PAGE_SIZE);
+  const unread=notifications.filter(n=>!n.read).length;
+  const markRead=id=>setNotifications(prev=>prev.map(n=>n.id===id?{...n,read:true}:n));
+  const markAll=()=>setNotifications(prev=>prev.map(n=>({...n,read:true})));
+  const remove=id=>setNotifications(prev=>prev.filter(n=>n.id!==id));
+  const clearAll=()=>setNotifications([]);
+  const iconFor=t=>t==="QA"?ClipboardCheck:t==="Rework"?RotateCcw:t==="Assignment"?Users:t==="Target"?Target:t==="Project"?FolderKanban:Bell;
+  return <div className="page notifications-page">
+    <div className="page-head"><div><span className="eyebrow">NOTIFICATION CENTER</span><h1>Notifications & Alerts</h1><p>Stay on top of assignments, QA, rework, targets and project activity.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={markAll}><Check size={15}/> Mark all read</button><button className="danger-btn" onClick={clearAll}><Trash2 size={15}/> Clear all</button></div></div>
+    <div className="stats-grid notifications-stats"><StatCard icon={Bell} label="Unread" value={unread} meta="Requires attention"/><StatCard icon={AlertCircle} label="Alerts" value={notifications.filter(n=>n.type==="Rework"||n.type==="QA").length} meta="QA & rework"/><StatCard icon={Users} label="Assignments" value={notifications.filter(n=>n.type==="Assignment").length} meta="Team activity"/><StatCard icon={Target} label="Targets" value={notifications.filter(n=>n.type==="Target").length} meta="Capacity reminders"/></div>
+    <div className="panel notification-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search notifications..."/></div><div className="notification-filters">{typeOptions.map(t=><button key={t} className={filter===t?"active":""} onClick={()=>setFilter(t)}>{t}</button>)}</div></div>
+    <div className="notification-list panel">{visible.length===0?<div className="empty-state"><Bell size={30}/><h3>No notifications</h3><p>Your notification center is clear.</p></div>:pagedNotifications.map(n=>{const Icon=iconFor(n.type);return <div key={n.id} className={`notification-row ${n.read?"read":"unread"}`}><div className="notification-icon"><Icon size={18}/></div><div className="notification-main"><div className="notification-title"><strong>{n.title}</strong>{!n.read&&<span className="unread-dot"/>}</div><p>{n.message}</p><div className="notification-meta"><span>{n.type}</span>{n.projectId&&<span>{projectName(n.projectId)}</span>}{n.taskId&&<span>{n.taskId}</span>}<span>{new Date(n.createdAt).toLocaleString()}</span></div></div><div className="notification-actions">{!n.read&&<button className="secondary-btn small-btn" onClick={()=>markRead(n.id)}><Check size={14}/> Read</button>}<button className="icon-btn" onClick={()=>remove(n.id)} title="Delete notification"><Trash2 size={16}/></button></div></div>})}</div>
+    {visible.length > NOTIF_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedNotifPage<=1} onClick={()=>setNotifPage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedNotifPage} of {notifTotalPages} · {visible.length} notifications</span><button disabled={clampedNotifPage>=notifTotalPages} onClick={()=>setNotifPage(p=>Math.min(notifTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
+  </div>;
+}
