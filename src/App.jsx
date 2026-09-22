@@ -11,6 +11,43 @@ import "./App.css";
 import { supabase } from "./supabaseClient.js";
 import JSZip from "jszip";
 
+// ---- Build 42: Error Monitoring ----
+// Bulletproof by design: this capture path never depends on React state or a
+// live session, so it keeps working even if the app itself has crashed.
+const ERROR_LOG_KEY = "annotatepro_error_log_v1";
+function logClientError(message, stack, context) {
+  try {
+    const raw = localStorage.getItem(ERROR_LOG_KEY);
+    const log = raw ? JSON.parse(raw) : [];
+    log.unshift({ id: `err-${Date.now()}-${Math.random().toString(36).slice(2,6)}`, message: String(message || "Unknown error").slice(0, 500), stack: String(stack || "").slice(0, 2000), context: context || "", timestamp: new Date().toISOString(), synced: false });
+    localStorage.setItem(ERROR_LOG_KEY, JSON.stringify(log.slice(0, 100)));
+  } catch { /* localStorage unavailable — nothing more we can do */ }
+}
+if (typeof window !== "undefined" && !window.__annotateProErrorHooksInstalled) {
+  window.__annotateProErrorHooksInstalled = true;
+  window.addEventListener("error", (e) => logClientError(e.message, e.error?.stack, "window.onerror"));
+  window.addEventListener("unhandledrejection", (e) => logClientError(e.reason?.message || String(e.reason), e.reason?.stack, "unhandledrejection"));
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false }; }
+  static getDerivedStateFromError() { return { hasError: true }; }
+  componentDidCatch(error, info) { logClientError(error.message, error.stack, `ErrorBoundary: ${(info.componentStack || "").slice(0, 300)}`); }
+  render() {
+    if (this.state.hasError) {
+      return <div className="crash-screen">
+        <div className="crash-card">
+          <AlertCircle size={32} />
+          <h2>Something went wrong</h2>
+          <p>AnnotatePro hit an unexpected error. Your data is safe — it's saved as you go. Reloading usually fixes this.</p>
+          <button className="primary-btn" onClick={() => window.location.reload()}>Reload AnnotatePro</button>
+        </div>
+      </div>;
+    }
+    return this.props.children;
+  }
+}
+
 const PROJECTS_KEY = "annotatepro_projects_v2";
 const TASKS_KEY = "annotatepro_tasks_v1";
 const DATASETS_KEY = "annotatepro_datasets_v1";
@@ -91,6 +128,33 @@ const emptyProject = {
   completedImages: 0, team: "Annotation Team", status: "Pending",
   startDate: "", dueDate: "", description: ""
 };
+
+// ---- Build 44: Storage optimization — downscale large images before upload.
+// Only ever shrinks (never crops), so percent-based annotation coordinates
+// stay valid regardless of the final pixel size. Falls back to the original
+// blob on any failure so a broken image can never block an import.
+function compressImageBlob(blob, maxDimension = 1920, quality = 0.85) {
+  return new Promise((resolve) => {
+    if (!blob || !blob.type || !blob.type.startsWith("image/") || blob.type.includes("svg")) { resolve(blob); return; }
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDimension / Math.max(img.width, img.height));
+      if (scale >= 1 || !img.width || !img.height) { URL.revokeObjectURL(url); resolve(blob); return; }
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.width * scale));
+        canvas.height = Math.max(1, Math.round(img.height * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        const outType = blob.type.includes("png") ? "image/png" : "image/jpeg";
+        canvas.toBlob((out) => { URL.revokeObjectURL(url); resolve(out || blob); }, outType, quality);
+      } catch { URL.revokeObjectURL(url); resolve(blob); }
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(blob); };
+    img.src = url;
+  });
+}
 
 function progressOf(p) {
   const total = Number(p.totalImages) || 0;
@@ -206,6 +270,32 @@ function App() {
     setProfileOpen(false);
   }
 
+  async function signOutAllDevices() {
+    await supabase.auth.signOut({ scope: "global" });
+    setProfileOpen(false);
+  }
+
+  // ---- Build 42: Session security — idle timeout ----
+  const lastActivityRef = useRef(Date.now());
+  useEffect(() => {
+    const mark = () => { lastActivityRef.current = Date.now(); };
+    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
+    events.forEach(evt => window.addEventListener(evt, mark, { passive: true }));
+    return () => events.forEach(evt => window.removeEventListener(evt, mark));
+  }, []);
+  useEffect(() => {
+    const minutes = appSettings.sessionIdleMinutes;
+    if (!minutes || minutes <= 0 || !session) return;
+    const id = setInterval(() => {
+      const idleMs = Date.now() - lastActivityRef.current;
+      if (idleMs >= minutes * 60000) {
+        logAudit("Session Auto-Locked", null, null, `Signed out after ${minutes} minutes of inactivity.`, currentUserName, "System");
+        supabase.auth.signOut();
+      }
+    }, 30000);
+    return () => clearInterval(id);
+  }, [appSettings.sessionIdleMinutes, session]);
+
   const [accountActionStatus, setAccountActionStatus] = useState({ loading: false, forEmail: null, message: "", error: false });
 
   const [roleProfiles, setRoleProfiles] = useState([]);
@@ -263,7 +353,8 @@ function App() {
     emailAssignments: true,
     emailQa: true,
     emailRework: true,
-    defaultPage: "Dashboard"
+    defaultPage: "Dashboard",
+    sessionIdleMinutes: 30
   }));
   const [settingsTab, setSettingsTab] = useState("Workspace");
   const [taskSettingsId, setTaskSettingsId] = useState(null);
@@ -1156,7 +1247,8 @@ function App() {
       if (!imageUrl && im.blob) {
         const path = `${targetDataset.projectId || "unassigned"}/${targetDatasetId}/${Date.now()}-${i}-${im.name}`;
         try {
-          const { error } = await supabase.storage.from("task-images").upload(path, im.blob, { cacheControl: "3600", upsert: false });
+          const compressed = await compressImageBlob(im.blob);
+          const { error } = await supabase.storage.from("task-images").upload(path, compressed, { cacheControl: "3600", upsert: false });
           if (error) throw error;
           imageUrl = supabase.storage.from("task-images").getPublicUrl(path).data.publicUrl;
         } catch {
@@ -1516,8 +1608,18 @@ function App() {
       setWebhooks(prev => prev.map(w => w.id === webhook.id ? { ...w, lastTriggeredAt: new Date().toISOString(), lastStatus: `Failed: ${err.message}` } : w));
     }
   }
+  const webhookRateLimitRef = useRef(new Map());
   function fireWebhooks(eventType, payload) {
-    webhooks.filter(w => w.enabled && (w.events || []).includes(eventType)).forEach(w => sendWebhookPayload(w, eventType, payload));
+    const now = Date.now();
+    webhooks.filter(w => w.enabled && (w.events || []).includes(eventType)).forEach(w => {
+      const lastFired = webhookRateLimitRef.current.get(w.id) || 0;
+      if (now - lastFired < 2000) { // max ~1 call per webhook per 2s — protects the receiving endpoint from bulk-action bursts
+        logAudit("Webhook Rate-Limited", null, null, `"${w.name}" skipped a rapid duplicate trigger for ${eventType}.`, "System", "Automation");
+        return;
+      }
+      webhookRateLimitRef.current.set(w.id, now);
+      sendWebhookPayload(w, eventType, payload);
+    });
   }
   function testWebhook(id) {
     const wh = webhooks.find(w => w.id === id);
@@ -1579,6 +1681,142 @@ function App() {
     const counts = {};
     tasks.filter(t => t.datasetId === datasetId).forEach(t => (annotationsByTask[t.id] || []).forEach(a => { counts[a.labelId] = (counts[a.labelId] || 0) + 1; }));
     return [...labels].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0)).filter(l => counts[l.id]).slice(0, 3).map(l => l.id);
+  }
+
+  // ---- Build 42: Security & Production Hardening ----
+  function exportWorkspaceBackup() {
+    const payload = {
+      exportedAt: new Date().toISOString(), workspaceName: appSettings?.workspaceName || "AnnotatePro", version: "backup-v1",
+      projectGroups, projects, datasets, tasks, teamMembers, projectConfigs, annotationsByTask, qaReviews,
+      notifications, auditEvents: auditEvents.slice(0, 500), appSettings
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = `annotatepro-backup-${new Date().toISOString().slice(0,10)}.json`; a.click();
+    logAudit("Workspace Backup Exported", null, null, `Full backup: ${projects.length} projects, ${tasks.length} tasks.`, currentUserName, "Admin");
+  }
+  function restoreWorkspaceBackup(file, onDone) {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!data || data.version !== "backup-v1") throw new Error("This file isn't a recognized AnnotatePro backup.");
+        if (!window.confirm(`Restore this backup? It will replace ${projects.length} current projects and ${tasks.length} tasks with ${data.projects?.length || 0} projects and ${data.tasks?.length || 0} tasks from the backup (dated ${new Date(data.exportedAt).toLocaleString()}). This can't be undone locally — run Migration afterward to push it to the cloud.`)) { onDone?.({ ok: false, message: "Cancelled" }); return; }
+        if (data.projectGroups) setProjectGroups(data.projectGroups);
+        if (data.projects) setProjects(data.projects);
+        if (data.datasets) setDatasets(data.datasets);
+        if (data.tasks) setTasks(data.tasks);
+        if (data.teamMembers) setTeamMembers(data.teamMembers);
+        if (data.projectConfigs) setProjectConfigs(data.projectConfigs);
+        if (data.annotationsByTask) setAnnotationsByTask(data.annotationsByTask);
+        if (data.qaReviews) setQaReviews(data.qaReviews);
+        if (data.notifications) setNotifications(data.notifications);
+        logAudit("Workspace Backup Restored", null, null, `Restored backup from ${new Date(data.exportedAt).toLocaleString()}.`, currentUserName, "Admin");
+        onDone?.({ ok: true, message: `Restored ${data.projects?.length || 0} projects and ${data.tasks?.length || 0} tasks. Run Migration to push this to the cloud.` });
+      } catch (err) {
+        onDone?.({ ok: false, message: `Restore failed: ${err.message}` });
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  // Error log: captured to localStorage even if the app crashes (see logClientError
+  // near the top of the file); this just surfaces it in the UI and, best-effort,
+  // syncs unsynced entries to the cloud once a session and table exist.
+  const [errorLogEntries, setErrorLogEntries] = useState(() => readStorage(ERROR_LOG_KEY, []));
+  function refreshErrorLog() { setErrorLogEntries(readStorage(ERROR_LOG_KEY, [])); }
+  function clearErrorLog() { localStorage.setItem(ERROR_LOG_KEY, "[]"); setErrorLogEntries([]); }
+  useEffect(() => {
+    if (!session) return;
+    const unsynced = errorLogEntries.filter(e => !e.synced);
+    if (!unsynced.length) return;
+    Promise.all(unsynced.map(e => supabase.from("error_logs").insert({ id: e.id, message: e.message, stack: e.stack, context: e.context, occurred_at: e.timestamp }))).then(results => {
+      const anySucceeded = results.some(r => !r.error);
+      if (anySucceeded) {
+        const next = errorLogEntries.map(e => unsynced.some(u => u.id === e.id) ? { ...e, synced: true } : e);
+        localStorage.setItem(ERROR_LOG_KEY, JSON.stringify(next));
+        setErrorLogEntries(next);
+      }
+    }).catch(() => {});
+  }, [session, errorLogEntries]);
+
+  // ---- Build 43: Testing & Regression — live data-integrity health check ----
+  function runHealthCheck() {
+    const results = [];
+    const push = (area, label, status, detail) => results.push({ id: `${area}-${label}`.toLowerCase().replace(/\s+/g,"-"), area, label, status, detail });
+
+    // Projects
+    const groupIds = new Set(projectGroups.map(g => g.id));
+    const badProjects = projects.filter(p => p.groupId && !groupIds.has(p.groupId));
+    push("Projects", "Project → group references", badProjects.length ? "fail" : "pass", badProjects.length ? `${badProjects.length} project(s) reference a group that no longer exists.` : `All ${projects.length} projects reference a valid group.`);
+    const dupProjectIds = projects.length - new Set(projects.map(p=>p.id)).size;
+    push("Projects", "Duplicate project IDs", dupProjectIds ? "fail" : "pass", dupProjectIds ? `${dupProjectIds} duplicate ID(s) found.` : "No duplicate project IDs.");
+
+    // Datasets
+    const projectIds = new Set(projects.map(p => p.id));
+    const badDatasets = datasets.filter(d => d.projectId && !projectIds.has(d.projectId));
+    push("Datasets", "Dataset → project references", badDatasets.length ? "fail" : "pass", badDatasets.length ? `${badDatasets.length} dataset(s) reference a missing project.` : `All ${datasets.length} datasets reference a valid project.`);
+
+    // Tasks
+    const datasetIds = new Set(datasets.map(d => d.id));
+    const badTaskProject = tasks.filter(t => t.projectId && !projectIds.has(t.projectId));
+    push("Tasks", "Task → project references", badTaskProject.length ? "fail" : "pass", badTaskProject.length ? `${badTaskProject.length} task(s) reference a missing project.` : `All ${tasks.length} tasks reference a valid project.`);
+    const badTaskDataset = tasks.filter(t => t.datasetId && !datasetIds.has(t.datasetId));
+    push("Tasks", "Task → dataset references", badTaskDataset.length ? "warn" : "pass", badTaskDataset.length ? `${badTaskDataset.length} task(s) reference a missing dataset.` : "All task-dataset references resolve.");
+    const dupTaskIds = tasks.length - new Set(tasks.map(t=>t.id)).size;
+    push("Tasks", "Duplicate task IDs", dupTaskIds ? "fail" : "pass", dupTaskIds ? `${dupTaskIds} duplicate ID(s) found.` : "No duplicate task IDs.");
+
+    // Annotation
+    const taskIdSet = new Set(tasks.map(t => t.id));
+    const orphanAnnotationKeys = Object.keys(annotationsByTask).filter(id => !taskIdSet.has(id) && (annotationsByTask[id]||[]).length);
+    push("Annotation", "Orphaned annotation sets", orphanAnnotationKeys.length ? "warn" : "pass", orphanAnnotationKeys.length ? `${orphanAnnotationKeys.length} task ID(s) with saved annotations no longer have a matching task.` : "No orphaned annotation data.");
+    let badLabelRefs = 0;
+    Object.entries(annotationsByTask).forEach(([tid, list]) => {
+      const t = tasks.find(x => x.id === tid);
+      if (!t) return;
+      const config = getGroupConfig(getGroupIdForTask(t));
+      const labelIds = new Set((config.labels||[]).map(l=>l.id));
+      (list||[]).forEach(a => { if (!labelIds.has(a.labelId)) badLabelRefs++; });
+    });
+    push("Annotation", "Annotation → label references", badLabelRefs ? "warn" : "pass", badLabelRefs ? `${badLabelRefs} annotation(s) reference a label no longer in that project's schema.` : "All annotations reference a valid label.");
+
+    // QA
+    const orphanReviews = Object.keys(qaReviews).filter(id => !taskIdSet.has(id));
+    push("QA", "Orphaned QA reviews", orphanReviews.length ? "warn" : "pass", orphanReviews.length ? `${orphanReviews.length} review(s) reference a task that no longer exists.` : "No orphaned QA reviews.");
+
+    // Team
+    const emailCounts = {};
+    teamMembers.forEach(m => { if (m.email) emailCounts[m.email] = (emailCounts[m.email]||0)+1; });
+    const dupEmails = Object.values(emailCounts).filter(c=>c>1).length;
+    push("Team", "Duplicate member emails", dupEmails ? "warn" : "pass", dupEmails ? `${dupEmails} email address(es) used by more than one member.` : "No duplicate member emails.");
+    const memberIdSet = new Set(teamMembers.map(m=>m.id));
+    const badAssignee = tasks.filter(t => t.assigneeId && !memberIdSet.has(t.assigneeId));
+    const badReviewer = tasks.filter(t => t.reviewerId && !memberIdSet.has(t.reviewerId));
+    push("Team", "Task → assignee/reviewer references", (badAssignee.length+badReviewer.length) ? "warn" : "pass", (badAssignee.length+badReviewer.length) ? `${badAssignee.length} assignee + ${badReviewer.length} reviewer reference(s) point to a removed member.` : "All assignee/reviewer references resolve.");
+
+    // Workload
+    const zeroCapacity = teamMembers.filter(m => m.status === "Active" && (Number(m.capacity)||0) <= 0);
+    push("Workload", "Active members with zero capacity", zeroCapacity.length ? "warn" : "pass", zeroCapacity.length ? `${zeroCapacity.length} active member(s) have 0 task capacity, so they'll never receive auto-assignments.` : "All active members have usable capacity.");
+
+    // Notifications / Audit — informational size checks
+    push("Notifications", "Notification volume", notifications.length > 500 ? "warn" : "pass", `${notifications.length} notifications stored.`);
+    push("Audit", "Audit log size", auditEvents.length >= 2000 ? "warn" : "pass", `${auditEvents.length} / 2000 audit events (oldest entries drop off past the cap).`);
+
+    // Authentication / Permissions
+    push("Authentication", "Session present", session ? "pass" : "fail", session ? `Signed in as ${currentUserEmail}.` : "No active session.");
+    push("Permissions", "Recognized role", ["Admin","Team Lead","Reviewer","Annotator"].includes(currentUserRole) ? "pass" : "warn", `Current role: ${currentUserRole || "unset"}.`);
+
+    // Cloud storage
+    const base64Count = tasks.filter(t => t.image && t.image.startsWith("data:")).length;
+    push("Cloud Storage", "Images not yet migrated", base64Count ? "warn" : "pass", base64Count ? `${base64Count} task image(s) are still stored inline (base64) instead of Supabase Storage.` : "All task images are in Supabase Storage.");
+
+    // Performance & Scalability (Build 44)
+    push("Performance", "Task volume", tasks.length > 5000 ? "warn" : "pass", `${tasks.length.toLocaleString()} tasks in memory. Paginated views (Import, Audit Trail, Notifications) stay fast at any size; unpaginated dashboards and filters may slow down past ~5,000.`);
+    push("Performance", "Audit log volume", auditEvents.length >= 1800 ? "warn" : "pass", `${auditEvents.length.toLocaleString()} / 2,000 audit events. Nearing the cap means older history is about to start dropping off.`);
+    const largeAnnotationTasks = Object.values(annotationsByTask).filter(l => (l||[]).length > 150).length;
+    push("Performance", "Very dense annotation sets", largeAnnotationTasks ? "warn" : "pass", largeAnnotationTasks ? `${largeAnnotationTasks} task(s) have 150+ regions — canvas panning/dragging may feel slower on those specific images.` : "No unusually dense annotation sets.");
+
+    logAudit("Health Check Run", null, null, `${results.filter(r=>r.status==="fail").length} failing, ${results.filter(r=>r.status==="warn").length} warnings, ${results.filter(r=>r.status==="pass").length} passing.`, currentUserName, "Admin");
+    return results;
   }
 
   // ---- Build 39: Global Search & Command Center ----
@@ -1695,9 +1933,18 @@ function App() {
 
 
   function deleteProject(id) {
-    if (!window.confirm("Delete this project?")) return;
+    const orphanedTasks = tasks.filter(t => t.projectId === id);
+    const confirmMsg = orphanedTasks.length
+      ? `Delete this project? Its ${orphanedTasks.length} task${orphanedTasks.length===1?"":"s"} will be deleted too — this can't be undone.`
+      : "Delete this project?";
+    if (!window.confirm(confirmMsg)) return;
+    const removedIdSet = new Set(orphanedTasks.map(t => t.id));
     setProjects(prev => prev.filter(p => p.id !== id));
+    setTasks(prev => prev.filter(t => t.projectId !== id));
+    setAnnotationsByTask(prev => Object.fromEntries(Object.entries(prev).filter(([tid]) => !removedIdSet.has(tid))));
+    setQaReviews(prev => Object.fromEntries(Object.entries(prev).filter(([tid]) => !removedIdSet.has(tid))));
     syncDelete("projects", id);
+    if (session) orphanedTasks.forEach(t => syncDelete("tasks", t.id));
     if (workspaceProject === id) setWorkspaceProject(projects.find(p => p.id !== id)?.id || "");
   }
 
@@ -2270,8 +2517,9 @@ function App() {
     });
 
     const uploadFile = async file => {
+      const compressed = await compressImageBlob(file);
       const path = `${targetProjectId || "unassigned"}/${targetDatasetId || "unassigned"}/${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${file.name}`;
-      const { error } = await supabase.storage.from("task-images").upload(path, file, { cacheControl: "3600", upsert: false });
+      const { error } = await supabase.storage.from("task-images").upload(path, compressed, { cacheControl: "3600", upsert: false });
       if (error) {
         console.warn("[Storage] upload failed, falling back to local base64:", error.message);
         return { image: await readAsDataUrl(file), source: "Local upload (offline)" };
@@ -2309,6 +2557,8 @@ function App() {
     if (index < 0) return;
     if (!window.confirm(`Remove ${tasks[index].name} from the dataset?`)) return;
     setTasks(prev => prev.filter(t => t.id !== id));
+    setAnnotationsByTask(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setQaReviews(prev => { const next = { ...prev }; delete next[id]; return next; });
     syncDelete("tasks", id);
     setSelectedTaskIndex(prev => Math.max(0, Math.min(prev, tasks.length - 2)));
     setDatasetToast("Image removed");
@@ -2320,7 +2570,10 @@ function App() {
     if (!count) return;
     if (!window.confirm(`Remove all ${count} image${count>1?"s":""} in this dataset?`)) return;
     const removedIds = tasks.filter(t => t.datasetId === datasetId).map(t => t.id);
+    const removedIdSet = new Set(removedIds);
     setTasks(prev => prev.filter(t => t.datasetId !== datasetId));
+    setAnnotationsByTask(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !removedIdSet.has(id))));
+    setQaReviews(prev => Object.fromEntries(Object.entries(prev).filter(([id]) => !removedIdSet.has(id))));
     if (session) removedIds.forEach(id => syncDelete("tasks", id));
     setSelectedTaskIndex(0);
     setDatasetToast("Dataset images cleared");
@@ -2655,10 +2908,12 @@ function App() {
 
   function deleteMember(member) {
     if (member.id === "m1") return;
-    const affected = tasks.filter(t => t.assigneeId === member.id).map(t => t.id);
+    const affectedAssignee = tasks.filter(t => t.assigneeId === member.id).map(t => t.id);
+    const affectedReviewer = tasks.filter(t => t.reviewerId === member.id).map(t => t.id);
     setTeamMembers(prev => prev.filter(m => m.id !== member.id));
-    setTasks(prev => prev.map(t => t.assigneeId === member.id ? { ...t, assigneeId: null } : t));
-    affected.forEach(id => syncUpdate("tasks", id, { assignee_id: null }));
+    setTasks(prev => prev.map(t => (t.assigneeId === member.id || t.reviewerId === member.id) ? { ...t, assigneeId: t.assigneeId === member.id ? null : t.assigneeId, reviewerId: t.reviewerId === member.id ? null : t.reviewerId } : t));
+    affectedAssignee.forEach(id => syncUpdate("tasks", id, { assignee_id: null }));
+    affectedReviewer.forEach(id => syncUpdate("tasks", id, { reviewer_id: null }));
     syncDelete("team_members", member.id);
     setTeamMessage(`${member.name} removed from the workspace`);
     setTimeout(() => setTeamMessage(""), 2600);
@@ -3555,7 +3810,10 @@ function App() {
           isAdmin={isAdmin} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole}
           apiTokens={apiTokens} onGenerateToken={generateApiToken} onRevokeToken={revokeApiToken} onDeleteToken={deleteApiToken}
           webhooks={webhooks} onCreateWebhook={createWebhook} onUpdateWebhook={updateWebhook} onDeleteWebhook={deleteWebhook} onTestWebhook={testWebhook}
-          projects={projects} projectGroups={projectGroups} onImportMlPredictions={importMlPredictions} onExportProjectJson={exportProjectJson} />}
+          projects={projects} projectGroups={projectGroups} onImportMlPredictions={importMlPredictions} onExportProjectJson={exportProjectJson}
+          errorLogEntries={errorLogEntries} onRefreshErrorLog={refreshErrorLog} onClearErrorLog={clearErrorLog}
+          onExportBackup={exportWorkspaceBackup} onRestoreBackup={restoreWorkspaceBackup} onSignOutAllDevices={signOutAllDevices}
+          onRunHealthCheck={runHealthCheck} />}
 
         <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
         {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
@@ -3782,6 +4040,7 @@ function Workspace({
     return projectMatch && searchMatch && statusMatch;
   }), [tasks, workspaceProject, taskSearch, taskFilter]);
   const filteredLabels = labels.filter(label => !labelSearch.trim() || label.name.toLowerCase().includes(labelSearch.trim().toLowerCase()));
+  const labelById = useMemo(() => Object.fromEntries(labels.map(l => [l.id, l])), [labels]);
   const currentProject = projects.find(p => p.id === workspaceProject);
   const selectedLabelObject = labels.find(l => l.id === selectedLabel);
   const objectCountByLabel = currentAnnotations.reduce((acc, a) => { acc[a.labelId] = (acc[a.labelId] || 0) + 1; return acc; }, {});
@@ -3821,7 +4080,7 @@ function Workspace({
               const active = index === selectedTaskIndex;
               return <button key={task.id} className={`task-queue-row ${active ? "active" : ""}`} onClick={() => { setSelectedTaskIndex(index); setZoom(1); setPan({x:0,y:0}); }}>
                 <span className="task-check">{active ? <Check size={11}/> : <span/>}</span>
-                <div className="task-thumb"><img src={task.image} alt=""/></div>
+                <div className="task-thumb"><img src={task.image} alt="" loading="lazy" decoding="async"/></div>
                 <div className="task-row-copy"><b>{task.id}</b><span>{task.name}</span><small>{task.status}</small></div>
                 <span className="task-row-count">{task.status === "Pending" ? "" : "•"}</span>
               </button>;
@@ -3841,7 +4100,7 @@ function Workspace({
             {currentTask ? <div ref={canvasRef} className="annotation-canvas build8-canvas" style={{transform:`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={onCanvasPointerUp} onDoubleClick={onCanvasDoubleClick}>
               <img ref={imageRef} src={currentTask.image} alt={currentTask.name} onError={handleImageError} draggable="false"/>
               <div className="annotation-overlay">
-                {currentAnnotations.map((a,index)=><AnnotationShape key={a.id} a={a} index={index} selected={(selectedIds||[a.id===selectedAnnotationId?a.id:null]).includes(a.id)} onSelect={()=>selectAnnotation(a.id)} update={updateAnnotation} onEditStart={startAnnotationEdit} labels={labels} onInsertVertex={insertVertex} onDeleteVertex={deleteVertex}/>) }
+                {currentAnnotations.map((a,index)=><AnnotationShape key={a.id} a={a} index={index} selected={(selectedIds||[a.id===selectedAnnotationId?a.id:null]).includes(a.id)} onEditStart={startAnnotationEdit} label={labelById[a.labelId]} onInsertVertex={insertVertex} onDeleteVertex={deleteVertex}/>) }
                 {drawing && <DrawingPreview drawing={drawing} color={selectedLabelObject?.color || "#2563eb"}/>}
                 {marquee && <div className="marquee-box" style={{left:`${Math.min(marquee.start.x,marquee.current.x)}%`,top:`${Math.min(marquee.start.y,marquee.current.y)}%`,width:`${Math.abs(marquee.current.x-marquee.start.x)}%`,height:`${Math.abs(marquee.current.y-marquee.start.y)}%`}}/>}
               </div>
@@ -3903,8 +4162,7 @@ function Workspace({
   );
 }
 
-function AnnotationShape({ a, index, selected, onSelect, onEditStart, labels, onInsertVertex, onDeleteVertex }) {
-  const label = labels.find(l=>l.id===a.labelId);
+const AnnotationShape = React.memo(function AnnotationShape({ a, index, selected, onEditStart, label, onInsertVertex, onDeleteVertex }) {
   const color = a.color || label?.color || "#2563eb";
   const style = { "--annotation-color": color };
   if (a.hidden) return null;
@@ -3938,7 +4196,7 @@ function AnnotationShape({ a, index, selected, onSelect, onEditStart, labels, on
     </svg>;
   }
   return null;
-}
+});
 
 function DrawingPreview({drawing,color}) {
   if (drawing.type === "rectangle") { const s=drawing.start,c=drawing.current; return <div className="drawing-box" style={{left:`${Math.min(s.x,c.x)}%`,top:`${Math.min(s.y,c.y)}%`,width:`${Math.abs(c.x-s.x)}%`,height:`${Math.abs(c.y-s.y)}%`,borderColor:color}}/>; }
@@ -4264,7 +4522,7 @@ function TaxonomyManager({ config, onAddLabel, onEditLabel, onDeleteLabel, onCre
       </div>
       <div className="ui-preview-panel">
         <span className="section-label">UI PREVIEW</span>
-        <div className="ui-preview-image">{previewTask ? <img src={previewTask.image} alt=""/> : <div className="ui-preview-empty"><ImageIcon size={26}/><span>No sample image yet</span></div>}</div>
+        <div className="ui-preview-image">{previewTask ? <img src={previewTask.image} alt="" loading="lazy" decoding="async"/> : <div className="ui-preview-empty"><ImageIcon size={26}/><span>No sample image yet</span></div>}</div>
         <div className="ui-preview-labels"><span className="section-label">labels</span><div className="ui-preview-label-chips">{labels.length ? labels.map(l=><span key={l.id} className="preview-chip" style={{background:`${l.color}22`,color:l.color,borderColor:`${l.color}55`}}>{l.name}{l.shortcut ? ` (${l.shortcut.toUpperCase()})` : ""}</span>) : <span className="preview-chip-empty">No labels yet</span>}</div></div>
         <div className="ui-preview-regions"><span className="section-label">usage</span><div className="taxonomy-usage-list">{labels.length ? [...labels].sort((a,b)=>(labelUsageStats?.[b.id]||0)-(labelUsageStats?.[a.id]||0)).slice(0,6).map(l=><div key={l.id} className="taxonomy-usage-row"><span className="schema-color" style={{background:l.color}}/><span>{l.name}</span><b>{labelUsageStats?.[l.id]||0}</b></div>) : <div className="ui-preview-regions-empty"><MousePointer2 size={16}/><span>Usage stats appear once annotators start working.</span></div>}</div></div>
       </div>
@@ -4589,11 +4847,13 @@ const SEARCH_CATEGORY_META = [
 
 function CommandPalette({ onClose, getResults, quickActions, recentItems, favoriteItems, isFavorite, onToggleFavorite, onSelect }) {
   const [query, setQuery] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => { const id = setTimeout(() => setDebouncedQuery(query), 150); return () => clearTimeout(id); }, [query]);
 
-  const results = getResults(query);
+  const results = getResults(debouncedQuery);
   const sections = [];
   if (!results) {
     if (favoriteItems.length) sections.push(["Favorites", favoriteItems]);
@@ -4704,6 +4964,13 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
   const currentTask = taskProjects.find(p => p.id === importTaskId) || taskProjects[0];
   const taskDatasets = datasets.filter(d => d.projectId === currentTask?.id);
   const activeDataset = datasets.find(d => d.id === activeDatasetId && d.projectId === currentTask?.id);
+  const taskIndexById = useMemo(() => Object.fromEntries(tasks.map((t,i) => [t.id, i])), [tasks]);
+  const IMAGE_PAGE_SIZE = 60;
+  const [imagePage, setImagePage] = useState(1);
+  useEffect(() => { setImagePage(1); }, [search, status, activeDatasetId, view]);
+  const imageTotalPages = Math.max(1, Math.ceil(filteredTasks.length / IMAGE_PAGE_SIZE));
+  const clampedImagePage = Math.min(imagePage, imageTotalPages);
+  const pagedTasks = filteredTasks.slice((clampedImagePage-1)*IMAGE_PAGE_SIZE, clampedImagePage*IMAGE_PAGE_SIZE);
 
   if (activeDataset) {
     const dsTasks = tasks.filter(t => t.datasetId === activeDataset.id);
@@ -4729,7 +4996,8 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
       </section>}
       <section className="panel task-library"><div className="task-library-head"><div><h2>Dataset Images</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
         <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search image name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {dsTasks.length}</span></div>
-        {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{filteredTasks.map((t)=>{const originalIndex=tasks.findIndex(x=>x.id===t.id);return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt=""/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{filteredTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name}/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+        {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{pagedTasks.map((t)=>{const originalIndex=taskIndexById[t.id] ?? -1;return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt="" loading="lazy" decoding="async"/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{pagedTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name} loading="lazy" decoding="async"/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+        {filteredTasks.length > IMAGE_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedImagePage<=1} onClick={()=>setImagePage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedImagePage} of {imageTotalPages} · {filteredTasks.length} images</span><button disabled={clampedImagePage>=imageTotalPages} onClick={()=>setImagePage(p=>Math.min(imageTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
       </section>
       <div className="dataset-help"><div><ShieldCheck size={18}/><div><b>Local-first dataset storage</b><p>Uploaded images are stored in your browser as data URLs, so your imported tasks remain available after refreshing the page on the same device.</p></div></div><span>Build 17</span></div>
     </div>;
@@ -4753,7 +5021,7 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
         return <article key={ds.id} className={`dataset-card ${archived?"archived":""}`}>
           {archived && <span className="archived-badge">Archived</span>}
           <button className="dataset-card-main" onClick={()=>setActiveDatasetId(ds.id)}>
-            <div className="dataset-card-thumbs">{preview.length ? preview.map(t=><img key={t.id} src={t.image} alt=""/>) : <div className="dataset-card-thumb-empty"><ImageIcon size={18}/></div>}</div>
+            <div className="dataset-card-thumbs">{preview.length ? preview.map(t=><img key={t.id} src={t.image} alt="" loading="lazy" decoding="async"/>) : <div className="dataset-card-thumb-empty"><ImageIcon size={18}/></div>}</div>
             <div className="category-tile-title-row"><b>{ds.name}</b><span className={`health-dot ${dsValidation.valid?"health-healthy":"health-at-risk"}`} title={dsValidation.valid?"Validated":dsValidation.issues.join(", ")}/></div>
             <span className="dataset-card-meta">v{ds.version || 1} · {ds.stage || "Draft"} · {dsTasks.length} images · {annotated} annotated</span>
           </button>
@@ -5027,7 +5295,7 @@ function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, sel
             {queue.length ? queue.map(task => {
               const review = reviews[task.id];
               return <button key={task.id} className={`qa-task-row ${selectedTask?.id===task.id?"selected":""}`} onClick={()=>onSelect(task.id)}>
-                <div className="qa-thumb"><img src={task.image} alt="" /></div>
+                <div className="qa-thumb"><img src={task.image} alt="" loading="lazy" decoding="async" /></div>
                 <div className="qa-task-main"><b>{task.name}</b><span>{task.id} · {review?.reviewer || "Awaiting QA"}</span></div>
                 <div className="qa-task-count"><strong>{review?.annotationCount ?? "—"}</strong><span>objects</span></div>
                 <StatusBadge status={review?.decision || "Pending Review"} />
@@ -5040,7 +5308,7 @@ function QAReviews({ tasks, queue, stats, selectedTask, selectedAnnotations, sel
           {selectedTask ? <>
             <div className="qa-review-head"><div><span className="eyebrow">ANNOTATION INSPECTION</span><h2>{selectedTask.name}</h2><p>{selectedTask.id} · {selectedAnnotations.length} annotation{selectedAnnotations.length===1?"":"s"}</p></div><StatusBadge status={selectedReview?.decision || "Pending Review"} /></div>
             <div className="qa-image-stage">
-              <img src={selectedTask.image} alt={selectedTask.name} />
+              <img src={selectedTask.image} alt={selectedTask.name} loading="lazy" decoding="async" />
               {selectedAnnotations.slice(0,30).map((a,i) => a.type==="rectangle"
                 ? <div key={a.id} className="qa-box" style={{left:`${a.x}%`,top:`${a.y}%`,width:`${a.w}%`,height:`${a.h}%`,borderColor:a.color}}><span>{i+1}</span></div>
                 : a.points?.length ? <div key={a.id} className="qa-point-mark" style={{left:`${a.points[0].x}%`,top:`${a.points[0].y}%`,borderColor:a.color}}><span>{i+1}</span></div> : null)}
@@ -5207,7 +5475,7 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
           <div className="team-detail-head"><div className="detail-profile"><div className="detail-avatar">{initials(selectedMember.name)}</div><div><h2>{selectedMember.name}</h2><p>{selectedMember.email}</p><div className="member-tags"><em className="role-pill">{selectedMember.role}</em><em className={`member-status ${selectedMember.status.toLowerCase()}`}><i></i>{selectedMember.status}</em></div></div></div><div className="detail-actions"><button className="secondary-btn" onClick={()=>onEdit(selectedMember)}><Edit3 size={14}/> Edit</button><button className="icon-btn" title={selectedMember.status === "Active" ? "Deactivate" : "Activate"} onClick={()=>onToggleStatus(selectedMember)}>{selectedMember.status === "Active" ? <Pause size={15}/> : <Play size={15}/>}</button><button className="icon-btn danger" title="Remove member" onClick={()=>onDelete(selectedMember)}><Trash2 size={15}/></button></div></div>
           <div className="detail-metrics"><div><span>Assigned</span><b>{assignedTasks.length}</b></div><div><span>Capacity</span><b>{selectedMember.capacity || 0}</b></div><div><span>Workload</span><b>{workload}%</b></div><div><span>QA Score</span><b>{selectedMember.qaScore ? `${selectedMember.qaScore}%` : "—"}</b></div></div>
           <div className="team-detail-section"><div className="section-title"><div><h3>Project Access</h3><p>Projects this member can work on</p></div><ShieldCheck size={16}/></div><div className="project-access-list">{(selectedMember.projects || []).length ? selectedMember.projects.map(id=><div key={id}><FolderKanban size={14}/><span>{projectName(id)}</span><Check size={14}/></div>) : <div className="no-access">No projects assigned.</div>}</div></div>
-          <div className="team-detail-section"><div className="section-title"><div><h3>Current Assignments</h3><p>Tasks currently allocated to this member</p></div><span>{assignedTasks.length}</span></div>{assignedTasks.length ? <div className="assignment-list">{assignedTasks.map(task=><div className="assignment-row" key={task.id}><div className="assignment-thumb">{task.image ? <img src={task.image} alt=""/> : <ImageIcon size={15}/>}</div><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><StatusBadge status={task.status}/><button className="icon-btn" onClick={()=>onAssign(task.id, "")} title="Unassign"><X size={14}/></button></div>)}</div> : <div className="team-empty compact"><ClipboardCheck size={25}/><p>No tasks assigned yet.</p></div>}</div>
+          <div className="team-detail-section"><div className="section-title"><div><h3>Current Assignments</h3><p>Tasks currently allocated to this member</p></div><span>{assignedTasks.length}</span></div>{assignedTasks.length ? <div className="assignment-list">{assignedTasks.map(task=><div className="assignment-row" key={task.id}><div className="assignment-thumb">{task.image ? <img src={task.image} alt="" loading="lazy" decoding="async"/> : <ImageIcon size={15}/>}</div><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><StatusBadge status={task.status}/><button className="icon-btn" onClick={()=>onAssign(task.id, "")} title="Unassign"><X size={14}/></button></div>)}</div> : <div className="team-empty compact"><ClipboardCheck size={25}/><p>No tasks assigned yet.</p></div>}</div>
           {isAdmin ? <div className="team-detail-section"><div className="section-title"><div><h3>Account Access</h3><p>Login account for this member (separate from their roster entry above)</p></div><LogOut size={16} style={{transform:"scaleX(-1)"}}/></div>
             <div className="account-access-row">
               <span>{selectedMember.email || "No email on file"}</span>
@@ -5463,13 +5731,14 @@ function Detail({label,value}){return <div className="detail-box"><span>{label}<
 
 
 function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole,
-  apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson }) {
+  apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson,
+  errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, onRunHealthCheck }) {
   const tabs = [
     ["Workspace", SlidersHorizontal, "Workspace"],
     ["Annotation", Grid3X3, "Annotation"],
     ["Notifications", Bell, "Notifications"],
     ["Preferences", Settings, "Preferences"],
-    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Integrations", Zap, "Integrations"], ["Cloud Migration", Database, "Cloud"]] : [])
+    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Integrations", Zap, "Integrations"], ["Security", ShieldCheck, "Security"], ["Diagnostics", CheckSquare, "Diagnostics"], ["Cloud Migration", Database, "Cloud"]] : [])
   ];
   const Toggle = ({ label, description, value, onChange }) => (
     <label className="settings-toggle-row">
@@ -5522,6 +5791,8 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
           </div>}
           {tab === "Roles" && isAdmin && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
           {tab === "Integrations" && isAdmin && <IntegrationsSettingsTab apiTokens={apiTokens} onGenerateToken={onGenerateToken} onRevokeToken={onRevokeToken} onDeleteToken={onDeleteToken} webhooks={webhooks} onCreateWebhook={onCreateWebhook} onUpdateWebhook={onUpdateWebhook} onDeleteWebhook={onDeleteWebhook} onTestWebhook={onTestWebhook} projects={projects} projectGroups={projectGroups} onImportMlPredictions={onImportMlPredictions} onExportProjectJson={onExportProjectJson} />}
+          {tab === "Security" && isAdmin && <SecurityPanel errorLogEntries={errorLogEntries} onRefreshErrorLog={onRefreshErrorLog} onClearErrorLog={onClearErrorLog} onExportBackup={onExportBackup} onRestoreBackup={onRestoreBackup} onSignOutAllDevices={onSignOutAllDevices} settings={settings} onUpdate={onUpdate} />}
+          {tab === "Diagnostics" && isAdmin && <DiagnosticsPanel onRunHealthCheck={onRunHealthCheck} />}
           {tab === "Cloud" && isAdmin && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
         </section>
       </div>
@@ -5658,6 +5929,235 @@ create table webhooks (id text primary key, name text, url text, events jsonb, e
   </div>;
 }
 
+const REGRESSION_TEST_PLAN = `# AnnotatePro — Regression Test Plan (Build 43)
+
+Manual checklist to walk through before a release. Each area lists the core paths to verify by hand — this complements the automated Health Check on the Diagnostics tab, which only checks data integrity, not UI behavior.
+
+## Projects
+- [ ] Create, edit, archive, restore, duplicate, and delete a project group
+- [ ] Create, edit, and delete a project within a group
+- [ ] Project card progress bar matches completed/total images
+- [ ] Deleting a project with tasks shows the cascade-delete warning and actually removes those tasks
+
+## Datasets
+- [ ] Create a dataset, add images, snapshot a version
+- [ ] Archive/restore a dataset
+- [ ] Deleting a dataset with images is blocked with a clear message
+- [ ] Clearing a dataset removes its tasks, annotations, and QA reviews (not just the tasks)
+
+## Import
+- [ ] Import images via drag-and-drop and file picker
+- [ ] Advanced Import: COCO JSON with images zip
+- [ ] Advanced Import: YOLO format with images zip
+- [ ] Class-to-label mapping screen shows all detected classes and lets you map or create labels
+- [ ] Import progress and final summary (imported / skipped / errors) are accurate
+
+## Tasks
+- [ ] Task Planner: filter, sort, bulk-assign, bulk priority/queue changes
+- [ ] Assigning a task moves it from Pending to In Progress
+- [ ] Task deadlines (SLA-derived and custom) display correctly
+- [ ] Removing a single task cleans up its annotations and QA review
+
+## Annotation
+- [ ] Bounding box, polygon, polyline, keypoint, brush/eraser tools all draw and save correctly
+- [ ] Undo/redo, copy/paste, multi-select, lock/hide all work
+- [ ] Label picker shows AI-suggested badges for frequently-used labels
+- [ ] Save and Submit transition task status correctly
+- [ ] AI-assisted: pending model predictions show dashed outline + confidence, Accept/Reject and Accept All/Reject All work
+- [ ] Editing an accepted model prediction flags it as "corrected"
+
+## Video
+- [ ] **Not implemented in this build.** No video upload, playback, or frame-by-frame annotation exists yet — remove this row once it's built, or flag it as a known gap if this checklist is used before then.
+
+## QA
+- [ ] Review mode shows Accept/Reject instead of Skip/Submit
+- [ ] QA Scorecard: weighted criteria sliders compute the overall score correctly
+- [ ] Error tagging: log an error, confirm it appears in the QA & Quality error breakdown
+- [ ] Sampling: with sampling rate < 100%, confirm some submissions auto-approve and log a sampling-skip audit entry
+- [ ] Calibration: add a gold-score reference, confirm drift is computed after review
+
+## Team
+- [ ] Add, edit, deactivate, and delete a team member
+- [ ] Deleting a member clears their assignee AND reviewer references on tasks (not just assignee)
+- [ ] Role changes take effect (Admin-only tabs disappear for non-admins)
+- [ ] Duplicate email addresses are flagged (Diagnostics → Health Check)
+
+## Workload
+- [ ] Workload page reflects real assigned/capacity numbers
+- [ ] Auto Balance assigns tasks to the least-loaded eligible member
+- [ ] Zero-capacity active members are flagged (Diagnostics → Health Check)
+
+## Notifications
+- [ ] Notifications generate on assignment, QA decision, rework, escalation
+- [ ] Mark-as-read, mark-all-read, delete, and clear-all all work
+- [ ] Notification filters (type) work correctly
+
+## Audit
+- [ ] Every major action (create/edit/delete/assign/review/escalate) produces an audit entry
+- [ ] Audit Trail search and filters work
+- [ ] Audit log caps at 2000 entries without crashing (Diagnostics → Health Check)
+
+## Export
+- [ ] CSV export (Tasks, Reports) downloads and opens correctly
+- [ ] Label schema JSON export/import round-trips without data loss
+- [ ] Full project JSON export includes tasks, annotations, and QA reviews
+- [ ] Full workspace backup export/restore (Settings → Security) round-trips correctly
+
+## Authentication
+- [ ] Sign in, sign out, password reset all work
+- [ ] Session survives a page refresh
+- [ ] Idle timeout signs the user out after the configured period (Settings → Security)
+- [ ] "Sign out of all devices" invalidates other active sessions
+
+## Permissions
+- [ ] Non-admin users cannot see Roles & Access, Integrations, Security, Diagnostics, or Cloud Migration tabs
+- [ ] Non-admin users cannot edit projects if role is below Team Lead
+- [ ] Verify RLS policies actually block a non-authenticated request at the database level (not just the UI) — see Settings → Security
+
+## Cloud Storage
+- [ ] New image uploads go to Supabase Storage, not inline base64
+- [ ] Image migration tool converts remaining base64 images
+- [ ] Cross-device sync: an edit on one device appears on another after hydration/realtime (see Settings → Cloud Migration)
+`;
+
+function DiagnosticsPanel({ onRunHealthCheck }) {
+  const [results, setResults] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  function handleRun() {
+    setRunning(true);
+    setTimeout(() => { setResults(onRunHealthCheck()); setRunning(false); }, 150);
+  }
+  function downloadTestPlan() {
+    const blob = new Blob([REGRESSION_TEST_PLAN], { type: "text/markdown" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "annotatepro-regression-test-plan.md"; a.click();
+  }
+
+  const failCount = results?.filter(r => r.status === "fail").length || 0;
+  const warnCount = results?.filter(r => r.status === "warn").length || 0;
+  const passCount = results?.filter(r => r.status === "pass").length || 0;
+  const grouped = results ? results.reduce((acc, r) => { (acc[r.area] = acc[r.area] || []).push(r); return acc; }, {}) : {};
+
+  return <div className="settings-card panel diagnostics-panel">
+    <div className="settings-card-title"><div><h2>Testing & Regression</h2><p>An automated data-integrity check across live app state, plus a manual test plan for everything a script can't verify (UI behavior, drawing tools, imports).</p></div><CheckSquare size={20}/></div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Health Check</h3></div>
+      <p className="field-hint">Scans current projects, tasks, annotations, QA reviews, team, and settings for broken references and inconsistent data — the kind of thing that causes confusing counts elsewhere in the app.</p>
+      <button className="primary-btn" onClick={handleRun} disabled={running}>{running ? <RefreshCw size={15} className="mig-spin"/> : <CheckSquare size={15}/>} {running ? "Running..." : "Run Health Check"}</button>
+      {results && <div className="health-check-results">
+        <div className="health-check-summary"><span className="hc-pass">{passCount} passing</span>{warnCount>0 && <span className="hc-warn">{warnCount} warning{warnCount===1?"":"s"}</span>}{failCount>0 && <span className="hc-fail">{failCount} failing</span>}</div>
+        {Object.entries(grouped).map(([area, items]) => <div className="health-check-group" key={area}>
+          <span className="section-label">{area.toUpperCase()}</span>
+          {items.map(r => <div className={`health-check-row hc-${r.status}`} key={r.id}>
+            {r.status === "pass" ? <CheckCircle2 size={14}/> : r.status === "warn" ? <AlertCircle size={14}/> : <X size={14}/>}
+            <div><b>{r.label}</b><span>{r.detail}</span></div>
+          </div>)}
+        </div>)}
+      </div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Manual Regression Test Plan</h3></div>
+      <p className="field-hint">Data integrity is only part of the picture — drawing tools, imports, and auth flows need a human to click through them. Download a checklist covering all 15 areas.</p>
+      <button className="ghost-btn" onClick={downloadTestPlan}><Download size={13}/> Download Test Plan (.md)</button>
+      <p className="field-hint" style={{marginTop:10}}><b>Known gap:</b> the checklist includes a "Video" section flagged as not implemented — there's no video upload, playback, or frame annotation in the app yet.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Performance & Scalability (Build 44)</h3></div>
+      <p className="field-hint">What shipped in code: lazy-loaded thumbnails throughout, pagination on the Import image list, Audit Trail, and Notifications (so those stay fast regardless of size), a precomputed label lookup + <code>React.memo</code> on the annotation canvas shapes (previously doing a linear search per shape on every render), a fixed O(n²) row-lookup in the dataset image table, a debounced command-palette search, and automatic image downscaling (max 1920px, quality 0.85) before new uploads reach Supabase Storage — proportional only, so percent-based annotation coordinates stay valid.</p>
+      <p className="field-hint">What needs your Supabase project directly — indexes speed up exactly the columns this app filters/joins on constantly:</p>
+      <pre className="sql-snippet">{`create index if not exists idx_tasks_project_id on tasks(project_id);
+create index if not exists idx_tasks_dataset_id on tasks(dataset_id);
+create index if not exists idx_tasks_status on tasks(status);
+create index if not exists idx_tasks_assignee_id on tasks(assignee_id);
+create index if not exists idx_tasks_reviewer_id on tasks(reviewer_id);
+create index if not exists idx_projects_group_id on projects(group_id);
+create index if not exists idx_datasets_project_id on datasets(project_id);
+create index if not exists idx_qa_reviews_task_id on qa_reviews(task_id);
+create index if not exists idx_audit_events_task_id on audit_events(task_id);
+create index if not exists idx_audit_events_project_id on audit_events(project_id);
+create index if not exists idx_notifications_task_id on notifications(task_id);`}</pre>
+      <p className="field-hint"><b>Known ceiling, not fixed here:</b> the Build 30.1 cloud hydration does <code>select("*")</code> with no row limit — fine up to a few thousand tasks, but a workspace with tens of thousands would load everything into memory on every session start. Fixing that properly means paginating the hydration query and reworking every page that currently assumes <code>tasks</code> is the complete in-memory array (Task Planner, Workload, Analytics, Reports all filter/aggregate over the full array). That's real architectural work, not a safe drop-in change — worth its own build if your task counts are heading that direction.</p>
+    </div>
+  </div>;
+}
+
+function SecurityPanel({ errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, settings, onUpdate }) {
+  const restoreRef = useRef(null);
+  const [restoreMessage, setRestoreMessage] = useState(null);
+
+  return <div className="settings-card panel security-panel">
+    <div className="settings-card-title"><div><h2>Security & Production Hardening</h2><p>Session security, error monitoring, backups, and a plain-language audit of what's protected client-side versus what needs verifying in Supabase.</p></div><ShieldCheck size={20}/></div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Session Security</h3></div>
+      <label className="sampling-slider-label"><span>Auto sign-out after {settings.sessionIdleMinutes || 0} minute{settings.sessionIdleMinutes===1?"":"s"} of inactivity (0 = disabled)</span><input type="range" min="0" max="120" step="5" value={settings.sessionIdleMinutes ?? 30} onChange={e=>onUpdate({sessionIdleMinutes:Number(e.target.value)})}/></label>
+      <p className="field-hint">Checked every 30 seconds. When it fires, the current session is signed out and the person needs to log back in.</p>
+      <button className="ghost-btn" onClick={onSignOutAllDevices}><LogOut size={13}/> Sign out of all devices</button>
+      <p className="field-hint">Invalidates every active session for this account everywhere it's logged in — use if a device may have been compromised.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Error Monitoring</h3></div>
+      <p className="field-hint">A global error boundary now catches render crashes (showing a recovery screen instead of a blank page), and uncaught errors/rejections are captured automatically — even if the app itself has crashed, since capture writes straight to local storage rather than relying on React state.</p>
+      <div className="ml-import-row"><button className="ghost-btn" onClick={onRefreshErrorLog}><RefreshCw size={13}/> Refresh</button><button className="danger-icon-btn" onClick={onClearErrorLog}><Trash2 size={13}/> Clear log</button></div>
+      {errorLogEntries.length ? <div className="error-log-list">{errorLogEntries.slice(0,15).map(e => <div className="error-log-row" key={e.id}>
+        <div><b>{e.message}</b><span>{e.context} · {new Date(e.timestamp).toLocaleString()}</span></div>
+        <span className={`token-status ${e.synced?"active":""}`}>{e.synced?"Synced":"Local only"}</span>
+      </div>)}</div> : <div className="config-empty small"><CheckCircle2 size={22}/><p>No errors captured. That's a good sign.</p></div>}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Backup & Recovery</h3></div>
+      <p className="field-hint">Export a full JSON snapshot of the entire workspace (projects, tasks, annotations, QA reviews, team, configs). Restoring replaces local data and prompts you to re-run Migration to push it to the cloud.</p>
+      <div className="ml-import-row">
+        <button className="ghost-btn" onClick={onExportBackup}><Download size={13}/> Export Full Backup</button>
+        <button className="ghost-btn" onClick={()=>restoreRef.current?.click()}><Upload size={13}/> Restore from Backup</button>
+        <input ref={restoreRef} type="file" accept="application/json" style={{display:"none"}} onChange={e=>{ const f=e.target.files?.[0]; if(f) onRestoreBackup(f, setRestoreMessage); e.target.value=""; }}/>
+      </div>
+      {restoreMessage && <div className={restoreMessage.ok ? "ml-import-result" : "form-error"}>{restoreMessage.ok ? <CheckCircle2 size={14}/> : <AlertCircle size={14}/>} {restoreMessage.message}</div>}
+      <p className="field-hint">This covers app-level data loss. True disaster recovery (point-in-time restore, daily snapshots) is a Supabase project setting — see below.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Permission Audit</h3></div>
+      <p className="field-hint">Roles enforced in this UI: <b>Admin</b> (Roles & Access, Integrations, Security, Cloud Migration tabs, and account-level actions on Team members) and <b>Team Lead</b> (project/config editing, alongside Admin). Both gates are checked in two places — hidden from navigation and re-checked at render — but this is still a UX convenience, not a security boundary.</p>
+      <div className="form-error" style={{background:"#fff7ed",borderColor:"#fed7aa",color:"#c2410c"}}><AlertCircle size={14}/> Client-side role checks can be bypassed by anyone calling Supabase directly (e.g. from the browser console). The only real boundary is Row Level Security on each table — verify every table below actually has RLS enabled and policies matching these roles, not just that the UI hides the button.</div>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Row Level Security — verify these exist</h3></div>
+      <p className="field-hint">Run this in the Supabase SQL Editor to see which of your tables don't have RLS enabled yet — anything returned here is currently readable/writable by any authenticated (or even anonymous, depending on your anon key policy) request:</p>
+      <pre className="sql-snippet">{`select tablename from pg_tables
+where schemaname = 'public' and rowsecurity = false;`}</pre>
+      <p className="field-hint">A reasonable starting policy per table — authenticated users can read/write, nothing else can:</p>
+      <pre className="sql-snippet">{`alter table tasks enable row level security;
+create policy "authenticated read/write" on tasks
+  for all using (auth.role() = 'authenticated')
+  with check (auth.role() = 'authenticated');
+-- repeat for: project_groups, projects, datasets, team_members,
+-- qa_reviews, notifications, audit_events, api_tokens, webhooks, error_logs`}</pre>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Secure File Access</h3></div>
+      <p className="field-hint">Task images currently use <code>getPublicUrl()</code> against the <code>task-images</code> storage bucket — meaning if that bucket is set to public, anyone with an image URL can view it without being logged in. This wasn't changed in this build because switching to signed URLs safely requires storing the storage <i>path</i> instead of a resolved URL and re-signing it on every view (signed URLs expire) — a data-model change worth doing deliberately rather than as part of a hardening pass that could break every existing image. Two options, in order of effort:</p>
+      <pre className="sql-snippet">{`-- Quick mitigation: require auth to read the bucket, keep public URLs disabled
+update storage.buckets set public = false where id = 'task-images';
+create policy "authenticated read" on storage.objects
+  for select using (bucket_id = 'task-images' and auth.role() = 'authenticated');`}</pre>
+      <p className="field-hint">Note: making the bucket private will break every image already stored with a public URL until the app is updated to resolve signed URLs on demand — plan this as its own build rather than flipping it here.</p>
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Rate Limiting</h3></div>
+      <p className="field-hint">Outbound webhooks are now throttled client-side (max ~1 delivery per webhook every 2 seconds) so a bulk action — like approving 50 tasks at once — can't flood an external endpoint. That's a UX/cost safeguard, not real protection: a client-side limit can't stop someone from calling your Supabase API directly. Real rate limiting has to sit in front of Supabase — either its built-in Auth rate limits (Dashboard → Authentication → Rate Limits) or a Postgres/Edge Function fronting writes for high-volume tables.</p>
+    </div>
+  </div>;
+}
+
 function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,verifyStatus,verifying,onVerify,lastMigratedAt,migrationDomains,migrationSingletons,imageMigration,onMigrateImages,base64ImageCount}) {
   const domains = migrationDomains();
   const singletons = migrationSingletons();
@@ -5723,7 +6223,11 @@ function CloudMigrationPanel({migrationStatus,migrationRunning,onRunMigration,ve
   </div>;
 }
 
-export default App;
+function AppWithErrorBoundary() {
+  return <ErrorBoundary><App/></ErrorBoundary>;
+}
+
+export default AppWithErrorBoundary;
 
 
 
@@ -5738,6 +6242,12 @@ function AuditTrailPage({events,projects,tasks,teamMembers,search,setSearch,filt
     const dateOk=date==="All Time"||(date==="Today"&&new Date(e.timestamp)>=new Date(new Date().setHours(0,0,0,0)))||(date==="7 Days"&&new Date(e.timestamp).getTime()>=dayStart(7))||(date==="30 Days"&&new Date(e.timestamp).getTime()>=dayStart(30));
     return (!search||hay.includes(search.toLowerCase()))&&(filter==="All Actions"||e.action===filter)&&(project==="All Projects"||e.projectId===project)&&(user==="All Users"||e.actor===user)&&(!task||taskName(e.taskId).toLowerCase().includes(task.toLowerCase())||(e.taskId||"").toLowerCase().includes(task.toLowerCase()))&&dateOk;
   }).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(1);
+  useEffect(() => { setPage(1); }, [search, filter, project, user, date, task]);
+  const totalPages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  const clampedPage = Math.min(page, totalPages);
+  const pageItems = visible.slice((clampedPage-1)*PAGE_SIZE, clampedPage*PAGE_SIZE);
   const selected=selectedTask?visible.filter(e=>e.taskId===selectedTask):[];
   const actionIcon=a=>a.includes("QA")||a.includes("Approved")?ClipboardCheck:a.includes("Assign")?Users:a.includes("Export")?Download:a.includes("Project")?FolderKanban:a.includes("Saved")?Save:a.includes("Submitted")?CheckCircle2:Activity;
   const downloadAudit=()=>{ const rows=[["Timestamp","Action","Actor","Role","Project","Task","Details"],...visible.map(e=>[e.timestamp,e.action,e.actor,e.actorRole,projectName(e.projectId),taskName(e.taskId),e.details])]; const csv=rows.map(r=>r.map(v=>`"${String(v??"").replaceAll('"','""')}"`).join(",")).join("\n"); const blob=new Blob([csv],{type:"text/csv;charset=utf-8"}); const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=`annotatepro-audit-${new Date().toISOString().slice(0,10)}.csv`; a.click(); URL.revokeObjectURL(url); };
@@ -5746,7 +6256,9 @@ function AuditTrailPage({events,projects,tasks,teamMembers,search,setSearch,filt
     <div className="page-head"><div><span className="eyebrow">GOVERNANCE & TRACEABILITY</span><h1>Audit Trail</h1><p>Track who changed what, when it happened, and how each task moved through production.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={downloadAudit}><Download size={15}/> Export CSV</button><button className="danger-btn" onClick={onClear}><Trash2 size={15}/> Clear Log</button></div></div>
     <div className="stats-grid audit-stats"><StatCard icon={Activity} label="Events" value={events.length} meta="Recorded actions"/><StatCard icon={Users} label="Contributors" value={new Set(events.map(e=>e.actor)).size} meta="Unique actors"/><StatCard icon={FileText} label="Tasks Tracked" value={new Set(events.map(e=>e.taskId).filter(Boolean)).size} meta="With history"/><StatCard icon={ShieldCheck} label="QA Events" value={events.filter(e=>e.action.includes("QA")||e.action.includes("Approved")||e.action.includes("Rejected")).length} meta="Review decisions"/></div>
     <section className="panel audit-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search task, user, project or action..."/></div><select value={filter} onChange={e=>setFilter(e.target.value)}>{actions.map(a=><option key={a}>{a}</option>)}</select><select value={project} onChange={e=>setProject(e.target.value)}><option>All Projects</option>{projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select><select value={user} onChange={e=>setUser(e.target.value)}>{users.map(u=><option key={u}>{u}</option>)}</select><select value={date} onChange={e=>setDate(e.target.value)}><option>All Time</option><option>Today</option><option>7 Days</option><option>30 Days</option></select><input value={task} onChange={e=>setTask(e.target.value)} placeholder="Task ID / name"/></section>
-    <div className="audit-grid"><section className="panel audit-list"><div className="section-header"><div><h2>Activity Timeline</h2><p>{visible.length} events match the current filters.</p></div></div>{visible.length?visible.map(e=>{const Icon=actionIcon(e.action);return <button className={`audit-row ${selectedTask===e.taskId&&e.taskId?"active":""}`} key={e.id} onClick={()=>e.taskId&&setSelectedTask(e.taskId)}><span className="audit-icon"><Icon size={16}/></span><span className="audit-body"><strong>{e.action}</strong><em>{e.details}</em><small>{e.actor} · {e.actorRole} · {projectName(e.projectId)}{e.taskId?` · ${taskName(e.taskId)}`:""}</small></span><time>{new Date(e.timestamp).toLocaleString()}</time></button>}) : <div className="empty-state"><Activity size={30}/><h3>No audit events</h3><p>Try changing the filters or generate a fresh activity snapshot.</p><button className="secondary-btn" onClick={onSeed}><RefreshCw size={14}/> Rebuild baseline</button></div>}</section>
+    <div className="audit-grid"><section className="panel audit-list"><div className="section-header"><div><h2>Activity Timeline</h2><p>{visible.length} events match the current filters{totalPages>1?` · page ${clampedPage} of ${totalPages}`:""}.</p></div></div>{pageItems.length?pageItems.map(e=>{const Icon=actionIcon(e.action);return <button className={`audit-row ${selectedTask===e.taskId&&e.taskId?"active":""}`} key={e.id} onClick={()=>e.taskId&&setSelectedTask(e.taskId)}><span className="audit-icon"><Icon size={16}/></span><span className="audit-body"><strong>{e.action}</strong><em>{e.details}</em><small>{e.actor} · {e.actorRole} · {projectName(e.projectId)}{e.taskId?` · ${taskName(e.taskId)}`:""}</small></span><time>{new Date(e.timestamp).toLocaleString()}</time></button>}) : <div className="empty-state"><Activity size={30}/><h3>No audit events</h3><p>Try changing the filters or generate a fresh activity snapshot.</p><button className="secondary-btn" onClick={onSeed}><RefreshCw size={14}/> Rebuild baseline</button></div>}
+      {totalPages>1 && <div className="pagination-bar"><button disabled={clampedPage<=1} onClick={()=>setPage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedPage} of {totalPages}</span><button disabled={clampedPage>=totalPages} onClick={()=>setPage(p=>Math.min(totalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
+      </section>
       <aside className="audit-side"><section className="panel"><div className="section-header"><div><h2>Task History</h2><p>{selectedTask?taskName(selectedTask):"Select a task from the timeline."}</p></div></div>{selectedTask?<div className="task-history">{selected.map(e=>{const Icon=actionIcon(e.action);return <div className="history-item" key={e.id}><span><Icon size={14}/></span><div><b>{e.action}</b><small>{e.details}</small><em>{e.actor} · {new Date(e.timestamp).toLocaleString()}</em></div></div>})}</div>:<div className="task-history-empty"><HistoryIcon/><span>Click a task event to inspect its complete history.</span></div>}</section><section className="panel"><div className="section-header"><div><h2>Tracked Tasks</h2><p>Quick task history access.</p></div></div><div className="audit-task-chips">{taskGroups.length?taskGroups.map(id=><button key={id} className={selectedTask===id?"active":""} onClick={()=>setSelectedTask(id)}>{taskName(id)}</button>):<span>No tasks in view</span>}</div></section></aside></div>
   </div>;
 }
@@ -5767,6 +6279,12 @@ function NotificationsPage({notifications,setNotifications,filter,setFilter,sear
   };
   useEffect(ensureSeed,[]);
   const visible=notifications.filter(n=>(filter==="All"||n.type===filter)&&(`${n.title} ${n.message} ${projectName(n.projectId)}`.toLowerCase().includes(search.toLowerCase()))).sort((a,b)=>new Date(b.createdAt)-new Date(a.createdAt));
+  const NOTIF_PAGE_SIZE = 40;
+  const [notifPage, setNotifPage] = useState(1);
+  useEffect(() => { setNotifPage(1); }, [filter, search]);
+  const notifTotalPages = Math.max(1, Math.ceil(visible.length / NOTIF_PAGE_SIZE));
+  const clampedNotifPage = Math.min(notifPage, notifTotalPages);
+  const pagedNotifications = visible.slice((clampedNotifPage-1)*NOTIF_PAGE_SIZE, clampedNotifPage*NOTIF_PAGE_SIZE);
   const unread=notifications.filter(n=>!n.read).length;
   const markRead=id=>setNotifications(prev=>prev.map(n=>n.id===id?{...n,read:true}:n));
   const markAll=()=>setNotifications(prev=>prev.map(n=>({...n,read:true})));
@@ -5777,6 +6295,7 @@ function NotificationsPage({notifications,setNotifications,filter,setFilter,sear
     <div className="page-head"><div><span className="eyebrow">NOTIFICATION CENTER</span><h1>Notifications & Alerts</h1><p>Stay on top of assignments, QA, rework, targets and project activity.</p></div><div className="page-head-actions"><button className="secondary-btn" onClick={markAll}><Check size={15}/> Mark all read</button><button className="danger-btn" onClick={clearAll}><Trash2 size={15}/> Clear all</button></div></div>
     <div className="stats-grid notifications-stats"><StatCard icon={Bell} label="Unread" value={unread} meta="Requires attention"/><StatCard icon={AlertCircle} label="Alerts" value={notifications.filter(n=>n.type==="Rework"||n.type==="QA").length} meta="QA & rework"/><StatCard icon={Users} label="Assignments" value={notifications.filter(n=>n.type==="Assignment").length} meta="Team activity"/><StatCard icon={Target} label="Targets" value={notifications.filter(n=>n.type==="Target").length} meta="Capacity reminders"/></div>
     <div className="panel notification-toolbar"><div className="search-box"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search notifications..."/></div><div className="notification-filters">{typeOptions.map(t=><button key={t} className={filter===t?"active":""} onClick={()=>setFilter(t)}>{t}</button>)}</div></div>
-    <div className="notification-list panel">{visible.length===0?<div className="empty-state"><Bell size={30}/><h3>No notifications</h3><p>Your notification center is clear.</p></div>:visible.map(n=>{const Icon=iconFor(n.type);return <div key={n.id} className={`notification-row ${n.read?"read":"unread"}`}><div className="notification-icon"><Icon size={18}/></div><div className="notification-main"><div className="notification-title"><strong>{n.title}</strong>{!n.read&&<span className="unread-dot"/>}</div><p>{n.message}</p><div className="notification-meta"><span>{n.type}</span>{n.projectId&&<span>{projectName(n.projectId)}</span>}{n.taskId&&<span>{n.taskId}</span>}<span>{new Date(n.createdAt).toLocaleString()}</span></div></div><div className="notification-actions">{!n.read&&<button className="secondary-btn small-btn" onClick={()=>markRead(n.id)}><Check size={14}/> Read</button>}<button className="icon-btn" onClick={()=>remove(n.id)} title="Delete notification"><Trash2 size={16}/></button></div></div>})}</div>
+    <div className="notification-list panel">{visible.length===0?<div className="empty-state"><Bell size={30}/><h3>No notifications</h3><p>Your notification center is clear.</p></div>:pagedNotifications.map(n=>{const Icon=iconFor(n.type);return <div key={n.id} className={`notification-row ${n.read?"read":"unread"}`}><div className="notification-icon"><Icon size={18}/></div><div className="notification-main"><div className="notification-title"><strong>{n.title}</strong>{!n.read&&<span className="unread-dot"/>}</div><p>{n.message}</p><div className="notification-meta"><span>{n.type}</span>{n.projectId&&<span>{projectName(n.projectId)}</span>}{n.taskId&&<span>{n.taskId}</span>}<span>{new Date(n.createdAt).toLocaleString()}</span></div></div><div className="notification-actions">{!n.read&&<button className="secondary-btn small-btn" onClick={()=>markRead(n.id)}><Check size={14}/> Read</button>}<button className="icon-btn" onClick={()=>remove(n.id)} title="Delete notification"><Trash2 size={16}/></button></div></div>})}</div>
+    {visible.length > NOTIF_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedNotifPage<=1} onClick={()=>setNotifPage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedNotifPage} of {notifTotalPages} · {visible.length} notifications</span><button disabled={clampedNotifPage>=notifTotalPages} onClick={()=>setNotifPage(p=>Math.min(notifTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
   </div>;
 }
