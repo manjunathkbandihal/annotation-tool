@@ -800,3 +800,45 @@ body{margin:0;font-family:Inter,system-ui,sans-serif;color:var(--text);backgroun
 .ai-qa-stat-row b{color:#1f2937}
 .ai-qa-lowconf{border-top:1px dashed var(--line);padding-top:10px;margin-top:4px;display:flex;flex-direction:column;gap:5px}
 .ai-qa-lowconf-row{display:flex;align-items:center;justify-content:space-between;font-size:10.5px;background:#fef2f2;border-radius:6px;padding:5px 8px;color:#dc2626}
+
+/* ===== Build 42 — Security & Production Hardening ===== */
+.crash-screen{position:fixed;inset:0;background:#f7f8fa;display:flex;align-items:center;justify-content:center;padding:24px;z-index:9999}
+.crash-card{max-width:380px;text-align:center;background:#fff;border:1px solid var(--line);border-radius:16px;padding:32px 28px;box-shadow:0 20px 60px rgba(15,20,28,.12)}
+.crash-card svg{color:#dc2626;margin-bottom:12px}
+.crash-card h2{font-size:17px;margin:0 0 8px}
+.crash-card p{font-size:12.5px;color:#5b6675;line-height:1.5;margin:0 0 18px}
+
+.danger-icon-btn{height:30px;padding:0 12px;border-radius:7px;border:1px solid #f3cfcf;background:#fff;color:#dc2626;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.danger-icon-btn:hover{background:#fef2f2}
+
+.error-log-list{display:flex;flex-direction:column;gap:7px;margin-top:10px}
+.error-log-row{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:9px 11px}
+.error-log-row div{flex:1;display:flex;flex-direction:column;min-width:0}
+.error-log-row b{font-size:11px;color:#dc2626;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.error-log-row span{font-size:9.5px;color:#8b96a4}
+
+.security-panel .form-error{margin-top:8px}
+
+/* ===== Build 43 — Testing & Regression ===== */
+.health-check-results{margin-top:14px}
+.health-check-summary{display:flex;gap:8px;margin-bottom:12px}
+.health-check-summary span{font-size:10.5px;font-weight:700;padding:4px 10px;border-radius:20px}
+.hc-pass{background:#f0fdf4;color:#16a34a}
+.hc-warn{background:#fff7ed;color:#c2410c}
+.hc-fail{background:#fef2f2;color:#dc2626}
+.health-check-group{margin-bottom:14px}
+.health-check-row{display:flex;align-items:flex-start;gap:9px;padding:7px 0;border-bottom:1px solid var(--line)}
+.health-check-row:last-child{border-bottom:0}
+.health-check-row div{display:flex;flex-direction:column}
+.health-check-row b{font-size:11.5px;color:#1f2937}
+.health-check-row span{font-size:10px;color:#8b96a4}
+.health-check-row.hc-pass svg{color:#16a34a;flex:none;margin-top:1px}
+.health-check-row.hc-warn svg{color:#c2410c;flex:none;margin-top:1px}
+.health-check-row.hc-fail svg{color:#dc2626;flex:none;margin-top:1px}
+
+/* ===== Build 44 — Performance & Scalability ===== */
+.pagination-bar{display:flex;align-items:center;justify-content:center;gap:14px;padding:14px 0;flex:none}
+.pagination-bar button{height:32px;padding:0 13px;border-radius:8px;border:1px solid var(--line);background:#fff;font-size:11px;font-weight:600;color:#485463;display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+.pagination-bar button:hover:not(:disabled){border-color:#c7d2e0;color:#2563eb}
+.pagination-bar button:disabled{opacity:.4;cursor:not-allowed}
+.pagination-bar span{font-size:10.5px;color:#8b96a4;font-weight:600}
