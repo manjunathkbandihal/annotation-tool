@@ -204,6 +204,16 @@ function App() {
   const [dashboardLayouts, setDashboardLayouts] = useState(() => readStorage("annotatepro_dashboard_layouts_v1", DASHBOARD_PRESETS));
   const [activeDashboardLayoutId, setActiveDashboardLayoutId] = useState(() => readStorage("annotatepro_dashboard_active_layout_v1", "overview"));
   const [dashboardEditing, setDashboardEditing] = useState(false);
+  const [confirmState, setConfirmState] = useState(null);
+  function confirmAction(message, options = {}) {
+    return new Promise((resolve) => {
+      setConfirmState({ message, resolve, title: options.title || "Are you sure?", confirmLabel: options.confirmLabel || "Confirm", cancelLabel: options.cancelLabel || "Cancel", danger: options.danger !== false });
+    });
+  }
+  function resolveConfirm(result) {
+    confirmState?.resolve(result);
+    setConfirmState(null);
+  }
   const [commandOpen, setCommandOpen] = useState(false);
   const [recentItems, setRecentItems] = useState(() => readStorage("annotatepro_recent_items_v1", []));
   const [favoriteItems, setFavoriteItems] = useState(() => readStorage("annotatepro_favorite_items_v1", []));
@@ -1696,11 +1706,11 @@ function App() {
   }
   function restoreWorkspaceBackup(file, onDone) {
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
         const data = JSON.parse(reader.result);
         if (!data || data.version !== "backup-v1") throw new Error("This file isn't a recognized AnnotatePro backup.");
-        if (!window.confirm(`Restore this backup? It will replace ${projects.length} current projects and ${tasks.length} tasks with ${data.projects?.length || 0} projects and ${data.tasks?.length || 0} tasks from the backup (dated ${new Date(data.exportedAt).toLocaleString()}). This can't be undone locally — run Migration afterward to push it to the cloud.`)) { onDone?.({ ok: false, message: "Cancelled" }); return; }
+        if (!(await confirmAction(`Restore this backup? It will replace ${projects.length} current projects and ${tasks.length} tasks with ${data.projects?.length || 0} projects and ${data.tasks?.length || 0} tasks from the backup (dated ${new Date(data.exportedAt).toLocaleString()}). This can't be undone locally — run Migration afterward to push it to the cloud.`, { title: "Restore backup", confirmLabel: "Restore backup" }))) { onDone?.({ ok: false, message: "Cancelled" }); return; }
         if (data.projectGroups) setProjectGroups(data.projectGroups);
         if (data.projects) setProjects(data.projects);
         if (data.datasets) setDatasets(data.datasets);
@@ -1932,12 +1942,12 @@ function App() {
   }
 
 
-  function deleteProject(id) {
+  async function deleteProject(id) {
     const orphanedTasks = tasks.filter(t => t.projectId === id);
     const confirmMsg = orphanedTasks.length
       ? `Delete this project? Its ${orphanedTasks.length} task${orphanedTasks.length===1?"":"s"} will be deleted too — this can't be undone.`
       : "Delete this project?";
-    if (!window.confirm(confirmMsg)) return;
+    if (!(await confirmAction(confirmMsg, { title: "Delete project", confirmLabel: "Delete project" }))) return;
     const removedIdSet = new Set(orphanedTasks.map(t => t.id));
     setProjects(prev => prev.filter(p => p.id !== id));
     setTasks(prev => prev.filter(t => t.projectId !== id));
@@ -2552,10 +2562,10 @@ function App() {
     setImportTargetDataset(null);
   }
 
-  function removeTask(id) {
+  async function removeTask(id) {
     const index = tasks.findIndex(t => t.id === id);
     if (index < 0) return;
-    if (!window.confirm(`Remove ${tasks[index].name} from the dataset?`)) return;
+    if (!(await confirmAction(`Remove ${tasks[index].name} from the dataset?`, { title: "Remove image", confirmLabel: "Remove" }))) return;
     setTasks(prev => prev.filter(t => t.id !== id));
     setAnnotationsByTask(prev => { const next = { ...prev }; delete next[id]; return next; });
     setQaReviews(prev => { const next = { ...prev }; delete next[id]; return next; });
@@ -2565,10 +2575,10 @@ function App() {
     setTimeout(() => setDatasetToast(""), 1800);
   }
 
-  function clearDataset(datasetId) {
+  async function clearDataset(datasetId) {
     const count = tasks.filter(t => t.datasetId === datasetId).length;
     if (!count) return;
-    if (!window.confirm(`Remove all ${count} image${count>1?"s":""} in this dataset?`)) return;
+    if (!(await confirmAction(`Remove all ${count} image${count>1?"s":""} in this dataset?`, { title: "Clear dataset", confirmLabel: "Remove all" }))) return;
     const removedIds = tasks.filter(t => t.datasetId === datasetId).map(t => t.id);
     const removedIdSet = new Set(removedIds);
     setTasks(prev => prev.filter(t => t.datasetId !== datasetId));
@@ -3055,9 +3065,9 @@ function App() {
     setConfigMessage(editingLabelId ? "Label updated" : "Label added");
     setTimeout(() => setConfigMessage(""), 2200);
   };
-  const deleteProjectLabel = (labelId) => {
+  const deleteProjectLabel = async (labelId) => {
     const childCount = currentConfig.labels.filter(l => l.parentId === labelId).length;
-    if (childCount && !window.confirm(`This label has ${childCount} child label${childCount===1?"":"s"}. Delete it and promote its children to top-level?`)) return;
+    if (childCount && !(await confirmAction(`This label has ${childCount} child label${childCount===1?"":"s"}. Delete it and promote its children to top-level?`, { title: "Delete label", confirmLabel: "Delete label" }))) return;
     setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: currentConfig.labels.filter(l => l.id !== labelId).map(l => l.parentId === labelId ? { ...l, parentId: null } : l) } }));
     setConfigMessage("Label removed");
     setTimeout(() => setConfigMessage(""), 2200);
@@ -3085,8 +3095,8 @@ function App() {
     setConfigMessage(`Saved as schema v${snapshot.version} — now editing v${version}`);
     setTimeout(() => setConfigMessage(""), 2400);
   }
-  function restoreLabelSchemaVersion(snapshot) {
-    if (!window.confirm(`Restore schema v${snapshot.version}? This replaces the current label set (current labels are kept in history).`)) return;
+  async function restoreLabelSchemaVersion(snapshot) {
+    if (!(await confirmAction(`Restore schema v${snapshot.version}? This replaces the current label set (current labels are kept in history).`, { title: "Restore schema version", confirmLabel: "Restore", danger: false }))) return;
     const currentSnapshot = { version: currentConfig.schemaVersion || 1, savedAt: new Date().toISOString(), labelCount: currentConfig.labels.length, note: "Replaced by restore", labels: currentConfig.labels, labelGroups: currentConfig.labelGroups || [] };
     setProjectConfigs(prev => ({ ...prev, [configProject]: { ...currentConfig, labels: snapshot.labels, labelGroups: snapshot.labelGroups || [], schemaVersion: (currentConfig.schemaVersion || 1) + 1, schemaHistory: [currentSnapshot, ...(currentConfig.schemaHistory || [])].slice(0, 50) } }));
     setConfigMessage(`Restored schema v${snapshot.version}`);
@@ -3657,6 +3667,7 @@ function App() {
 
   return (
     <div className="app-shell">
+      <a href="#main-content" className="skip-link">Skip to main content</a>
       <aside className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}>
         <div className="brand">
           <div className="brand-mark"><Grid3X3 size={20} /></div>
@@ -3682,14 +3693,14 @@ function App() {
           <div className="user-card">
             <div className="user-avatar">{currentUserInitial}</div>
             <div><b>{currentUserName}</b><span>{currentUserEmail}</span></div>
-            <button className="sidebar-signout" title="Sign out" onClick={signOut}><LogOut size={16}/></button>
+            <button className="sidebar-signout" title="Sign out" aria-label="Sign out" onClick={signOut}><LogOut size={16}/></button>
           </div>
         </div>
       </aside>
 
-      <main className="main-area">
+      <main className="main-area" id="main-content" tabIndex={-1}>
         <header className="topbar">
-          <button className="mobile-menu" onClick={() => setSidebarOpen(v => !v)}><Menu size={21} /></button>
+          <button aria-label="Toggle menu" className="mobile-menu" onClick={() => setSidebarOpen(v => !v)}><Menu size={21} /></button>
           <div className="breadcrumb">
             {activePage === "Annotation Workspace"
               ? <><button className="crumb-link" onClick={() => navigate("Projects")}>Projects</button><b>/</b><span>{projects.find(p => p.id === workspaceProject)?.name || "Tasks"}</span><b>/</b><strong>{workstationMode}</strong></>
@@ -3820,6 +3831,7 @@ function App() {
       </main>
 
       {commandOpen && <CommandPalette onClose={() => setCommandOpen(false)} getResults={getSearchResults} quickActions={quickActions} recentItems={recentItems} favoriteItems={favoriteItems} isFavorite={isFavorite} onToggleFavorite={toggleFavorite} onSelect={openSearchResult} />}
+      {confirmState && <ConfirmDialog {...confirmState} onConfirm={() => resolveConfirm(true)} onCancel={() => resolveConfirm(false)} />}
       {projectModalOpen && <ProjectModal form={projectForm} setForm={setProjectForm} editing={!!editingProjectId} onClose={() => setProjectModalOpen(false)} onSave={saveProject} />}
       {groupModalOpen && <GroupModal form={groupForm} setForm={setGroupForm} editing={!!editingGroupId} onClose={() => setGroupModalOpen(false)} onSave={saveGroup} teamMembers={teamMembers} />}
       {datasetModalOpen && <DatasetModal form={datasetForm} setForm={setDatasetForm} editing={!!editingDatasetId} onClose={() => setDatasetModalOpen(false)} onSave={saveDataset} />}
@@ -3996,7 +4008,7 @@ function QaScorecardPanel({ criteria, categories, scores, setScores, errors, set
         {errors.map(err => <div className="qa-error-chip" key={err.id}>
           <b>{categories.find(c => c.id === err.categoryId)?.name || "Error"}</b>
           <span className={`sev-badge sev-${(err.severity || "Minor").toLowerCase()}`}>{err.severity}</span>
-          <button type="button" onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}><X size={11}/></button>
+          <button aria-label="Remove error" type="button" onClick={() => setErrors(prev => prev.filter(e => e.id !== err.id))}><X size={11}/></button>
         </div>)}
         {categories?.length ? <QaErrorAdder categories={categories} onAdd={(categoryId, severity) => setErrors(prev => [...prev, { id: `logged-${Date.now()}`, categoryId, severity }])}/> : null}
       </div>
@@ -4053,7 +4065,7 @@ function Workspace({
   return (
     <div className="workspace-page build8-workspace">
       <div className="workspace-top">
-        <button className="workstation-back" onClick={onBackToTasks} title="Back to tasks"><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Tasks</button>
+        <button className="workstation-back" onClick={onBackToTasks} title="Back to tasks" aria-label="Back to tasks"><ChevronDown size={15} style={{transform:"rotate(90deg)"}}/> Tasks</button>
         <div className="workspace-project"><span>PROJECT</span><select value={workspaceProject} onChange={e => { const id=e.target.value; setWorkspaceProject(id); const first=tasks.findIndex(t=>!id || t.projectId===id); setSelectedTaskIndex(first>=0?first:0); setZoom(1); setPan({x:0,y:0}); }}><option value="">All Projects</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
         <div className="workspace-task-title"><b>{currentTask?.name || "No task loaded"}</b><span>{currentTask?.id || "—"} · {selectedTaskIndex + 1} / {tasks.length} tasks</span></div>
         <div className="workspace-top-meta"><span className="workspace-live-dot"></span><span>{currentAnnotations.length} objects</span><span>{selectedLabelObject?.name || "No label selected"}</span></div>
@@ -4072,7 +4084,7 @@ function Workspace({
 
       <div className="annotation-shell build8-shell">
         <aside className="task-queue-panel">
-          <div className="queue-head"><div><span className="panel-section-title">TASKS</span><b>{workspaceTasks.length} matching</b></div><button onClick={onImport} title="Import images"><Upload size={15}/></button></div>
+          <div className="queue-head"><div><span className="panel-section-title">TASKS</span><b>{workspaceTasks.length} matching</b></div><button onClick={onImport} title="Import images" aria-label="Import images"><Upload size={15}/></button></div>
           <div className="queue-search"><Search size={14}/><input value={taskSearch} onChange={e=>setTaskSearch(e.target.value)} placeholder="Search task ID..."/></div>
           <div className="queue-filter"><select value={taskFilter} onChange={e=>setTaskFilter(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Submitted</option><option>QA Review</option><option>Approved</option><option>Rejected</option><option>Changes Requested</option></select><Filter size={13}/></div>
           <div className="task-queue-list">
@@ -4094,7 +4106,7 @@ function Workspace({
           <div className="canvas-toolbar build8-toolbar">
             <div className="canvas-tool-status"><span className="tool-dot"></span><b>{toolGroups.flatMap(g=>g[1]).find(t=>t[0]===tool)?.[2] || "Select"}</b><small>{currentAnnotations.length} regions</small></div>
             <div className="canvas-help"><span>Double-click to finish polygon/polyline</span><span>Drag objects to move</span></div>
-            <div className="canvas-controls"><button onClick={()=>setZoom(z=>Math.max(.25,+(z-.1).toFixed(2)))}><ZoomOut size={15}/></button><b>{Math.round(zoom*100)}%</b><button onClick={()=>setZoom(z=>Math.min(4,+(z+.1).toFixed(2)))}><ZoomIn size={15}/></button><button onClick={onReset}>Fit</button><button onClick={()=>document.documentElement.requestFullscreen?.()} title="Full screen"><Grid3X3 size={14}/></button></div>
+            <div className="canvas-controls"><button aria-label="Zoom out" onClick={()=>setZoom(z=>Math.max(.25,+(z-.1).toFixed(2)))}><ZoomOut size={15}/></button><b>{Math.round(zoom*100)}%</b><button aria-label="Zoom in" onClick={()=>setZoom(z=>Math.min(4,+(z+.1).toFixed(2)))}><ZoomIn size={15}/></button><button onClick={onReset}>Fit</button><button onClick={()=>document.documentElement.requestFullscreen?.()} title="Full screen"><Grid3X3 size={14}/></button></div>
           </div>
           <div className={`canvas-stage build8-stage ${tool === "pan" ? "pan-mode" : ""} ${tool === "eraser" ? "eraser-mode" : ""}`}>
             {currentTask ? <div ref={canvasRef} className="annotation-canvas build8-canvas" style={{transform:`translate(${pan.x}px, ${pan.y}px) scale(${zoom})`}} onPointerDown={onCanvasPointerDown} onPointerMove={onCanvasPointerMove} onPointerUp={onCanvasPointerUp} onDoubleClick={onCanvasDoubleClick}>
@@ -4112,17 +4124,17 @@ function Workspace({
                 <input type="range" min="0.25" max="4" step="0.05" value={zoom} onChange={e=>setZoom(parseFloat(e.target.value))}/>
               </div>
               <div className="floating-tool-group">
-                {toolGroups.flatMap(g=>g[1]).map(([id,Icon,title,key]) => <button key={id} className={`floating-tool-btn ${tool===id?"active":""}`} title={`${title} (${key})`} onClick={()=>setTool(id)}><Icon size={16}/></button>)}
+                {toolGroups.flatMap(g=>g[1]).map(([id,Icon,title,key]) => <button key={id} className={`floating-tool-btn ${tool===id?"active":""}`} title={`${title} (${key})`} aria-label={`${title} (${key})`} onClick={()=>setTool(id)}><Icon size={16}/></button>)}
               </div>
               <div className="floating-tool-group">
-                <button className="floating-tool-btn" title="Undo (Ctrl+Z)" onClick={onUndo}><Undo2 size={16}/></button>
-                <button className="floating-tool-btn" title="Redo (Ctrl+Shift+Z)" onClick={onRedo}><Redo2 size={16}/></button>
-                <button className="floating-tool-btn" title="Duplicate" onClick={onDuplicate} disabled={!selectedAnnotation}><Copy size={16}/></button>
-                <button className="floating-tool-btn danger" title="Delete (Del)" onClick={onDelete} disabled={!selectedAnnotation}><Trash2 size={16}/></button>
+                <button className="floating-tool-btn" title="Undo (Ctrl+Z)" aria-label="Undo (Ctrl+Z)" onClick={onUndo}><Undo2 size={16}/></button>
+                <button className="floating-tool-btn" title="Redo (Ctrl+Shift+Z)" aria-label="Redo (Ctrl+Shift+Z)" onClick={onRedo}><Redo2 size={16}/></button>
+                <button className="floating-tool-btn" title="Duplicate" aria-label="Duplicate" onClick={onDuplicate} disabled={!selectedAnnotation}><Copy size={16}/></button>
+                <button className="floating-tool-btn danger" title="Delete (Del)" aria-label="Delete (Del)" onClick={onDelete} disabled={!selectedAnnotation}><Trash2 size={16}/></button>
               </div>
               <div className="floating-tool-group">
-                <button className="floating-tool-btn" title="Reset view" onClick={onReset}><RotateCcw size={16}/></button>
-                <button className="floating-tool-btn" title="Shortcuts" onClick={()=>setShowShortcuts(true)}><Target size={16}/></button>
+                <button className="floating-tool-btn" title="Reset view" aria-label="Reset view" onClick={onReset}><RotateCcw size={16}/></button>
+                <button className="floating-tool-btn" title="Shortcuts" aria-label="Shortcuts" onClick={()=>setShowShortcuts(true)}><Target size={16}/></button>
               </div>
             </div>
           </div>
@@ -4141,13 +4153,13 @@ function Workspace({
           <div className="right-subtabs"><button className={rightTab==="Labels"?"active":""} onClick={()=>setRightTab("Labels")}>Labels</button><button className={rightTab==="Regions"?"active":""} onClick={()=>setRightTab("Regions")}>Regions <em>{currentAnnotations.length}</em></button><button>Relations</button></div>
           <div className="right-content build8-right-content">
             {rightTab === "Labels" ? <div className="right-section label-section-build8">
-              <div className="right-section-head"><div><b>LABELS</b><small>{labels.length} configured</small></div><button onClick={onImport} title="Import images"><Plus size={15}/></button></div>
+              <div className="right-section-head"><div><b>LABELS</b><small>{labels.length} configured</small></div><button onClick={onImport} title="Import images" aria-label="Import images"><Plus size={15}/></button></div>
               <div className="label-search-build8"><Search size={13}/><input value={labelSearch} onChange={e=>setLabelSearch(e.target.value)} placeholder="Filter labels..."/></div>
               <div className="label-list build8-label-list">{filteredLabels.map(label=><button key={label.id} className={`label-item build8-label-item ${selectedLabel===label.id?"selected":""}`} onClick={()=>setSelectedLabel(label.id)}><span className="label-color" style={{background:label.color}}></span><span>{label.name}</span>{suggestedIds?.includes(label.id) && <i className="ai-suggested-badge" title="AI-suggested: frequently used in this dataset"><Zap size={10}/></i>}<b>{objectCountByLabel[label.id] || 0}</b><kbd>{label.type}</kbd></button>)}</div>
               {!filteredLabels.length && <div className="empty-objects"><Target size={24}/><p>No labels found</p></div>}
             </div> : <div className="right-section"><div className="right-section-head"><div><b>REGIONS</b><small>{currentAnnotations.length} objects on canvas{selectedIds?.length>1?` · ${selectedIds.length} selected`:""}</small></div></div>
             {pendingPredictions.length > 0 && <div className="ai-review-banner"><Zap size={14}/><span>{pendingPredictions.length} AI-suggested region{pendingPredictions.length===1?"":"s"} need review</span><div className="ai-review-banner-actions"><button onClick={()=>onAcceptAllPredictions(currentTask.id)}><Check size={12}/> Accept All</button><button onClick={()=>onRejectAllPredictions(currentTask.id)}><X size={12}/> Reject All</button></div></div>}
-            {currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);const pending=a.reviewState==="pending";return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""} ${pending?"is-pending-ai":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}{a.source==="model" && <span className="ai-source-tag"> · AI{a.confidence!=null?` ${Math.round(a.confidence*100)}%`:""}{a.corrected?" · corrected":""}</span>}</small></div>{pending ? <div className="object-item-actions"><button title="Accept" className="accept-btn" onClick={e=>{e.stopPropagation();onAcceptPrediction(currentTask.id,a.id);}}><Check size={13}/></button><button title="Reject" className="danger" onClick={e=>{e.stopPropagation();onRejectPrediction(currentTask.id,a.id);}}><X size={13}/></button></div> : <div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div>}</div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
+            {currentAnnotations.length ? <div className="object-list build8-object-list">{currentAnnotations.map((a,i)=>{const l=labels.find(x=>x.id===a.labelId);const pending=a.reviewState==="pending";return <div key={a.id} className={`object-item build8-object-item ${(selectedIds||[]).includes(a.id)?"selected":""} ${a.hidden?"is-hidden":""} ${pending?"is-pending-ai":""}`} onClick={e=>selectAnnotation(a.id,e.shiftKey)}><span className="object-number" style={{background:l?.color||"#64748b"}}>{i+1}</span><div className="object-item-main"><b>{l?.name||"Object"}</b><small>{a.type === "rectangle" ? "Bounding Box" : a.type}{a.source==="model" && <span className="ai-source-tag"> · AI{a.confidence!=null?` ${Math.round(a.confidence*100)}%`:""}{a.corrected?" · corrected":""}</span>}</small></div>{pending ? <div className="object-item-actions"><button title="Accept" aria-label="Accept" className="accept-btn" onClick={e=>{e.stopPropagation();onAcceptPrediction(currentTask.id,a.id);}}><Check size={13}/></button><button title="Reject" aria-label="Reject" className="danger" onClick={e=>{e.stopPropagation();onRejectPrediction(currentTask.id,a.id);}}><X size={13}/></button></div> : <div className="object-item-actions"><button title={a.hidden?"Show":"Hide"} aria-label={a.hidden?"Show":"Hide"} className={a.hidden?"active":""} onClick={e=>{e.stopPropagation();onToggleVisible(a.id);}}><Eye size={13}/></button><button title={a.locked?"Unlock":"Lock"} aria-label={a.locked?"Unlock":"Lock"} className={a.locked?"active":""} onClick={e=>{e.stopPropagation();onToggleLock(a.id);}}>{a.locked?<ShieldCheck size={13}/>:<Square size={13}/>}</button><button title="Bring forward" aria-label="Bring forward" disabled={i===currentAnnotations.length-1} onClick={e=>{e.stopPropagation();onReorder(a.id,1);}}><ChevronDown size={13} style={{transform:"rotate(180deg)"}}/></button><button title="Send backward" aria-label="Send backward" disabled={i===0} onClick={e=>{e.stopPropagation();onReorder(a.id,-1);}}><ChevronDown size={13}/></button></div>}</div>})}</div>:<div className="empty-objects"><Target size={25}/><p>No regions yet</p><small>Select a label and draw on the image.</small></div>}</div>}
             {selectedAnnotation && <div className="selected-card build8-selected-card"><div><b>Selected region</b><span>{labels.find(l=>l.id===selectedAnnotation.labelId)?.name || "Object"}</span></div><div className="selected-actions"><button onClick={onDuplicate}><Copy size={14}/> Duplicate</button><button className="danger" onClick={onDelete}><Trash2 size={14}/> Delete</button></div></div>}
           </div>
           {isReview && <QaScorecardPanel criteria={qaCriteria} categories={errorCategories} scores={qaCriteriaScores} setScores={setQaCriteriaScores} errors={qaErrors} setErrors={setQaErrors} open={qaScorecardOpen} setOpen={setQaScorecardOpen}/>}
@@ -4347,8 +4359,8 @@ function TaskPlannerPage({
 function PlannerAssignmentModal({tasks, teamMembers, assignee, setAssignee, reviewer, setReviewer, priority, setPriority, queue, setQueue, onClose, onSave}) {
   const annotators = teamMembers.filter(m=>m.status === "Active" && m.role === "Annotator");
   const reviewers = teamMembers.filter(m=>m.status === "Active" && m.role === "Reviewer");
-  return <div className="modal-backdrop"><form className="modal planner-assignment-modal" onSubmit={e=>{e.preventDefault();onSave();}}>
-    <div className="modal-head"><div><span className="eyebrow">TASK OPERATIONS</span><h2>Manage Assignment</h2><p>{tasks.length} task{tasks.length===1?"":"s"} selected for this operation.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal planner-assignment-modal" onSubmit={e=>{e.preventDefault();onSave();}}>
+    <div className="modal-head"><div><span className="eyebrow">TASK OPERATIONS</span><h2>Manage Assignment</h2><p>{tasks.length} task{tasks.length===1?"":"s"} selected for this operation.</p></div><button aria-label="Close dialog" type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
     <div className="planner-assignment-task-preview">{tasks.slice(0,8).map(t=><div key={t.id}><span>{t.id}</span><b>{t.name}</b></div>)}{tasks.length>8&&<small>+ {tasks.length-8} more tasks</small>}</div>
     <div className="assignment-form-grid">
       <label><span>ANNOTATOR</span><select value={assignee} onChange={e=>setAssignee(e.target.value)}><option value="">Unassigned</option>{annotators.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label>
@@ -4483,7 +4495,7 @@ function TaxonomyManager({ config, onAddLabel, onEditLabel, onDeleteLabel, onCre
     <div className="config-panel-head">
       <div><h2>Label & Taxonomy Manager</h2><p>Build a hierarchy of labels, group them, attach attributes, and track how each one is used.</p></div>
       <div className="taxonomy-head-actions">
-        <button className="secondary-btn" onClick={onExportSchema} title="Export label schema as JSON"><Download size={15}/> Export</button>
+        <button className="secondary-btn" onClick={onExportSchema} title="Export label schema as JSON" aria-label="Export label schema as JSON"><Download size={15}/> Export</button>
         <button className="secondary-btn" onClick={() => fileInputRef.current?.click()} title="Import label schema JSON"><Upload size={15}/> Import</button>
         <input ref={fileInputRef} type="file" accept="application/json" style={{ display: "none" }} onChange={e => { const f = e.target.files?.[0]; if (f) onImportSchema(f); e.target.value = ""; }}/>
         <button className="primary-btn" onClick={() => onAddLabel(null)}><Plus size={16}/> Add Label</button>
@@ -4507,11 +4519,11 @@ function TaxonomyManager({ config, onAddLabel, onEditLabel, onDeleteLabel, onCre
       <button className={groupFilter==="Ungrouped"?"active":""} onClick={()=>setGroupFilter("Ungrouped")}>Ungrouped ({labels.filter(l=>!l.groupId).length})</button>
       {labelGroups.map(g => <span key={g.id} className={`label-group-chip ${groupFilter===g.id?"active":""}`}>
         <button onClick={()=>setGroupFilter(g.id)} style={{"--chip-color":g.color}}>{g.name} ({labels.filter(l=>l.groupId===g.id).length})</button>
-        <button className="chip-x" title="Delete group" onClick={()=>onDeleteLabelGroup(g.id)}><X size={11}/></button>
+        <button className="chip-x" title="Delete group" aria-label="Delete group" onClick={()=>onDeleteLabelGroup(g.id)}><X size={11}/></button>
       </span>)}
       <form className="new-group-form" onSubmit={e=>{e.preventDefault(); if(newGroupName.trim()){onCreateLabelGroup(newGroupName); setNewGroupName("");}}}>
         <input value={newGroupName} onChange={e=>setNewGroupName(e.target.value)} placeholder="New label group..."/>
-        <button type="submit" title="Create group"><Plus size={14}/></button>
+        <button type="submit" title="Create group" aria-label="Create group"><Plus size={14}/></button>
       </form>
     </div>
 
@@ -4616,7 +4628,7 @@ function AutomationRuleRow({ rule, teamMembers, onUpdate, onDelete }) {
     </div>
     <div className="rule-action"><ActionIcon size={14}/><select value={rule.action} onChange={e => onUpdate({ action: e.target.value })}>{AUTOMATION_ACTIONS.map(a => <option key={a.id} value={a.id}>{a.label}</option>)}</select></div>
     {rule.action === "notify" && <input className="rule-note-input" value={rule.note || ""} onChange={e => onUpdate({ note: e.target.value })} placeholder="Notification message"/>}
-    <button className="danger-icon" onClick={onDelete} title="Delete rule"><Trash2 size={15}/></button>
+    <button className="danger-icon" onClick={onDelete} title="Delete rule" aria-label="Delete rule"><Trash2 size={15}/></button>
   </div>;
 }
 
@@ -4641,7 +4653,7 @@ function QaScorecardConfigTab({ groupId, config, qaReviews, onUpdateConfig, onCr
       {criteria.length ? <div className="qa-criteria-config-list">{criteria.map(c => <div className="qa-criterion-config-row" key={c.id}>
         <input value={c.name} onChange={e => onUpdateCriterion(groupId, c.id, { name: e.target.value })}/>
         <div className="weight-input"><input type="number" min="0" max="100" value={c.weight} onChange={e => onUpdateCriterion(groupId, c.id, { weight: Math.max(0, Number(e.target.value) || 0) })}/><span>%</span></div>
-        <button className="danger-icon" onClick={() => onDeleteCriterion(groupId, c.id)}><Trash2 size={14}/></button>
+        <button aria-label="Delete criterion" className="danger-icon" onClick={() => onDeleteCriterion(groupId, c.id)}><Trash2 size={14}/></button>
       </div>)}</div> : <div className="config-empty small"><ShieldCheck size={22}/><p>No criteria yet — reviewers will use a single overall score instead.</p></div>}
       {totalWeight !== 100 && !!criteria.length && <p className="field-hint weight-warning">Weights should add up to 100% — they're currently normalized automatically, but exact weights are clearer.</p>}
     </div>
@@ -4651,7 +4663,7 @@ function QaScorecardConfigTab({ groupId, config, qaReviews, onUpdateConfig, onCr
       {categories.length ? <div className="qa-criteria-config-list">{categories.map(c => <div className="qa-error-config-row" key={c.id}>
         <input value={c.name} onChange={e => onUpdateErrorCategory(groupId, c.id, { name: e.target.value })}/>
         <select value={c.severity} onChange={e => onUpdateErrorCategory(groupId, c.id, { severity: e.target.value })}>{SEVERITY_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}</select>
-        <button className="danger-icon" onClick={() => onDeleteErrorCategory(groupId, c.id)}><Trash2 size={14}/></button>
+        <button aria-label="Delete category" className="danger-icon" onClick={() => onDeleteErrorCategory(groupId, c.id)}><Trash2 size={14}/></button>
       </div>)}</div> : <div className="config-empty small"><AlertCircle size={22}/><p>No error categories defined yet.</p></div>}
     </div>
 
@@ -4675,7 +4687,7 @@ function QaScorecardConfigTab({ groupId, config, qaReviews, onUpdateConfig, onCr
         return <div className="calibration-row" key={entry.id}>
           <div><b>{entry.taskId}</b><span>Gold: {entry.goldScore}{entry.notes ? ` · ${entry.notes}` : ""}</span></div>
           {drift !== null ? <span className={`drift-badge ${Math.abs(drift) <= 5 ? "good" : Math.abs(drift) <= 15 ? "warn" : "bad"}`}>{review.reviewer}: {review.score} ({drift > 0 ? "+" : ""}{drift})</span> : <span className="drift-badge pending">Not reviewed yet</span>}
-          <button className="danger-icon" onClick={() => onDeleteCalibration(groupId, entry.id)}><Trash2 size={13}/></button>
+          <button aria-label="Delete calibration entry" className="danger-icon" onClick={() => onDeleteCalibration(groupId, entry.id)}><Trash2 size={13}/></button>
         </div>;
       })}</div> : <div className="config-empty small"><Target size={22}/><p>Add a reference task with an expert "gold" score to track reviewer calibration drift.</p></div>}
       {!!reviewableTasks.length && <p className="field-hint">{reviewableTasks.length} reviewed task{reviewableTasks.length===1?"":"s"} in this project can be used as calibration references.</p>}
@@ -4688,8 +4700,8 @@ function LabelEditorModal({editing,form,setForm,onClose,onSave,error,allLabels,e
   const addAttribute = () => setForm({ ...form, attributes: [...(form.attributes||[]), { id: `attr-${Date.now()}`, name: "", type: "Text", options: "", required: false }] });
   const updateAttribute = (id, patch) => setForm({ ...form, attributes: (form.attributes||[]).map(a => a.id === id ? { ...a, ...patch } : a) });
   const removeAttribute = (id) => setForm({ ...form, attributes: (form.attributes||[]).filter(a => a.id !== id) });
-  return <div className="modal-backdrop"><form className="modal label-editor-modal" onSubmit={onSave}>
-    <div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal label-editor-modal" onSubmit={onSave}>
+    <div className="modal-head"><div><span className="eyebrow">LABEL SCHEMA</span><h2>{editing?"Edit Label":"Add Label"}</h2><p>Define the label shown in the annotation workspace.</p></div><button aria-label="Close dialog" type="button" className="modal-close" onClick={onClose}><X size={18}/></button></div>
     <div className="label-editor-form">
       <label><span>LABEL NAME</span><input autoFocus required value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Pedestrian"/></label>
       <label><span>GEOMETRY TYPE</span><select value={form.type} onChange={e=>setForm({...form,type:e.target.value})}><option>Rectangle</option><option>Polygon</option><option>Polyline</option><option>Keypoint</option><option>Classification</option></select></label>
@@ -4704,7 +4716,7 @@ function LabelEditorModal({editing,form,setForm,onClose,onSave,error,allLabels,e
           <select value={attr.type} onChange={e=>updateAttribute(attr.id,{type:e.target.value})}>{ATTRIBUTE_TYPES.map(t=><option key={t} value={t}>{t}</option>)}</select>
           {attr.type === "Select" && <input value={attr.options||""} onChange={e=>updateAttribute(attr.id,{options:e.target.value})} placeholder="option1, option2, ..."/>}
           <label className="attribute-required"><input type="checkbox" checked={!!attr.required} onChange={e=>updateAttribute(attr.id,{required:e.target.checked})}/> Required</label>
-          <button type="button" className="danger-icon" onClick={()=>removeAttribute(attr.id)}><Trash2 size={14}/></button>
+          <button aria-label="Remove attribute" type="button" className="danger-icon" onClick={()=>removeAttribute(attr.id)}><Trash2 size={14}/></button>
         </div>) : <p className="attribute-empty">No attributes yet — add one for extra metadata annotators must fill in (e.g. color, occlusion, condition).</p>}
       </div>
       {error && <div className="form-error"><AlertCircle size={14}/> {error}</div>}
@@ -4813,12 +4825,12 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
             {team.length > 0 && <div className="overview-avatar-stack tile-avatars">{team.slice(0,4).map(m=><div key={m.id} className="member-avatar small" title={m.name}>{initials(m.name)}</div>)}</div>}
           </button>
           {canManage && <div className="category-tile-actions">
-            <button title="Duplicate project" onClick={()=>onDuplicateGroup(group.id)}><Copy size={14}/></button>
-            <button title="Edit project" onClick={()=>onEditGroup(group)}><Edit3 size={14}/></button>
+            <button title="Duplicate project" aria-label="Duplicate project" onClick={()=>onDuplicateGroup(group.id)}><Copy size={14}/></button>
+            <button title="Edit project" aria-label="Edit project" onClick={()=>onEditGroup(group)}><Edit3 size={14}/></button>
             {archived
-              ? <button title="Restore project" onClick={()=>onRestoreGroup(group.id)}><RotateCcw size={14}/></button>
-              : <button title="Archive project" onClick={()=>onArchiveGroup(group.id)}><Archive size={14}/></button>}
-            <button title="Delete project" className="danger-icon" onClick={()=>onDeleteGroup(group.id)}><Trash2 size={14}/></button>
+              ? <button title="Restore project" aria-label="Restore project" onClick={()=>onRestoreGroup(group.id)}><RotateCcw size={14}/></button>
+              : <button title="Archive project" aria-label="Archive project" onClick={()=>onArchiveGroup(group.id)}><Archive size={14}/></button>}
+            <button title="Delete project" aria-label="Delete project" className="danger-icon" onClick={()=>onDeleteGroup(group.id)}><Trash2 size={14}/></button>
           </div>}
         </div>;
       })}
@@ -4829,14 +4841,14 @@ function ProjectsPage({groups,projects,teamMembers,projectConfigs,auditEvents,se
 
 function ProjectCard({p,onEdit,onDelete,onDetails,onWorkspace,onReview,onPlanner,onSettings,canManage}) {
   return <article className="project-card task-open-card">
-    <div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div>
+    <div className="project-card-head"><div className="project-icon"><FolderKanban size={19}/></div>{canManage && <button aria-label="Edit" className="more-btn" onClick={onEdit}><Edit3 size={16}/></button>}</div>
     <div className="task-open-zone" role="button" tabIndex={0} onClick={onWorkspace} onKeyDown={e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onWorkspace(); } }} title="Open annotation workstation">
       <div className="project-card-title"><h3>{p.name}</h3><span>{p.client}</span></div>
       <div className="project-meta"><span>{p.annotationType}</span><span>•</span><span>{p.team}</span></div>
       <div className="card-progress"><div><b>{progressOf(p)}%</b><span>{Number(p.completedImages).toLocaleString()} / {Number(p.totalImages).toLocaleString()} images</span></div><div className="progress-track"><i style={{width:`${progressOf(p)}%`}}/></div></div>
     </div>
     <div className="task-workflow-row"><button className="workflow-btn annotate" onClick={onWorkspace}><Play size={13}/> Annotation</button><button className="workflow-btn review" onClick={onReview}><ClipboardCheck size={13}/> Review</button></div>
-    <div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div>
+    <div className="project-card-foot"><StatusBadge status={p.status}/><div className="card-actions"><button onClick={onDetails}>Details</button><button className="planner-link" onClick={onPlanner}><Target size={13}/> Planner</button><button onClick={onSettings}><Settings size={13}/> Settings</button>{canManage && <button aria-label="Delete" className="danger-icon" onClick={onDelete}><Trash2 size={15}/></button>}</div></div>
   </article>;
 }
 
@@ -4844,6 +4856,27 @@ const SEARCH_CATEGORY_META = [
   ["project", "Projects"], ["task", "Tasks"], ["user", "Users"], ["dataset", "Datasets"],
   ["annotation", "Annotations"], ["review", "Reviews"], ["audit", "Audit Events"], ["notification", "Notifications"]
 ];
+
+function ConfirmDialog({ title, message, confirmLabel, cancelLabel, danger, onConfirm, onCancel }) {
+  const cancelRef = useRef(null);
+  useEffect(() => { cancelRef.current?.focus(); }, []);
+  useEffect(() => {
+    function onKey(e) { if (e.key === "Escape") { e.stopPropagation(); onCancel(); } if (e.key === "Enter") { e.stopPropagation(); onConfirm(); } }
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [onCancel, onConfirm]);
+  return <div className="command-backdrop confirm-backdrop" onClick={onCancel}>
+    <div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-dialog-title" aria-describedby="confirm-dialog-message" onClick={e => e.stopPropagation()}>
+      <div className={`confirm-icon ${danger ? "danger" : ""}`}>{danger ? <AlertCircle size={20}/> : <CheckCircle2 size={20}/>}</div>
+      <h2 id="confirm-dialog-title">{title}</h2>
+      <p id="confirm-dialog-message">{message}</p>
+      <div className="confirm-actions">
+        <button ref={cancelRef} className="secondary-btn" onClick={onCancel}>{cancelLabel}</button>
+        <button className={danger ? "danger-btn" : "primary-btn"} onClick={onConfirm}>{confirmLabel}</button>
+      </div>
+    </div>
+  </div>;
+}
 
 function CommandPalette({ onClose, getResults, quickActions, recentItems, favoriteItems, isFavorite, onToggleFavorite, onSelect }) {
   const [query, setQuery] = useState("");
@@ -4881,7 +4914,7 @@ function CommandPalette({ onClose, getResults, quickActions, recentItems, favori
       <div className="command-input-row">
         <Search size={18}/>
         <input ref={inputRef} value={query} onChange={e => setQuery(e.target.value)} onKeyDown={handleKeyDown} placeholder="Search projects, tasks, users, datasets, reviews…"/>
-        <button className="command-close" onClick={onClose}><X size={16}/></button>
+        <button aria-label="Close search" className="command-close" onClick={onClose}><X size={16}/></button>
       </div>
       <div className="command-results">
         {sections.map(([label, items]) => <div className="command-section" key={label}>
@@ -4905,20 +4938,20 @@ function CommandPalette({ onClose, getResults, quickActions, recentItems, favori
 
 function ProjectModal({form,setForm,editing,onClose,onSave}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
-  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{editing?"Edit Task":"Create Task"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label>Task name<input required value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. momah_seg_jul_2"/></label><label>Client / organization<input required value={form.client} onChange={e=>set("client",e.target.value)} placeholder="Client name"/></label><label>Annotation type<select value={form.annotationType} onChange={e=>set("annotationType",e.target.value)}><option>Bounding Box</option><option>Polygon</option><option>Segmentation</option><option>Classification</option><option>Keypoints</option><option>Polyline</option></select></label><label>Team<select value={form.team} onChange={e=>set("team",e.target.value)}><option>Annotation Team</option><option>Road Vision Team</option><option>Segmentation Team</option><option>Infrastructure Team</option><option>Classification Team</option></select></label><label>Total images<input type="number" min="1" value={form.totalImages} onChange={e=>set("totalImages",e.target.value)}/></label><label>Completed images<input type="number" min="0" value={form.completedImages} onChange={e=>set("completedImages",e.target.value)}/></label><label>Start date<input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}/></label><label>Due date<input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)}/></label><label>Status<select value={form.status} onChange={e=>set("status",e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Task description..."/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Task"}</button></div></form></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{editing?"Edit Task":"Create Task"}</h2></div><button aria-label="Close dialog" type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label>Task name<input required value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. momah_seg_jul_2"/></label><label>Client / organization<input required value={form.client} onChange={e=>set("client",e.target.value)} placeholder="Client name"/></label><label>Annotation type<select value={form.annotationType} onChange={e=>set("annotationType",e.target.value)}><option>Bounding Box</option><option>Polygon</option><option>Segmentation</option><option>Classification</option><option>Keypoints</option><option>Polyline</option></select></label><label>Team<select value={form.team} onChange={e=>set("team",e.target.value)}><option>Annotation Team</option><option>Road Vision Team</option><option>Segmentation Team</option><option>Infrastructure Team</option><option>Classification Team</option></select></label><label>Total images<input type="number" min="1" value={form.totalImages} onChange={e=>set("totalImages",e.target.value)}/></label><label>Completed images<input type="number" min="0" value={form.completedImages} onChange={e=>set("completedImages",e.target.value)}/></label><label>Start date<input type="date" value={form.startDate} onChange={e=>set("startDate",e.target.value)}/></label><label>Due date<input type="date" value={form.dueDate} onChange={e=>set("dueDate",e.target.value)}/></label><label>Status<select value={form.status} onChange={e=>set("status",e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Task description..."/></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Task"}</button></div></form></div>;
 }
 
 function GroupModal({form,setForm,editing,onClose,onSave,teamMembers}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
   const iconChoices = Object.keys(GROUP_ICONS);
   const toggleTeam = (id) => setForm(prev => ({ ...prev, teamIds: prev.teamIds.includes(id) ? prev.teamIds.filter(x=>x!==id) : [...prev.teamIds, id] }));
-  return <div className="modal-backdrop"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label>Owner<select value={form.ownerId} onChange={e=>set("ownerId",e.target.value)}><option value="">No owner</option>{teamMembers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Lifecycle stage<select value={form.stage||"Planning"} onChange={e=>set("stage",e.target.value)}>{PROJECT_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div>
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal project-modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">PROJECT</span><h2>{editing?"Edit Project":"Create Project"}</h2></div><button aria-label="Close dialog" type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Project name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. Segmentation"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What kind of work lives in this project?"/></label><label>Owner<select value={form.ownerId} onChange={e=>set("ownerId",e.target.value)}><option value="">No owner</option>{teamMembers.map(m=><option key={m.id} value={m.id}>{m.name}</option>)}</select></label><label>Lifecycle stage<select value={form.stage||"Planning"} onChange={e=>set("stage",e.target.value)}>{PROJECT_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label><label className="full"><span>Color</span><div className="color-picker-row">{labelPalette.map(c=><button type="button" key={c} className={form.color===c?"selected":""} style={{background:c}} onClick={()=>set("color",c)}/>)}</div></label><label className="full"><span>Icon</span><div className="color-picker-row icon-picker-row">{iconChoices.map(name=>{const Icon=GROUP_ICONS[name];return <button aria-label={`Icon: ${name}`} type="button" key={name} className={`icon-choice ${form.icon===name?"selected":""}`} onClick={()=>set("icon",name)}><Icon size={16}/></button>;})}</div></label></div>
   <div className="team-project-form"><span>ASSIGNED TEAM</span><div>{teamMembers.map(m=>{const active=form.teamIds.includes(m.id);return <button type="button" key={m.id} className={`project-check ${active?"active":""}`} onClick={()=>toggleTeam(m.id)}><span>{active?<CheckCircle2 size={13}/>:<Users size={13}/>}</span><div><b>{m.name}</b><small>{m.role}</small></div></button>;})}</div></div>
   <div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Project"}</button></div></form></div>;
 }
 
 function ProjectDetails({project,onClose,onEdit}) {
-  return <div className="modal-backdrop"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Task</button></div></div></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal details-modal"><div className="modal-head"><div><span className="eyebrow">TASK DETAILS</span><h2>{project.name}</h2><p>{project.client}</p></div><button aria-label="Close dialog" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="detail-progress"><div className="big-progress">{progressOf(project)}%</div><div><b>Annotation progress</b><p>{Number(project.completedImages).toLocaleString()} completed · {Math.max(0,project.totalImages-project.completedImages).toLocaleString()} remaining</p><div className="progress-track"><i style={{width:`${progressOf(project)}%`}}/></div></div></div><div className="detail-grid"><Detail label="Annotation type" value={project.annotationType}/><Detail label="Team" value={project.team}/><Detail label="Start date" value={project.startDate||"—"}/><Detail label="Due date" value={project.dueDate||"—"}/><Detail label="Total images" value={Number(project.totalImages).toLocaleString()}/><Detail label="Status" value={project.status}/></div><div className="description-box"><b>Description</b><p>{project.description||"No description provided."}</p></div><div className="modal-foot"><button className="secondary-btn" onClick={onClose}>Close</button><button className="primary-btn" onClick={onEdit}><Edit3 size={16}/> Edit Task</button></div></div></div>;
 }
 
 function TaskSettingsPage({task, tab, setTab, subTab, setSubTab, onBack, onEditTask, importProps, exportProps}) {
@@ -4996,7 +5029,7 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
       </section>}
       <section className="panel task-library"><div className="task-library-head"><div><h2>Dataset Images</h2><p>Every imported image becomes an annotation task.</p></div><div className="view-toggle"><button className={view==="table"?"active":""} onClick={()=>setView("table")}><ListFilter size={14}/> List</button><button className={view==="grid"?"active":""} onClick={()=>setView("grid")}><Grid3X3 size={14}/> Grid</button></div></div>
         <div className="task-filters"><div className="filter-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search image name or ID..."/></div><div className="select-wrap"><ListFilter size={15}/><select value={status} onChange={e=>setStatus(e.target.value)}><option>All</option><option>Pending</option><option>In Progress</option><option>Completed</option></select></div><span className="result-count">Showing {filteredTasks.length} of {dsTasks.length}</span></div>
-        {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{pagedTasks.map((t)=>{const originalIndex=taskIndexById[t.id] ?? -1;return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt="" loading="lazy" decoding="async"/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{pagedTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name} loading="lazy" decoding="async"/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
+        {!filteredTasks.length ? <div className="dataset-empty"><Upload size={38}/><h3>{dsTasks.length ? "No matching images" : "This dataset is empty"}</h3><p>{dsTasks.length ? "Change the search or status filter." : "Import one or more images to create your first annotation tasks."}</p>{!dsTasks.length && <button className="primary-btn" onClick={()=>onImport(activeDataset.id)}><Upload size={15}/> Add Images</button>}</div> : view==="table" ? <div className="task-table-wrap"><table className="task-table"><thead><tr><th>IMAGE</th><th>PREVIEW</th><th>STATUS</th><th>FILE</th><th>SOURCE</th><th></th></tr></thead><tbody>{pagedTasks.map((t)=>{const originalIndex=taskIndexById[t.id] ?? -1;return <tr key={t.id}><td><b>{t.name}</b><small>{t.id}</small></td><td><img className="task-thumb" src={t.image} alt="" loading="lazy" decoding="async"/></td><td><select className="task-status-select" value={t.status} onChange={e=>onStatus(t.id,e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option></select></td><td>{t.image ? <span className="source-pill valid-pill">Valid</span> : <span className="source-pill invalid-pill">Invalid</span>}</td><td><span className="source-pill">{t.source||"Sample"}</span></td><td><div className="task-row-actions"><button title="Open in workspace" aria-label="Open in workspace" onClick={()=>{window.dispatchEvent(new CustomEvent("annotatepro-open-task",{detail:originalIndex}));}}><Play size={14}/></button><button title="Remove" aria-label="Remove" onClick={()=>onRemove(t.id)}><Trash2 size={14}/></button></div></td></tr>})}</tbody></table></div> : <div className="task-grid">{pagedTasks.map(t=><div className="task-tile" key={t.id}><img src={t.image} alt={t.name} loading="lazy" decoding="async"/><div className="task-tile-body"><b title={t.name}>{t.name}</b><small>{t.id}</small><div><StatusBadge status={t.status}/><button aria-label="Remove image" onClick={()=>onRemove(t.id)}><Trash2 size={13}/></button></div></div></div>)}</div>}
         {filteredTasks.length > IMAGE_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedImagePage<=1} onClick={()=>setImagePage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedImagePage} of {imageTotalPages} · {filteredTasks.length} images</span><button disabled={clampedImagePage>=imageTotalPages} onClick={()=>setImagePage(p=>Math.min(imageTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
       </section>
       <div className="dataset-help"><div><ShieldCheck size={18}/><div><b>Local-first dataset storage</b><p>Uploaded images are stored in your browser as data URLs, so your imported tasks remain available after refreshing the page on the same device.</p></div></div><span>Build 17</span></div>
@@ -5026,9 +5059,9 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
             <span className="dataset-card-meta">v{ds.version || 1} · {ds.stage || "Draft"} · {dsTasks.length} images · {annotated} annotated</span>
           </button>
           <div className="category-tile-actions">
-            <button title="Edit dataset" onClick={()=>onEditDataset(ds)}><Edit3 size={14}/></button>
-            {archived ? <button title="Restore dataset" onClick={()=>onRestoreDataset(ds.id)}><RotateCcw size={14}/></button> : <button title="Archive dataset" onClick={()=>onArchiveDataset(ds.id)}><Archive size={14}/></button>}
-            <button title="Delete dataset" className="danger-icon" onClick={()=>onDeleteDataset(ds.id)}><Trash2 size={14}/></button>
+            <button title="Edit dataset" aria-label="Edit dataset" onClick={()=>onEditDataset(ds)}><Edit3 size={14}/></button>
+            {archived ? <button title="Restore dataset" aria-label="Restore dataset" onClick={()=>onRestoreDataset(ds.id)}><RotateCcw size={14}/></button> : <button title="Archive dataset" aria-label="Archive dataset" onClick={()=>onArchiveDataset(ds.id)}><Archive size={14}/></button>}
+            <button title="Delete dataset" aria-label="Delete dataset" className="danger-icon" onClick={()=>onDeleteDataset(ds.id)}><Trash2 size={14}/></button>
           </div>
         </article>;
       })}
@@ -5043,7 +5076,7 @@ function ImportPage({projects,tasks,datasets,projectConfigs,importHistory,onClea
 
 function DatasetModal({form,setForm,editing,onClose,onSave}) {
   const set=(k,v)=>setForm(prev=>({...prev,[k]:v}));
-  return <div className="modal-backdrop"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label><label>Lifecycle stage<select value={form.stage||"Draft"} onChange={e=>set("stage",e.target.value)}>{DATASET_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><form className="modal" onSubmit={onSave}><div className="modal-head"><div><span className="eyebrow">DATASET</span><h2>{editing?"Edit Dataset":"Create Dataset"}</h2></div><button aria-label="Close dialog" type="button" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="form-grid"><label className="full">Dataset name<input required autoFocus value={form.name} onChange={e=>set("name",e.target.value)} placeholder="e.g. July Upload Batch"/></label><label className="full">Description<textarea value={form.description} onChange={e=>set("description",e.target.value)} placeholder="What's in this batch?"/></label><label>Version<input type="number" min="1" value={form.version} onChange={e=>set("version",Number(e.target.value)||1)}/></label><label>Lifecycle stage<select value={form.stage||"Draft"} onChange={e=>set("stage",e.target.value)}>{DATASET_STAGES.map(s=><option key={s} value={s}>{s}</option>)}</select></label></div><div className="modal-foot"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button className="primary-btn" type="submit"><Save size={16}/>{editing?"Save Changes":"Create Dataset"}</button></div></form></div>;
 }
 
 function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat, scope, setScope, project, setProject, projects, search, setSearch, history, onExport, onClearHistory, message, scopedToTask}) {
@@ -5076,7 +5109,7 @@ function ExportPage({tasks, allTasks, annotations, qaReviews, format, setFormat,
           {message && <div className="export-message"><Check size={15}/>{message}</div>}
         </div>
       </section>
-      <section className="panel export-history"><div className="panel-head"><div><h2>Export History</h2><p>Recent deliveries stored in this browser.</p></div><button className="icon-btn" onClick={onClearHistory} title="Clear history"><RefreshCw size={15}/></button></div>
+      <section className="panel export-history"><div className="panel-head"><div><h2>Export History</h2><p>Recent deliveries stored in this browser.</p></div><button className="icon-btn" onClick={onClearHistory} title="Clear history" aria-label="Clear history"><RefreshCw size={15}/></button></div>
         <div className="history-list">{history.length ? history.map(item=><div className="export-history-row" key={item.id}><div className="history-format"><span><Download size={14}/></span><div><b>{item.format}</b><small>{item.tasks} tasks · {item.annotations} annotations</small></div></div><div className="history-time">{new Date(item.at).toLocaleString()}</div></div>) : <div className="export-history-empty"><Download size={30}/><h3>No exports yet</h3><p>Your recent export activity will appear here.</p></div>}</div>
       </section>
     </div>
@@ -5088,8 +5121,8 @@ function ImportModal({onClose,onImport,step,setStep,fileName,columns,rows,mappin
   const mapFields = [["name","Task name","Required — becomes the task's display name"],["image","Image URL","Required — http(s) link or data: URI"],["status","Status","Optional — Pending / In Progress / Completed"]];
   const preview = validation.valid.slice(0,5);
   const problems = [...validation.invalid, ...validation.duplicates].slice(0,6);
-  return <div className="modal-backdrop"><div className="modal import-wizard-modal">
-    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import Tasks</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div>
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal import-wizard-modal">
+    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import Tasks</h2></div><button aria-label="Close dialog" className="modal-close" onClick={onClose}><X size={19}/></button></div>
     <div className="import-steps">
       {["upload","mapping","preview"].map((s,i)=><div key={s} className={`import-step ${step===s?"active":""} ${["upload","mapping","preview"].indexOf(step)>i?"done":""}`}><span>{i+1}</span>{s==="upload"?"Upload":s==="mapping"?"Map Columns":"Preview"}</div>)}
     </div>
@@ -5146,8 +5179,8 @@ function AdvancedImportModal({onClose,step,setStep,kind,fileName,parsed,mapping,
   const existingLabels = projectConfigs?.[groupId]?.labels || [];
   const annotationCount = parsed ? Object.values(parsed.annotationsByImageName || {}).reduce((n,a)=>n+a.length,0) : 0;
 
-  return <div className="modal-backdrop"><div className="modal import-wizard-modal">
-    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import ZIP / COCO / YOLO</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div>
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal import-wizard-modal">
+    <div className="modal-head"><div><span className="eyebrow">DATA IMPORT</span><h2>Import ZIP / COCO / YOLO</h2></div><button aria-label="Close dialog" className="modal-close" onClick={onClose}><X size={19}/></button></div>
     <div className="import-steps">
       {["upload","mapping","preview"].map((s,i)=><div key={s} className={`import-step ${step===s?"active":""} ${["upload","mapping","preview"].indexOf(step)>i?"done":""}`}><span>{i+1}</span>{s==="upload"?"Upload":s==="mapping"?"Map Labels":"Preview"}</div>)}
     </div>
@@ -5259,7 +5292,7 @@ function UpdatePasswordScreen({ onDone }) {
 
 function Shortcuts({onClose}) {
   const rows=[["V","Select"],["B","Bounding Box"],["P","Polygon"],["L","Line"],["R","Brush"],["E","Eraser"],["Space","Pan"],["Delete","Delete selected"],["Ctrl + Z","Undo"],["Ctrl + Shift + Z","Redo"],["Ctrl + C","Copy selected"],["Ctrl + V","Paste"],["Ctrl + D","Duplicate selected"],["Ctrl + A","Select all"],["Shift + Click","Add / remove from selection"],["Drag on empty canvas","Marquee select"],["Alt + Click vertex","Delete vertex"],["+ / -","Zoom"],["← / →","Previous / next task"]];
-  return <div className="modal-backdrop"><div className="modal shortcuts-modal"><div className="modal-head"><div><span className="eyebrow">WORKSPACE</span><h2>Keyboard shortcuts</h2></div><button className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="shortcut-list">{rows.map(r=><div key={r[0]}><kbd>{r[0]}</kbd><span>{r[1]}</span></div>)}</div></div></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal shortcuts-modal"><div className="modal-head"><div><span className="eyebrow">WORKSPACE</span><h2>Keyboard shortcuts</h2></div><button aria-label="Close dialog" className="modal-close" onClick={onClose}><X size={19}/></button></div><div className="shortcut-list">{rows.map(r=><div key={r[0]}><kbd>{r[0]}</kbd><span>{r[1]}</span></div>)}</div></div></div>;
 }
 
 
@@ -5472,7 +5505,7 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
 
       <section className="panel team-detail-panel">
         {selectedMember ? <>
-          <div className="team-detail-head"><div className="detail-profile"><div className="detail-avatar">{initials(selectedMember.name)}</div><div><h2>{selectedMember.name}</h2><p>{selectedMember.email}</p><div className="member-tags"><em className="role-pill">{selectedMember.role}</em><em className={`member-status ${selectedMember.status.toLowerCase()}`}><i></i>{selectedMember.status}</em></div></div></div><div className="detail-actions"><button className="secondary-btn" onClick={()=>onEdit(selectedMember)}><Edit3 size={14}/> Edit</button><button className="icon-btn" title={selectedMember.status === "Active" ? "Deactivate" : "Activate"} onClick={()=>onToggleStatus(selectedMember)}>{selectedMember.status === "Active" ? <Pause size={15}/> : <Play size={15}/>}</button><button className="icon-btn danger" title="Remove member" onClick={()=>onDelete(selectedMember)}><Trash2 size={15}/></button></div></div>
+          <div className="team-detail-head"><div className="detail-profile"><div className="detail-avatar">{initials(selectedMember.name)}</div><div><h2>{selectedMember.name}</h2><p>{selectedMember.email}</p><div className="member-tags"><em className="role-pill">{selectedMember.role}</em><em className={`member-status ${selectedMember.status.toLowerCase()}`}><i></i>{selectedMember.status}</em></div></div></div><div className="detail-actions"><button className="secondary-btn" onClick={()=>onEdit(selectedMember)}><Edit3 size={14}/> Edit</button><button className="icon-btn" title={selectedMember.status === "Active" ? "Deactivate" : "Activate"} aria-label={selectedMember.status === "Active" ? "Deactivate" : "Activate"} onClick={()=>onToggleStatus(selectedMember)}>{selectedMember.status === "Active" ? <Pause size={15}/> : <Play size={15}/>}</button><button className="icon-btn danger" title="Remove member" aria-label="Remove member" onClick={()=>onDelete(selectedMember)}><Trash2 size={15}/></button></div></div>
           <div className="detail-metrics"><div><span>Assigned</span><b>{assignedTasks.length}</b></div><div><span>Capacity</span><b>{selectedMember.capacity || 0}</b></div><div><span>Workload</span><b>{workload}%</b></div><div><span>QA Score</span><b>{selectedMember.qaScore ? `${selectedMember.qaScore}%` : "—"}</b></div></div>
           <div className="team-detail-section"><div className="section-title"><div><h3>Project Access</h3><p>Projects this member can work on</p></div><ShieldCheck size={16}/></div><div className="project-access-list">{(selectedMember.projects || []).length ? selectedMember.projects.map(id=><div key={id}><FolderKanban size={14}/><span>{projectName(id)}</span><Check size={14}/></div>) : <div className="no-access">No projects assigned.</div>}</div></div>
           <div className="team-detail-section"><div className="section-title"><div><h3>Current Assignments</h3><p>Tasks currently allocated to this member</p></div><span>{assignedTasks.length}</span></div>{assignedTasks.length ? <div className="assignment-list">{assignedTasks.map(task=><div className="assignment-row" key={task.id}><div className="assignment-thumb">{task.image ? <img src={task.image} alt="" loading="lazy" decoding="async"/> : <ImageIcon size={15}/>}</div><div><b>{task.name}</b><span>{projectName(task.projectId)}</span></div><StatusBadge status={task.status}/><button className="icon-btn" onClick={()=>onAssign(task.id, "")} title="Unassign"><X size={14}/></button></div>)}</div> : <div className="team-empty compact"><ClipboardCheck size={25}/><p>No tasks assigned yet.</p></div>}</div>
@@ -5498,7 +5531,7 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
 
 function TeamMemberModal({editing, form, setForm, projects, onClose, onSave}) {
   const toggleProject = id => setForm(prev => ({...prev, projects: prev.projects.includes(id) ? prev.projects.filter(x=>x!==id) : [...prev.projects, id]}));
-  return <div className="modal-backdrop"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button aria-label="Close" className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
 }
 
 function WorkloadPage({projects,rows,summary,tasks,project,setProject,projectOptions,role,setRole,capacityMode,setCapacityMode,settings,setSettings,onBalance,onCapacity,message,onOpenPlanner}) {
@@ -5872,12 +5905,12 @@ function IntegrationsSettingsTab({ apiTokens, onGenerateToken, onRevokeToken, on
         <input value={newTokenName} onChange={e => setNewTokenName(e.target.value)} placeholder="Token name (e.g. Zapier integration)"/>
         <button type="submit" className="ghost-btn"><Plus size={13}/> Generate Token</button>
       </form>
-      {revealedToken && <div className="token-reveal"><code>{revealedToken}</code><button className="ghost-btn" onClick={() => { navigator.clipboard?.writeText(revealedToken); }}><Copy size={12}/> Copy</button><button className="chip-x" onClick={() => setRevealedToken(null)}><X size={12}/></button></div>}
+      {revealedToken && <div className="token-reveal"><code>{revealedToken}</code><button className="ghost-btn" onClick={() => { navigator.clipboard?.writeText(revealedToken); }}><Copy size={12}/> Copy</button><button aria-label="Dismiss" className="chip-x" onClick={() => setRevealedToken(null)}><X size={12}/></button></div>}
       {apiTokens.length ? <div className="token-list">{apiTokens.map(t => <div className={`token-row ${t.revoked?"revoked":""}`} key={t.id}>
         <div><b>{t.name}</b><span>{t.token.slice(0,10)}••••••••• · {new Date(t.createdAt).toLocaleDateString()}</span></div>
         <span className={`token-status ${t.revoked?"revoked":"active"}`}>{t.revoked?"Revoked":"Active"}</span>
         {!t.revoked && <button className="ghost-btn" onClick={()=>onRevokeToken(t.id)}>Revoke</button>}
-        <button className="danger-icon" onClick={()=>onDeleteToken(t.id)}><Trash2 size={14}/></button>
+        <button aria-label="Delete token" className="danger-icon" onClick={()=>onDeleteToken(t.id)}><Trash2 size={14}/></button>
       </div>)}</div> : <div className="config-empty small"><Zap size={22}/><p>No API tokens yet.</p></div>}
     </div>
 
@@ -5895,7 +5928,7 @@ function IntegrationsSettingsTab({ apiTokens, onGenerateToken, onRevokeToken, on
         <div className="webhook-main"><b>{w.name}</b><span>{w.url}</span><div className="webhook-events">{(w.events||[]).map(e=><span key={e} className="webhook-event-tag">{WEBHOOK_EVENT_TYPES.find(x=>x.id===e)?.label || e}</span>)}</div></div>
         <span className={`token-status ${w.lastStatus==="Success"||w.lastStatus==="Success (test)"?"active":w.lastStatus?"revoked":""}`}>{w.lastStatus || "Not triggered yet"}</span>
         <button className="ghost-btn" onClick={()=>onTestWebhook(w.id)}>Test</button>
-        <button className="danger-icon" onClick={()=>onDeleteWebhook(w.id)}><Trash2 size={14}/></button>
+        <button aria-label="Delete webhook" className="danger-icon" onClick={()=>onDeleteWebhook(w.id)}><Trash2 size={14}/></button>
       </div>)}</div> : <div className="config-empty small"><Zap size={22}/><p>No webhooks configured yet.</p></div>}
     </div>
 
