@@ -271,9 +271,28 @@ function App() {
   const currentUserEmail = session?.user?.email || "";
   const currentUserInitial = initials(currentUserName);
   const currentUserRole = authProfile?.role || "Annotator";
+
+  // ---- Role & Permission Matrix ----
+  // Role → section visibility → action permission → data scope, kept as one
+  // small set of booleans derived in one place rather than scattered
+  // currentUserRole === "X" checks, so every gate stays consistent with the
+  // matrix and a future role only needs to change its definition here.
   const isAdmin = currentUserRole === "Admin";
-  const canManage = isAdmin || currentUserRole === "Team Lead";
-  const canReview = canManage || currentUserRole === "Reviewer";
+  const isManager = currentUserRole === "Manager";
+  const isTeamLead = currentUserRole === "Team Lead";
+  const isReviewer = currentUserRole === "Reviewer";
+  const isAnnotator = currentUserRole === "Annotator";
+
+  const canManage = isAdmin || isManager || isTeamLead; // Projects/Task Planner/Workload/Deadlines/Operations — Team Lead is scoped to owned/assigned further down
+  const canManageFully = isAdmin || isManager; // unscoped — every project, every team member
+  const canReview = canManage || isReviewer; // QA Accept/Reject/Request Changes
+  const canManageTeam = isAdmin || isManager || isTeamLead; // Team Lead is scoped to their own team members
+  const canManageIntegrations = isAdmin || isManager; // API tokens, webhooks, ML import, data export
+  const canManageRoles = isAdmin; // Roles & Access is account/security administration
+  const canMigrate = isAdmin; // Cloud Migration touches the whole workspace's data
+  const canManageSecurity = isAdmin; // session policy, backups, RLS/permission audit
+  const canImportData = isAdmin || isManager || isTeamLead; // Reviewers/Annotators never import source data
+  const canConfigureProjects = isAdmin || isManager || isTeamLead; // label schema, automation, QA scorecard, SLA
 
   async function signOut() {
     await supabase.auth.signOut();
@@ -831,7 +850,7 @@ function App() {
     { id: "m8", name: "Ananya Das", email: "ananya@annotatepro.local", role: "Annotator", status: "Inactive", projects: [], capacity: 0, completed: 27, qaScore: 93 }
   ]));
   const myTeamMemberId = teamMembers.find(m => m.email && currentUserEmail && m.email.toLowerCase() === currentUserEmail.toLowerCase())?.id || null;
-  const canEditProject = (group) => canManage || (group?.teamIds || []).includes(myTeamMemberId);
+  const canEditProject = (group) => canManageFully || (isTeamLead && ((group?.teamIds || []).includes(myTeamMemberId) || group?.ownerId === myTeamMemberId));
   const [teamSearch, setTeamSearch] = useState("");
   const [teamRoleFilter, setTeamRoleFilter] = useState("All Roles");
   const [teamStatusFilter, setTeamStatusFilter] = useState("All Status");
@@ -1524,12 +1543,23 @@ function App() {
     return { active, total, remaining: Math.max(0, total - completed), completed };
   }, [projects]);
 
-  const filteredProjects = useMemo(() => projects.filter(p => {
+  const scopedProjects = useMemo(() => {
+    const groupById = Object.fromEntries(projectGroups.map(g => [g.id, g]));
+    const myAssignedProjectIds = isAnnotator ? new Set(tasks.filter(t => t.assigneeId === myTeamMemberId).map(t => t.projectId)) : null;
+    return projects.filter(p => {
+      const group = groupById[p.groupId];
+      return canManageFully || isReviewer
+        || (isTeamLead && ((group?.teamIds || []).includes(myTeamMemberId) || group?.ownerId === myTeamMemberId))
+        || (isAnnotator && myAssignedProjectIds.has(p.id));
+    });
+  }, [projects, projectGroups, tasks, canManageFully, isReviewer, isTeamLead, isAnnotator, myTeamMemberId]);
+
+  const filteredProjects = useMemo(() => scopedProjects.filter(p => {
     const q = projectSearch.toLowerCase();
     const matchesSearch = !q || `${p.name} ${p.client} ${p.team}`.toLowerCase().includes(q);
     const matchesStatus = projectStatusFilter === "All" || p.status === projectStatusFilter;
     return matchesSearch && matchesStatus;
-  }), [projects, projectSearch, projectStatusFilter]);
+  }), [scopedProjects, projectSearch, projectStatusFilter]);
 
   const filteredTasks = useMemo(() => tasks.filter(t => taskFilter === "All" || t.status === taskFilter), [tasks, taskFilter]);
 
@@ -1814,7 +1844,7 @@ function App() {
 
     // Authentication / Permissions
     push("Authentication", "Session present", session ? "pass" : "fail", session ? `Signed in as ${currentUserEmail}.` : "No active session.");
-    push("Permissions", "Recognized role", ["Admin","Team Lead","Reviewer","Annotator"].includes(currentUserRole) ? "pass" : "warn", `Current role: ${currentUserRole || "unset"}.`);
+    push("Permissions", "Recognized role", ["Admin","Manager","Team Lead","Reviewer","Annotator"].includes(currentUserRole) ? "pass" : "warn", `Current role: ${currentUserRole || "unset"}.`);
 
     // Cloud storage
     const base64Count = tasks.filter(t => t.image && t.image.startsWith("data:")).length;
@@ -1870,21 +1900,6 @@ function App() {
       .map(n => ({ type: "notification", id: n.id, title: n.title, subtitle: n.message, icon: Bell }));
     return { project: projectResults, task: taskResults, user: userResults, dataset: datasetResults, review: reviewResults, annotation: annotationResults, audit: auditResults, notification: notificationResults };
   }
-
-  const quickActions = [
-    { type: "action", id: "create-project", title: "Create Project", subtitle: "Quick action", icon: Plus, run: () => { navigate("Projects"); openCreateGroup(); } },
-    { type: "action", id: "start-annotating", title: "Start Annotating", subtitle: "Quick action", icon: Play, run: () => openWorkstation(null, "Annotation") },
-    { type: "action", id: "pending-reviews", title: "Pending Reviews", subtitle: "Quick action", icon: ClipboardCheck, run: () => openWorkstation(null, "Review") },
-    { type: "action", id: "task-planner", title: "Task Planner", subtitle: "Quick action", icon: Target, run: () => navigate("Task Planner") },
-    { type: "action", id: "deadlines", title: "Deadlines", subtitle: "Quick action", icon: Calendar, run: () => navigate("Deadlines") },
-    { type: "action", id: "qa-quality", title: "QA & Quality", subtitle: "Quick action", icon: ShieldCheck, run: () => navigate("QA & Quality") },
-    { type: "action", id: "reports", title: "Reports", subtitle: "Quick action", icon: TrendingUp, run: () => navigate("Reports") },
-    { type: "action", id: "analytics", title: "Analytics", subtitle: "Quick action", icon: BarChart3, run: () => navigate("Analytics") },
-    { type: "action", id: "workload", title: "Workload", subtitle: "Quick action", icon: Layers, run: () => navigate("Workload") },
-    { type: "action", id: "team", title: "Team", subtitle: "Quick action", icon: Users, run: () => navigate("Team") },
-    { type: "action", id: "audit-trail", title: "Audit Trail", subtitle: "Quick action", icon: FileText, run: () => navigate("Audit Trail") },
-    { type: "action", id: "settings", title: "Settings", subtitle: "Quick action", icon: Settings, run: () => navigate("Settings") }
-  ];
 
   function recordRecentItem(item) {
     if (item.type === "action") return;
@@ -3033,10 +3048,39 @@ function App() {
     window.setTimeout(() => setSettingsMessage(""), 1800);
   };
 
-  const navItems = [
+  const allNavItems = [
     ["Dashboard", LayoutDashboard], ["Projects", FolderKanban], ["Task Planner", Target], ["Workload", Layers],
     ["Team", Users], ["Deadlines", Calendar], ["QA & Quality", ShieldCheck], ["Reports", TrendingUp], ["Analytics", BarChart3], ["Operations", Activity], ["Audit Trail", FileText], ["Notifications", Bell],
     ["Settings", Settings]
+  ];
+  // Admin, Manager and Team Lead see the full operational sidebar; Reviewer and
+  // Annotator get a reduced set matching what they're actually permitted to do.
+  const navItems = (isAdmin || isManager || isTeamLead) ? allNavItems
+    : isReviewer ? allNavItems.filter(([name]) => ["Dashboard","Projects","QA & Quality","Reports","Analytics","Deadlines","Notifications","Settings"].includes(name))
+    : allNavItems.filter(([name]) => ["Dashboard","Projects","Notifications","Settings"].includes(name));
+
+  // Pages reachable by drill-down (not a sidebar link) but still role-restricted.
+  const PAGE_ROLE_GUARD = { "Project Configuration": canConfigureProjects };
+  useEffect(() => {
+    const inNav = navItems.some(([name]) => name === activePage);
+    const drillDownAllowed = PAGE_ROLE_GUARD[activePage] === true || activePage === "Annotation Workspace";
+    if (!inNav && !drillDownAllowed) setActivePage("Dashboard");
+  }, [activePage, currentUserRole]);
+
+  const navPageNames = new Set(navItems.map(([name]) => name));
+  const quickActions = [
+    ...(canManage ? [{ type: "action", id: "create-project", title: "Create Project", subtitle: "Quick action", icon: Plus, run: () => { navigate("Projects"); openCreateGroup(); } }] : []),
+    { type: "action", id: "start-annotating", title: "Start Annotating", subtitle: "Quick action", icon: Play, run: () => openWorkstation(null, "Annotation") },
+    ...(canReview ? [{ type: "action", id: "pending-reviews", title: "Pending Reviews", subtitle: "Quick action", icon: ClipboardCheck, run: () => openWorkstation(null, "Review") }] : []),
+    ...(navPageNames.has("Task Planner") ? [{ type: "action", id: "task-planner", title: "Task Planner", subtitle: "Quick action", icon: Target, run: () => navigate("Task Planner") }] : []),
+    ...(navPageNames.has("Deadlines") ? [{ type: "action", id: "deadlines", title: "Deadlines", subtitle: "Quick action", icon: Calendar, run: () => navigate("Deadlines") }] : []),
+    ...(navPageNames.has("QA & Quality") ? [{ type: "action", id: "qa-quality", title: "QA & Quality", subtitle: "Quick action", icon: ShieldCheck, run: () => navigate("QA & Quality") }] : []),
+    ...(navPageNames.has("Reports") ? [{ type: "action", id: "reports", title: "Reports", subtitle: "Quick action", icon: TrendingUp, run: () => navigate("Reports") }] : []),
+    ...(navPageNames.has("Analytics") ? [{ type: "action", id: "analytics", title: "Analytics", subtitle: "Quick action", icon: BarChart3, run: () => navigate("Analytics") }] : []),
+    ...(navPageNames.has("Workload") ? [{ type: "action", id: "workload", title: "Workload", subtitle: "Quick action", icon: Layers, run: () => navigate("Workload") }] : []),
+    ...(navPageNames.has("Team") ? [{ type: "action", id: "team", title: "Team", subtitle: "Quick action", icon: Users, run: () => navigate("Team") }] : []),
+    ...(navPageNames.has("Audit Trail") ? [{ type: "action", id: "audit-trail", title: "Audit Trail", subtitle: "Quick action", icon: FileText, run: () => navigate("Audit Trail") }] : []),
+    { type: "action", id: "settings", title: "Settings", subtitle: "Quick action", icon: Settings, run: () => navigate("Settings") }
   ];
 
   const currentConfig = projectConfigs[configProject] || makeDefaultProjectConfig(projectGroups.find(g => g.id === configProject) || projectGroups[0] || defaultProjectGroups[0]);
@@ -3737,7 +3781,7 @@ function App() {
           onAddCalibration={addCalibrationEntry} onDeleteCalibration={deleteCalibrationEntry} qaReviews={qaReviews}
         />}
         {activePage === "Task Planner" && <TaskPlannerPage
-          projects={projects} tasks={tasks} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
+          projects={scopedProjects} tasks={tasks.filter(t => scopedProjects.some(p => p.id === t.projectId))} teamMembers={teamMembers} annotations={annotationsByTask} qaReviews={qaReviews}
           selectedProjectId={plannerProjectId} setSelectedProjectId={setPlannerProjectId} priority={plannerPriority} setPriority={setPlannerPriority}
           queue={plannerQueue} setQueue={setPlannerQueue} date={plannerDate} setDate={setPlannerDate}
           targets={plannerTargets} setTarget={setPlannerTarget} reworkFilter={plannerReworkFilter} setReworkFilter={setPlannerReworkFilter}
@@ -3796,7 +3840,7 @@ function App() {
           onCreate={openCreateMember} onEdit={openEditMember} onToggleStatus={toggleMemberStatus} onDelete={deleteMember}
           onAssign={assignTask} message={teamMessage} modalOpen={teamModalOpen} setModalOpen={setTeamModalOpen}
           editing={!!editingMemberId} form={teamForm} setForm={setTeamForm} onSave={saveMember}
-          onInvite={inviteTeamMember} onSendReset={sendPasswordReset} accountActionStatus={accountActionStatus} isAdmin={isAdmin}
+          onInvite={inviteTeamMember} onSendReset={sendPasswordReset} accountActionStatus={accountActionStatus} isAdmin={isAdmin || isManager}
         />}
         {activePage === "QA & Reviews" && <QAReviews tasks={tasks} queue={qaQueue} stats={qaStats} selectedTask={qaSelectedTask} selectedAnnotations={qaSelectedAnnotations} selectedReview={qaSelectedReview} search={qaSearch} setSearch={setQaSearch} filter={qaFilter} setFilter={setQaFilter} score={qaScore} setScore={setQaScore} reason={qaReason} setReason={setQaReason} comment={qaComment} setComment={setQaComment} onSelect={selectQaTask} onReview={completeQaReview} message={qaMessage} reviews={qaReviews} canReview={canReview} /> }
         {activePage === "Analytics" && <AnalyticsPage projects={projects} tasks={tasks} annotations={annotationsByTask} qaReviews={qaReviews} auditEvents={auditEvents} range={analyticsRange} setRange={setAnalyticsRange} project={analyticsProject} setProject={setAnalyticsProject} onExport={exportCustomReport} />}
@@ -3819,7 +3863,7 @@ function App() {
           imageMigration={imageMigration} onMigrateImages={migrateImagesToStorage}
           base64ImageCount={tasks.filter(t => t.image && t.image.startsWith("data:")).length}
           userName={currentUserName} userEmail={currentUserEmail} userInitial={currentUserInitial} onSignOut={signOut}
-          isAdmin={isAdmin} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole}
+          isAdmin={isAdmin} canManageRoles={canManageRoles} canManageIntegrations={canManageIntegrations} canManageSecurity={canManageSecurity} canMigrate={canMigrate} roleProfiles={roleProfiles} rolesLoading={rolesLoading} onLoadRoles={loadRoleProfiles} onUpdateRole={updateProfileRole}
           apiTokens={apiTokens} onGenerateToken={generateApiToken} onRevokeToken={revokeApiToken} onDeleteToken={deleteApiToken}
           webhooks={webhooks} onCreateWebhook={createWebhook} onUpdateWebhook={updateWebhook} onDeleteWebhook={deleteWebhook} onTestWebhook={testWebhook}
           projects={projects} projectGroups={projectGroups} onImportMlPredictions={importMlPredictions} onExportProjectJson={exportProjectJson}
@@ -5487,7 +5531,7 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
         <div className="panel-head"><div><h2>Team Members</h2><p>Roles, projects and current availability</p></div><span className="team-count">{members.length} shown</span></div>
         <div className="team-toolbar">
           <div className="team-search"><Search size={15}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search members..." /></div>
-          <select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)}><option>All Roles</option><option>Team Lead</option><option>Reviewer</option><option>Annotator</option></select>
+          <select value={roleFilter} onChange={e=>setRoleFilter(e.target.value)}><option>All Roles</option><option>Manager</option><option>Team Lead</option><option>Reviewer</option><option>Annotator</option></select>
           <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All Status</option><option>Active</option><option>Inactive</option></select>
         </div>
         <div className="member-list">
@@ -5532,7 +5576,7 @@ function TeamPage({members, allMembers, projects, tasks, stats, search, setSearc
 
 function TeamMemberModal({editing, form, setForm, projects, onClose, onSave}) {
   const toggleProject = id => setForm(prev => ({...prev, projects: prev.projects.includes(id) ? prev.projects.filter(x=>x!==id) : [...prev.projects, id]}));
-  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button aria-label="Close" className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
+  return <div className="modal-backdrop" role="dialog" aria-modal="true"><div className="modal team-modal"><div className="modal-head"><div><span className="eyebrow">TEAM MANAGEMENT</span><h2>{editing ? "Edit Team Member" : "Add Team Member"}</h2><p>Set role, availability, capacity and project access.</p></div><button aria-label="Close" className="icon-btn" onClick={onClose}><X size={17}/></button></div><form onSubmit={onSave}><div className="team-form-grid"><label><span>FULL NAME</span><input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} placeholder="e.g. Rahul Kumar" autoFocus required/></label><label><span>EMAIL</span><input type="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="name@company.com" required/></label><label><span>ROLE</span><select value={form.role} onChange={e=>setForm({...form,role:e.target.value})}><option>Annotator</option><option>Reviewer</option><option>Team Lead</option><option>Manager</option></select></label><label><span>STATUS</span><select value={form.status} onChange={e=>setForm({...form,status:e.target.value})}><option>Active</option><option>Inactive</option></select></label><label><span>TASK CAPACITY</span><input type="number" min="0" max="100" value={form.capacity} onChange={e=>setForm({...form,capacity:e.target.value})}/></label></div><div className="team-project-form"><span>PROJECT ACCESS</span><div>{projects.map(p=><button type="button" key={p.id} className={form.projects.includes(p.id)?"project-check active":"project-check"} onClick={()=>toggleProject(p.id)}><span>{form.projects.includes(p.id)?<Check size={13}/>:<span/>}</span><div><b>{p.name}</b><small>{p.client}</small></div></button>)}</div></div><div className="modal-actions"><button type="button" className="secondary-btn" onClick={onClose}>Cancel</button><button type="submit" className="primary-btn"><Save size={14}/>{editing ? "Save Changes" : "Add Member"}</button></div></form></div></div>;
 }
 
 function WorkloadPage({projects,rows,summary,tasks,project,setProject,projectOptions,role,setRole,capacityMode,setCapacityMode,settings,setSettings,onBalance,onCapacity,message,onOpenPlanner}) {
@@ -5764,7 +5808,7 @@ function Quick({icon:Icon,title,onClick}){return <button className="quick-action
 function Detail({label,value}){return <div className="detail-box"><span>{label}</span><b>{value}</b></div>}
 
 
-function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole,
+function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, canManageRoles, canManageIntegrations, canManageSecurity, canMigrate, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole,
   apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson,
   errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, onRunHealthCheck }) {
   const tabs = [
@@ -5772,7 +5816,11 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
     ["Annotation", Grid3X3, "Annotation"],
     ["Notifications", Bell, "Notifications"],
     ["Preferences", Settings, "Preferences"],
-    ...(isAdmin ? [["Roles & Access", Users, "Roles"], ["Integrations", Zap, "Integrations"], ["Security", ShieldCheck, "Security"], ["Diagnostics", CheckSquare, "Diagnostics"], ["Cloud Migration", Database, "Cloud"]] : [])
+    ...(canManageRoles ? [["Roles & Access", Users, "Roles"]] : []),
+    ...(canManageIntegrations ? [["Integrations", Zap, "Integrations"]] : []),
+    ...(canManageSecurity ? [["Security", ShieldCheck, "Security"]] : []),
+    ...(canManageIntegrations ? [["Diagnostics", CheckSquare, "Diagnostics"]] : []),
+    ...(canMigrate ? [["Cloud Migration", Database, "Cloud"]] : [])
   ];
   const Toggle = ({ label, description, value, onChange }) => (
     <label className="settings-toggle-row">
@@ -5823,11 +5871,11 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
             <div className="settings-shortcuts"><h3>Workspace shortcuts</h3><div><kbd>V</kbd><span>Select</span><kbd>B</kbd><span>Bounding Box</span><kbd>P</kbd><span>Polygon</span><kbd>Space</kbd><span>Pan canvas</span><kbd>Ctrl</kbd><span>+</span><kbd>Z</kbd><span>Undo</span></div></div>
             <div className="settings-danger"><div><h3>Restore default settings</h3><p>Reset only AnnotatePro settings. Projects, tasks, annotations, team and audit data are not deleted.</p></div><button className="btn secondary" onClick={onReset}><RotateCcw size={15}/> Restore defaults</button></div>
           </div>}
-          {tab === "Roles" && isAdmin && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
-          {tab === "Integrations" && isAdmin && <IntegrationsSettingsTab apiTokens={apiTokens} onGenerateToken={onGenerateToken} onRevokeToken={onRevokeToken} onDeleteToken={onDeleteToken} webhooks={webhooks} onCreateWebhook={onCreateWebhook} onUpdateWebhook={onUpdateWebhook} onDeleteWebhook={onDeleteWebhook} onTestWebhook={onTestWebhook} projects={projects} projectGroups={projectGroups} onImportMlPredictions={onImportMlPredictions} onExportProjectJson={onExportProjectJson} />}
-          {tab === "Security" && isAdmin && <SecurityPanel errorLogEntries={errorLogEntries} onRefreshErrorLog={onRefreshErrorLog} onClearErrorLog={onClearErrorLog} onExportBackup={onExportBackup} onRestoreBackup={onRestoreBackup} onSignOutAllDevices={onSignOutAllDevices} settings={settings} onUpdate={onUpdate} />}
-          {tab === "Diagnostics" && isAdmin && <DiagnosticsPanel onRunHealthCheck={onRunHealthCheck} />}
-          {tab === "Cloud" && isAdmin && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
+          {tab === "Roles" && canManageRoles && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
+          {tab === "Integrations" && canManageIntegrations && <IntegrationsSettingsTab apiTokens={apiTokens} onGenerateToken={onGenerateToken} onRevokeToken={onRevokeToken} onDeleteToken={onDeleteToken} webhooks={webhooks} onCreateWebhook={onCreateWebhook} onUpdateWebhook={onUpdateWebhook} onDeleteWebhook={onDeleteWebhook} onTestWebhook={onTestWebhook} projects={projects} projectGroups={projectGroups} onImportMlPredictions={onImportMlPredictions} onExportProjectJson={onExportProjectJson} />}
+          {tab === "Security" && canManageSecurity && <SecurityPanel errorLogEntries={errorLogEntries} onRefreshErrorLog={onRefreshErrorLog} onClearErrorLog={onClearErrorLog} onExportBackup={onExportBackup} onRestoreBackup={onRestoreBackup} onSignOutAllDevices={onSignOutAllDevices} settings={settings} onUpdate={onUpdate} />}
+          {tab === "Diagnostics" && canManageIntegrations && <DiagnosticsPanel onRunHealthCheck={onRunHealthCheck} />}
+          {tab === "Cloud" && canMigrate && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
         </section>
       </div>
     </div>
@@ -5836,7 +5884,7 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
 
 function RolesAccessPanel({profiles, loading, onLoad, onUpdateRole, currentUserEmail}) {
   useEffect(() => { onLoad(); }, []);
-  const roleOptions = ["Admin", "Team Lead", "Reviewer", "Annotator"];
+  const roleOptions = ["Admin", "Manager", "Team Lead", "Reviewer", "Annotator"];
   return <div className="settings-card panel roles-access-panel">
     <div className="settings-card-title"><div><h2>Roles & Access</h2><p>Who can sign in, and what they're allowed to do. Only Admins can see this page.</p></div><Users size={20}/></div>
     {loading ? <div className="dataset-empty"><RefreshCw size={28} className="mig-spin"/><h3>Loading accounts...</h3></div> :
@@ -6333,3 +6381,4 @@ function NotificationsPage({notifications,setNotifications,filter,setFilter,sear
     {visible.length > NOTIF_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedNotifPage<=1} onClick={()=>setNotifPage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedNotifPage} of {notifTotalPages} · {visible.length} notifications</span><button disabled={clampedNotifPage>=notifTotalPages} onClick={()=>setNotifPage(p=>Math.min(notifTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
   </div>;
 }
+ 
