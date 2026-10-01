@@ -1860,6 +1860,67 @@ function App() {
     return results;
   }
 
+  // ---- Build 46: Production Deployment — live probe of the connected Supabase project ----
+  // Read-only: every query is a `select ... limit 1`. A missing column or table
+  // comes back from PostgREST as an error, which is exactly the signal that the
+  // production database hasn't had the migration applied yet.
+  async function runProductionReadinessCheck() {
+    const results = [];
+    const push = (label, status, detail) => results.push({ id: `prod-${label}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"), area: "Production", label, status, detail });
+
+    // Environment
+    let mode = "unknown";
+    try { mode = import.meta.env.MODE; } catch { /* not running under Vite (e.g. a test harness) */ }
+    push("Build mode", mode === "production" ? "pass" : "warn", mode === "production" ? "Running a production build." : `Running in "${mode}" mode — expected "production" on a live deployment.`);
+    const secure = window.location.protocol === "https:";
+    const local = ["localhost", "127.0.0.1"].includes(window.location.hostname);
+    push("HTTPS", secure ? "pass" : local ? "warn" : "fail", secure ? `Served over HTTPS (${window.location.origin}).` : local ? "Running on localhost over HTTP — fine for development." : `Served over plain HTTP (${window.location.origin}) — sessions and tokens are exposed in transit.`);
+
+    // Auth
+    push("Authenticated session", session ? "pass" : "fail", session ? `Signed in as ${currentUserEmail}.` : "No active session — the checks below will run as an anonymous user and may be blocked by RLS.");
+
+    // Connectivity + required tables
+    const requiredTables = ["project_groups", "projects", "datasets", "tasks", "team_members", "qa_reviews", "notifications", "audit_events", "api_tokens", "webhooks", "error_logs", "profiles"];
+    const tableProbes = await Promise.all(requiredTables.map(async t => {
+      try { const { error } = await supabase.from(t).select("*", { head: true, count: "exact" }).limit(1); return { t, error }; }
+      catch (err) { return { t, error: { message: err.message } }; }
+    }));
+    const unreachable = tableProbes.filter(p => p.error);
+    if (unreachable.length === requiredTables.length) {
+      push("Supabase reachable", "fail", `Every table query failed — first error: ${unreachable[0].error.message}. Check the project URL/key configuration and network access.`);
+    } else {
+      push("Supabase reachable", "pass", "The project responded to queries.");
+      push("Required tables", unreachable.length ? "fail" : "pass", unreachable.length ? `${unreachable.length} table(s) failed: ${unreachable.map(p => `${p.t} (${p.error.message})`).join("; ")}. Either the table doesn't exist (run the migration) or RLS is blocking this user.` : `All ${requiredTables.length} tables are reachable.`);
+    }
+
+    // Migration applied? Probe each column added since Build 30.1.
+    const requiredColumns = [["tasks","due_date"],["tasks","assignee_id"],["tasks","reviewer_id"],["tasks","priority"],["tasks","queue"],["qa_reviews","criteria_scores"],["qa_reviews","errors"]];
+    const columnProbes = await Promise.all(requiredColumns.map(async ([t, c]) => {
+      try { const { error } = await supabase.from(t).select(c).limit(1); return { t, c, error }; }
+      catch (err) { return { t, c, error: { message: err.message } }; }
+    }));
+    const missingColumns = columnProbes.filter(p => p.error);
+    push("Migration applied (columns)", missingColumns.length ? "fail" : "pass", missingColumns.length ? `Missing or unreadable: ${missingColumns.map(p => `${p.t}.${p.c}`).join(", ")}. Run annotatepro_production_migration.sql on this database.` : `All ${requiredColumns.length} added columns are present.`);
+
+    // Role constraint (Manager role) — can't read pg_constraint from the client,
+    // so infer from whether the current profile's role is one the app recognises.
+    push("Recognised role", ["Admin","Manager","Team Lead","Reviewer","Annotator"].includes(currentUserRole) ? "pass" : "warn", `Current role: ${currentUserRole || "unset"}. The Manager role additionally requires the profiles_role_check constraint update from the migration script — this can only be confirmed by assigning a Manager in Settings → Roles & Access.`);
+
+    // Storage
+    try {
+      const { error } = await supabase.storage.from("task-images").list("", { limit: 1 });
+      push("Storage bucket task-images", error ? "warn" : "pass", error ? `Couldn't list the bucket: ${error.message}. It may be missing, or listing may be restricted by policy even though uploads work — verify in Supabase → Storage.` : "Bucket exists and is listable.");
+    } catch (err) {
+      push("Storage bucket task-images", "warn", `Storage check failed: ${err.message}.`);
+    }
+
+    // Data volume — informational
+    push("Images stored inline", tasks.some(t => t.image && t.image.startsWith("data:")) ? "warn" : "pass", tasks.some(t => t.image && t.image.startsWith("data:")) ? "Some task images are still inline base64 — run Cloud Migration → Migrate images before relying on this database for storage." : "No inline images.");
+
+    logAudit("Production Readiness Check Run", null, null, `${results.filter(r=>r.status==="fail").length} failing, ${results.filter(r=>r.status==="warn").length} warnings, ${results.filter(r=>r.status==="pass").length} passing.`, currentUserName, "Admin");
+    return results;
+  }
+
   // ---- Build 39: Global Search & Command Center ----
   function labelNameFor(labelId) {
     for (const cfg of Object.values(projectConfigs)) {
@@ -3869,7 +3930,7 @@ function App() {
           projects={projects} projectGroups={projectGroups} onImportMlPredictions={importMlPredictions} onExportProjectJson={exportProjectJson}
           errorLogEntries={errorLogEntries} onRefreshErrorLog={refreshErrorLog} onClearErrorLog={clearErrorLog}
           onExportBackup={exportWorkspaceBackup} onRestoreBackup={restoreWorkspaceBackup} onSignOutAllDevices={signOutAllDevices}
-          onRunHealthCheck={runHealthCheck} />}
+          onRunHealthCheck={runHealthCheck} onRunProductionCheck={runProductionReadinessCheck} />}
 
         <input ref={imageInputRef} type="file" accept="image/*" multiple hidden onChange={e => { importImages(e.target.files); e.target.value=""; }} />
         {datasetToast && <div className="workspace-toast"><CheckCircle2 size={17}/>{datasetToast}</div>}
@@ -5810,7 +5871,7 @@ function Detail({label,value}){return <div className="detail-box"><span>{label}<
 
 function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migrationStatus, migrationRunning, onRunMigration, verifyStatus, verifying, onVerify, lastMigratedAt, migrationDomains, migrationSingletons, imageMigration, onMigrateImages, base64ImageCount, userName, userEmail, userInitial, onSignOut, isAdmin, canManageRoles, canManageIntegrations, canManageSecurity, canMigrate, roleProfiles, rolesLoading, onLoadRoles, onUpdateRole,
   apiTokens, onGenerateToken, onRevokeToken, onDeleteToken, webhooks, onCreateWebhook, onUpdateWebhook, onDeleteWebhook, onTestWebhook, projects, projectGroups, onImportMlPredictions, onExportProjectJson,
-  errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, onRunHealthCheck }) {
+  errorLogEntries, onRefreshErrorLog, onClearErrorLog, onExportBackup, onRestoreBackup, onSignOutAllDevices, onRunHealthCheck, onRunProductionCheck }) {
   const tabs = [
     ["Workspace", SlidersHorizontal, "Workspace"],
     ["Annotation", Grid3X3, "Annotation"],
@@ -5874,7 +5935,7 @@ function SettingsPage({ settings, tab, setTab, onUpdate, onReset, message, migra
           {tab === "Roles" && canManageRoles && <RolesAccessPanel profiles={roleProfiles} loading={rolesLoading} onLoad={onLoadRoles} onUpdateRole={onUpdateRole} currentUserEmail={userEmail}/>}
           {tab === "Integrations" && canManageIntegrations && <IntegrationsSettingsTab apiTokens={apiTokens} onGenerateToken={onGenerateToken} onRevokeToken={onRevokeToken} onDeleteToken={onDeleteToken} webhooks={webhooks} onCreateWebhook={onCreateWebhook} onUpdateWebhook={onUpdateWebhook} onDeleteWebhook={onDeleteWebhook} onTestWebhook={onTestWebhook} projects={projects} projectGroups={projectGroups} onImportMlPredictions={onImportMlPredictions} onExportProjectJson={onExportProjectJson} />}
           {tab === "Security" && canManageSecurity && <SecurityPanel errorLogEntries={errorLogEntries} onRefreshErrorLog={onRefreshErrorLog} onClearErrorLog={onClearErrorLog} onExportBackup={onExportBackup} onRestoreBackup={onRestoreBackup} onSignOutAllDevices={onSignOutAllDevices} settings={settings} onUpdate={onUpdate} />}
-          {tab === "Diagnostics" && canManageIntegrations && <DiagnosticsPanel onRunHealthCheck={onRunHealthCheck} />}
+          {tab === "Diagnostics" && canManageIntegrations && <DiagnosticsPanel onRunHealthCheck={onRunHealthCheck} onRunProductionCheck={onRunProductionCheck} />}
           {tab === "Cloud" && canMigrate && <CloudMigrationPanel migrationStatus={migrationStatus} migrationRunning={migrationRunning} onRunMigration={onRunMigration} verifyStatus={verifyStatus} verifying={verifying} onVerify={onVerify} lastMigratedAt={lastMigratedAt} migrationDomains={migrationDomains} migrationSingletons={migrationSingletons} imageMigration={imageMigration} onMigrateImages={onMigrateImages} base64ImageCount={base64ImageCount} />}
         </section>
       </div>
@@ -6102,23 +6163,43 @@ Manual checklist to walk through before a release. Each area lists the core path
 - [ ] Cross-device sync: an edit on one device appears on another after hydration/realtime (see Settings → Cloud Migration)
 `;
 
-function DiagnosticsPanel({ onRunHealthCheck }) {
+function DiagnosticsPanel({ onRunHealthCheck, onRunProductionCheck }) {
   const [results, setResults] = useState(null);
   const [running, setRunning] = useState(false);
+  const [prodResults, setProdResults] = useState(null);
+  const [prodRunning, setProdRunning] = useState(false);
 
   function handleRun() {
     setRunning(true);
     setTimeout(() => { setResults(onRunHealthCheck()); setRunning(false); }, 150);
   }
+  async function handleRunProd() {
+    setProdRunning(true);
+    try { setProdResults(await onRunProductionCheck()); }
+    catch (err) { setProdResults([{ id: "prod-check-crashed", area: "Production", label: "Check failed to run", status: "fail", detail: err.message }]); }
+    setProdRunning(false);
+  }
   function downloadTestPlan() {
     const blob = new Blob([REGRESSION_TEST_PLAN], { type: "text/markdown" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "annotatepro-regression-test-plan.md"; a.click();
   }
-
-  const failCount = results?.filter(r => r.status === "fail").length || 0;
-  const warnCount = results?.filter(r => r.status === "warn").length || 0;
-  const passCount = results?.filter(r => r.status === "pass").length || 0;
-  const grouped = results ? results.reduce((acc, r) => { (acc[r.area] = acc[r.area] || []).push(r); return acc; }, {}) : {};
+  function renderResults(list) {
+    if (!list) return null;
+    const fail = list.filter(r => r.status === "fail").length;
+    const warn = list.filter(r => r.status === "warn").length;
+    const pass = list.filter(r => r.status === "pass").length;
+    const byArea = list.reduce((acc, r) => { (acc[r.area] = acc[r.area] || []).push(r); return acc; }, {});
+    return <div className="health-check-results">
+      <div className="health-check-summary"><span className="hc-pass">{pass} passing</span>{warn>0 && <span className="hc-warn">{warn} warning{warn===1?"":"s"}</span>}{fail>0 && <span className="hc-fail">{fail} failing</span>}</div>
+      {Object.entries(byArea).map(([area, items]) => <div className="health-check-group" key={area}>
+        <span className="section-label">{area.toUpperCase()}</span>
+        {items.map(r => <div className={`health-check-row hc-${r.status}`} key={r.id}>
+          {r.status === "pass" ? <CheckCircle2 size={14}/> : r.status === "warn" ? <AlertCircle size={14}/> : <X size={14}/>}
+          <div><b>{r.label}</b><span>{r.detail}</span></div>
+        </div>)}
+      </div>)}
+    </div>;
+  }
 
   return <div className="settings-card panel diagnostics-panel">
     <div className="settings-card-title"><div><h2>Testing & Regression</h2><p>An automated data-integrity check across live app state, plus a manual test plan for everything a script can't verify (UI behavior, drawing tools, imports).</p></div><CheckSquare size={20}/></div>
@@ -6127,16 +6208,15 @@ function DiagnosticsPanel({ onRunHealthCheck }) {
       <div className="integrations-block-head"><h3>Health Check</h3></div>
       <p className="field-hint">Scans current projects, tasks, annotations, QA reviews, team, and settings for broken references and inconsistent data — the kind of thing that causes confusing counts elsewhere in the app.</p>
       <button className="primary-btn" onClick={handleRun} disabled={running}>{running ? <RefreshCw size={15} className="mig-spin"/> : <CheckSquare size={15}/>} {running ? "Running..." : "Run Health Check"}</button>
-      {results && <div className="health-check-results">
-        <div className="health-check-summary"><span className="hc-pass">{passCount} passing</span>{warnCount>0 && <span className="hc-warn">{warnCount} warning{warnCount===1?"":"s"}</span>}{failCount>0 && <span className="hc-fail">{failCount} failing</span>}</div>
-        {Object.entries(grouped).map(([area, items]) => <div className="health-check-group" key={area}>
-          <span className="section-label">{area.toUpperCase()}</span>
-          {items.map(r => <div className={`health-check-row hc-${r.status}`} key={r.id}>
-            {r.status === "pass" ? <CheckCircle2 size={14}/> : r.status === "warn" ? <AlertCircle size={14}/> : <X size={14}/>}
-            <div><b>{r.label}</b><span>{r.detail}</span></div>
-          </div>)}
-        </div>)}
-      </div>}
+      {renderResults(results)}
+    </div>
+
+    <div className="integrations-block">
+      <div className="integrations-block-head"><h3>Production Readiness (Build 46)</h3></div>
+      <p className="field-hint">Probes the Supabase project this deployment is actually connected to: is it reachable, do the tables and columns the app needs exist (i.e. was the migration applied), is the storage bucket there, and is the page served over HTTPS. Read-only — it only runs <code>select … limit 1</code> queries. Run it right after every deploy, and especially after pointing a new environment at a new database.</p>
+      <button className="primary-btn" onClick={handleRunProd} disabled={prodRunning}>{prodRunning ? <RefreshCw size={15} className="mig-spin"/> : <ShieldCheck size={15}/>} {prodRunning ? "Checking..." : "Run Production Readiness Check"}</button>
+      {renderResults(prodResults)}
+      <p className="field-hint" style={{marginTop:10}}>What this can't see from the browser: whether RLS policies are correct (only that the queries succeed as your current user), environment variable <i>names</i>, or Vercel/Supabase dashboard settings. The full go-live checklist and a consolidated migration script are in the production runbook delivered with this build.</p>
     </div>
 
     <div className="integrations-block">
@@ -6381,4 +6461,3 @@ function NotificationsPage({notifications,setNotifications,filter,setFilter,sear
     {visible.length > NOTIF_PAGE_SIZE && <div className="pagination-bar"><button disabled={clampedNotifPage<=1} onClick={()=>setNotifPage(p=>Math.max(1,p-1))}><ChevronDown size={14} style={{transform:"rotate(90deg)"}}/> Prev</button><span>Page {clampedNotifPage} of {notifTotalPages} · {visible.length} notifications</span><button disabled={clampedNotifPage>=notifTotalPages} onClick={()=>setNotifPage(p=>Math.min(notifTotalPages,p+1))}>Next <ChevronDown size={14} style={{transform:"rotate(-90deg)"}}/></button></div>}
   </div>;
 }
- 
